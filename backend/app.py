@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .agent import AgentRunService, AgentSettings, ReferenceGroundedAgent
@@ -37,6 +38,18 @@ class RunProjectRequest(BaseModel):
     prompt: str
 
 
+class DeleteProjectRequest(BaseModel):
+    """Accept the UI's name confirmation without making it a Project ID."""
+
+    name: str | None = Field(default=None, min_length=1)
+    confirmation: str | None = Field(default=None, min_length=1)
+    confirm_name: str | None = Field(default=None, min_length=1)
+
+    @property
+    def value(self) -> str | None:
+        return self.confirmation or self.confirm_name or self.name
+
+
 def create_app(
     *,
     projects_root: str | Path = DEFAULT_PROJECTS_ROOT,
@@ -45,6 +58,7 @@ def create_app(
     run_service: Any | None = None,
     settings_factory: Callable[[], AgentSettings] | None = None,
     agent_factory: Callable[..., ReferenceGroundedAgent] = ReferenceGroundedAgent,
+    frontend_dist: str | Path | None = None,
 ) -> FastAPI:
     project_store = store or ProjectStore(projects_root)
     event_store = ProgressEventStore(project_store.root)
@@ -91,6 +105,28 @@ def create_app(
     def get_project(project_id: str) -> dict[str, object]:
         project = _get_project_or_404(project_store, project_id)
         return _project_payload(project_store, project)
+
+    @app.delete("/api/projects/{project_id}", status_code=204)
+    def delete_project(project_id: str, request: DeleteProjectRequest) -> Response:
+        project = _get_project_or_404(project_store, project_id)
+        confirmation = request.value
+        if confirmation is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Project name confirmation is required",
+            )
+        if confirmation != project.name:
+            raise HTTPException(
+                status_code=409,
+                detail="Project name confirmation does not match",
+            )
+        try:
+            coordinator.delete(project_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ProjectStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return Response(status_code=204)
 
     @app.post("/api/projects/{project_id}/run", status_code=202)
     def start_run(project_id: str, request: RunProjectRequest) -> dict[str, object]:
@@ -173,6 +209,7 @@ def create_app(
             filename="model.scene.zip",
         )
 
+    _mount_frontend(app, frontend_dist)
     return app
 
 
@@ -218,6 +255,41 @@ def _parse_last_event_id(header: str | None, query: int | None) -> int:
             status_code=400, detail="Last-Event-ID must be non-negative"
         )
     return value
+
+
+def _mount_frontend(app: FastAPI, frontend_dist: str | Path | None) -> None:
+    """Serve the built Vite app from the same origin when it is available."""
+
+    candidate = (
+        Path(frontend_dist).expanduser().resolve()
+        if frontend_dist is not None
+        else Path(__file__).resolve().parents[1] / "viewer" / "dist"
+    )
+    if not candidate.is_dir():
+        return
+    index = candidate / "index.html"
+    if not index.is_file():
+        return
+    assets = candidate / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets), name="frontend-assets")
+
+    @app.get("/", include_in_schema=False)
+    def frontend_index() -> FileResponse:
+        return FileResponse(index, media_type="text/html")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def frontend_route(path: str) -> FileResponse:
+        if path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        requested = (candidate / path).resolve()
+        try:
+            requested.relative_to(candidate)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Not Found") from exc
+        if requested.is_file():
+            return FileResponse(requested)
+        return FileResponse(index, media_type="text/html")
 
 
 app = create_app()

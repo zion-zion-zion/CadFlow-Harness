@@ -137,6 +137,15 @@ class ProjectStore:
                 raise ProjectNotFoundError(f"Project does not exist: {project_id}")
             return self._read_project(project_dir)
 
+    def delete_project(self, project_id: str) -> None:
+        """Permanently remove one Project directory from the Catalog."""
+
+        project_dir = self.project_directory(project_id)
+        with self._lock:
+            if not project_dir.is_dir() or project_dir.is_symlink():
+                raise ProjectNotFoundError(f"Project does not exist: {project_id}")
+            shutil.rmtree(project_dir)
+
     def project_directory(self, project_id: str) -> Path:
         if (
             not isinstance(project_id, str)
@@ -375,7 +384,7 @@ def _replace_project(project: Project, **changes: Any) -> Project:
 
 
 def _timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _required_text(data: Mapping[str, Any], key: str) -> str:

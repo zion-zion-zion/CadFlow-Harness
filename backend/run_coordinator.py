@@ -142,6 +142,36 @@ class AgentRunCoordinator:
         active.finished.wait(RUN_STOP_WAIT_SECONDS)
         return self.store.get_project(project_id)
 
+    def delete(self, project_id: str) -> None:
+        """Cancel a Running Project before permanently removing its directory."""
+
+        with self._lock:
+            project = self.store.get_project(project_id)
+            active = self._active
+            if active is not None and active.project_id == project_id:
+                if not active.stopping:
+                    active.stopping = True
+                    self.events.append(
+                        project_id,
+                        stage="stopping",
+                        tool="service",
+                        result="Deletion requested; cancelling Agent Run",
+                    )
+                    active.cancellation_token.cancel()
+            elif project.state == ProjectState.RUNNING:
+                raise ProjectStateError("Running Project has no active Agent Run")
+
+        if active is not None and active.project_id == project_id:
+            if not active.finished.wait(RUN_STOP_WAIT_SECONDS):
+                raise ProjectStateError(
+                    "Agent Run did not stop before Project deletion"
+                )
+
+        with self._lock:
+            if self._active is not None and self._active.project_id == project_id:
+                raise ProjectStateError("Agent Run is still active")
+            self.store.delete_project(project_id)
+
     def wait_for_idle(self, timeout_seconds: float = RUN_STOP_WAIT_SECONDS) -> bool:
         with self._lock:
             active = self._active
