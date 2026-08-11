@@ -63,7 +63,9 @@ class RestrictedAgentTools:
         self._require_skill()
         content = self._catalog.read_api_index()
         self._api_index_read = True
-        self._record("read_api_index", "skills/simplecadapi/references/docs/api/README.md")
+        self._record(
+            "read_api_index", "skills/simplecadapi/references/docs/api/README.md"
+        )
         return content
 
     def read_stdlib_index(self) -> str:
@@ -116,6 +118,21 @@ class RestrictedAgentTools:
         path = self._model_path()
         path.write_text(source, encoding="utf-8")
         self._record("write_model_source", "model.py")
+
+    def require_reference_grounding_for_write(self) -> None:
+        """Require the mandatory indexes and at least one exact doc before writing.
+
+        Issue 01 keeps the low-level source method usable for maintenance and
+        repair. The generation Agent adapter uses this stricter gate so the
+        primary Agent cannot write a guessed Model Source before consulting the
+        packaged references.
+        """
+
+        self._require_reference_indexes()
+        if not (self._api_docs_read or self._stdlib_docs_read):
+            raise ReferenceContractError(
+                "read exact API or stdlib documentation before writing Model Source"
+            )
 
     def execute_model(
         self,
