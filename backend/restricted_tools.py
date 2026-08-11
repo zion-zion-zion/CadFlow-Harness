@@ -140,6 +140,7 @@ class RestrictedAgentTools:
         api_names: Sequence[str] = (),
         stdlib_names: Sequence[str] = (),
         cancellation_token: Any | None = None,
+        timeout_seconds: float | None = None,
     ) -> Any:
         self._require_reference_indexes()
         normalized_apis = tuple(self._normalize_name(name) for name in api_names)
@@ -166,10 +167,12 @@ class RestrictedAgentTools:
             "model.py",
             reference_names=(*normalized_apis, *normalized_stdlib),
         )
-        result = executor.execute(
-            self._project_dir,
-            cancellation_token=cancellation_token,
-        )
+        execution_kwargs: dict[str, Any] = {
+            "cancellation_token": cancellation_token,
+        }
+        if timeout_seconds is not None:
+            execution_kwargs["timeout_seconds"] = timeout_seconds
+        result = executor.execute(self._project_dir, **execution_kwargs)
         return result
 
     def _require_skill(self) -> None:

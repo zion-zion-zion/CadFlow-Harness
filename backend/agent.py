@@ -4,16 +4,25 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass, field
+import threading
+import time
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from langchain_core.tools import BaseTool, tool
 
-from .cad_executor import ExecutionResult, redact_credentials
+from .cad_executor import (
+    CAD_EXECUTION_TIMEOUT_SECONDS,
+    CancellationToken,
+    ExecutionResult,
+    redact_credentials,
+)
 from .contracts import ToolUseRecord
 from .projects import ProjectStore
+from .references import ReferenceContractError
 from .restricted_tools import RestrictedAgentTools
+from .scene_validation import SceneParseResult
 
 
 class AgentConfigurationError(RuntimeError):
@@ -22,6 +31,12 @@ class AgentConfigurationError(RuntimeError):
 
 class AgentRunError(RuntimeError):
     """Raised when a run cannot produce a structured Agent outcome."""
+
+
+MAX_CAD_EXECUTIONS = 3
+MAX_AGENT_RUN_SECONDS = 5 * 60.0
+AGENT_RUN_TIMEOUT_SECONDS = MAX_AGENT_RUN_SECONDS
+MAX_PROVIDER_RETRIES = 2
 
 
 @dataclass(frozen=True)
@@ -61,18 +76,29 @@ class AgentSettings:
 
 @dataclass(frozen=True)
 class AgentRunOutcome:
-    """Safe outcome of one reference-grounded generation attempt."""
+    """Safe outcome of one bounded reference-grounded Agent Run."""
 
     validated: bool
     failure_reason: str | None = None
     execution_result: ExecutionResult | None = None
     tool_use_records: tuple[ToolUseRecord, ...] = ()
+    execution_results: tuple[ExecutionResult, ...] = ()
+    provider_retry_count: int = 0
+    duration_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        results = self.execution_results
+        if not results and self.execution_result is not None:
+            object.__setattr__(self, "execution_results", (self.execution_result,))
+        elif results and self.execution_result is None:
+            object.__setattr__(self, "execution_result", results[-1])
 
     @property
     def status(self) -> str:
         return "succeeded" if self.validated else "failed"
 
     def diagnostics(self) -> dict[str, Any]:
+        results = self.execution_results
         return {
             "status": self.status,
             "failure_reason": self.failure_reason,
@@ -81,6 +107,16 @@ class AgentRunOutcome:
                 if self.execution_result is not None
                 else None
             ),
+            "cad_execution_count": len(results),
+            "execution_results": [
+                {
+                    "attempt": index,
+                    **result.to_dict(),
+                }
+                for index, result in enumerate(results, start=1)
+            ],
+            "provider_retry_count": self.provider_retry_count,
+            "duration_seconds": self.duration_seconds,
             "tool_use_records": [
                 {
                     "sequence": record.sequence,
@@ -132,10 +168,16 @@ entry point, one physical part, and one captured final Solid. Keep the
 canonical artifacts/model.scene.zip export contract. The only allowed source
 dependencies are Python's standard library and simplecadapi.
 
-After writing the complete Model Source, call execute_model exactly once for
-this issue's single successful-generation path. Pass the exact API and stdlib
-names used by the source so the tool can verify the reference reads. Treat its
-structured result as the source of truth; do not claim success from prose.
+After writing the complete Model Source, call execute_model. Its structured
+result is the source of truth: inspect status, exit_code, error, stdout,
+stderr, captured_solid_count, solid_volume, scene_artifact_exists,
+scene_parse_result, and artifact_entries. If the result is not fully valid,
+diagnose the reported facts, replace the complete current Model Source with a
+repair, and execute it again. A repair must use the latest source and may add
+imports or helpers, but must preserve the one-part and canonical Scene
+Artifact contract. Continue only while the bounded tool allows another CAD
+execution; never evade that limit by replanning, using another tool, or
+creating another Agent. Stop as soon as a Validated Result is reported.
 """
 
 
@@ -147,6 +189,7 @@ def build_chat_model(settings: AgentSettings) -> Any:
     arguments: dict[str, Any] = {
         "model": settings.model_id,
         "api_key": settings.api_key,
+        "max_retries": MAX_PROVIDER_RETRIES,
     }
     if settings.base_url is not None:
         arguments["base_url"] = settings.base_url
@@ -158,6 +201,10 @@ def create_agent_tools(
     *,
     max_executions: int = 1,
     on_execution: Callable[[ExecutionResult], None] | None = None,
+    on_execution_error: Callable[[ExecutionResult], None] | None = None,
+    run_deadline: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    cancellation_token: object | None = None,
 ) -> tuple[BaseTool, ...]:
     """Adapt issue 01's narrow methods to LangChain tools.
 
@@ -166,8 +213,18 @@ def create_agent_tools(
     into another run.
     """
 
+    if max_executions < 1:
+        raise ValueError("max_executions must be positive")
     execution_attempts = 0
     source_written = False
+
+    def require_time_remaining() -> float | None:
+        if run_deadline is None:
+            return None
+        remaining = run_deadline - clock()
+        if remaining <= 0:
+            raise AgentRunError("Agent Run exceeded the five-minute wall-clock limit")
+        return remaining
 
     @tool("read_skill_entry")
     def read_skill_entry() -> str:
@@ -222,6 +279,7 @@ def create_agent_tools(
         """Replace the complete current Project Model Source with source text."""
 
         nonlocal source_written
+        require_time_remaining()
         restricted.require_reference_grounding_for_write()
         restricted.write_model_source(source)
         source_written = True
@@ -235,17 +293,40 @@ def create_agent_tools(
         if not source_written:
             raise AgentRunError("write the complete Model Source before execute_model")
         if execution_attempts >= max_executions:
+            execution_word = "execution" if max_executions == 1 else "executions"
             raise AgentRunError(
-                f"this Agent Run allows at most {max_executions} CAD execution"
+                f"this Agent Run allows at most {max_executions} CAD {execution_word}"
             )
+        remaining = require_time_remaining()
         execution_attempts += 1
-        result = restricted.execute_model(
-            api_names=api_names,
-            stdlib_names=stdlib_names,
-        )
+        execution_recorded = False
+        try:
+            result = restricted.execute_model(
+                api_names=api_names,
+                stdlib_names=stdlib_names,
+                cancellation_token=cancellation_token,
+                timeout_seconds=(
+                    min(CAD_EXECUTION_TIMEOUT_SECONDS, remaining)
+                    if remaining is not None
+                    else None
+                ),
+            )
+        except ReferenceContractError:
+            raise
+        except Exception as exc:
+            if on_execution_error is None:
+                raise
+            result = _execution_failure_result(exc)
+            on_execution_error(result)
+            execution_recorded = True
         if not isinstance(result, ExecutionResult):
-            raise AgentRunError("execute_model returned an invalid structured result")
-        if on_execution is not None:
+            error = AgentRunError("execute_model returned an invalid structured result")
+            if on_execution_error is None:
+                raise error
+            result = _execution_failure_result(error)
+            on_execution_error(result)
+            execution_recorded = True
+        if on_execution is not None and not execution_recorded:
             on_execution(result)
         return result.to_dict()
 
@@ -304,7 +385,7 @@ def build_deep_agent(
 
 
 class ReferenceGroundedAgent:
-    """Run one primary Deep Agent against one Project Model Source."""
+    """Run one primary Deep Agent with a bounded repair budget."""
 
     def __init__(
         self,
@@ -324,6 +405,9 @@ class ReferenceGroundedAgent:
     def run(self, prompt: str) -> AgentRunOutcome:
         if not isinstance(prompt, str) or not prompt.strip():
             raise AgentRunError("Prompt must not be empty")
+        started = time.monotonic()
+        deadline = started + MAX_AGENT_RUN_SECONDS
+        cancellation_token = CancellationToken()
         restricted = RestrictedAgentTools(
             repo_root=self.repo_root,
             project_dir=self.project_dir,
@@ -334,60 +418,74 @@ class ReferenceGroundedAgent:
         executions: list[ExecutionResult] = []
         agent_tools = create_agent_tools(
             restricted,
-            max_executions=1,
+            max_executions=MAX_CAD_EXECUTIONS,
             on_execution=executions.append,
+            on_execution_error=executions.append,
+            run_deadline=deadline,
+            cancellation_token=cancellation_token,
         )
         agent_error: str | None = None
+        timed_out = False
         try:
             agent = build_deep_agent(
                 self.settings,
                 agent_tools,
                 model=self.model,
             )
-            agent.invoke(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": (
-                                "Complete this CAD generation request in the current "
-                                f"Project: {prompt}"
-                            ),
-                        }
-                    ]
-                }
+            agent_error, timed_out = _invoke_agent_with_deadline(
+                agent,
+                prompt,
+                deadline=deadline,
+                cancellation_token=cancellation_token,
             )
         except Exception as exc:  # Agent/provider errors become a safe diagnosis.
             agent_error = _safe_failure_reason(exc)
 
+        duration = time.monotonic() - started
         execution = executions[-1] if executions else None
+        if timed_out or duration > MAX_AGENT_RUN_SECONDS:
+            return AgentRunOutcome(
+                validated=False,
+                failure_reason="Agent Run exceeded the five-minute wall-clock limit",
+                execution_result=execution,
+                execution_results=tuple(executions),
+                tool_use_records=restricted.tool_use_records,
+                duration_seconds=duration,
+            )
         if execution is None:
             return AgentRunOutcome(
                 validated=False,
                 failure_reason=agent_error
                 or "Agent finished without executing the Model Source",
                 tool_use_records=restricted.tool_use_records,
+                duration_seconds=duration,
             )
         if not _is_validated_result(execution):
             return AgentRunOutcome(
                 validated=False,
-                failure_reason=execution.error
+                failure_reason=_safe_failure_text(execution.error)
                 or agent_error
                 or "CAD execution did not produce a Validated Result",
                 execution_result=execution,
+                execution_results=tuple(executions),
                 tool_use_records=restricted.tool_use_records,
+                duration_seconds=duration,
             )
         if not _source_was_written(restricted, initial_source):
             return AgentRunOutcome(
                 validated=False,
                 failure_reason="Agent did not write a complete Model Source",
                 execution_result=execution,
+                execution_results=tuple(executions),
                 tool_use_records=restricted.tool_use_records,
+                duration_seconds=duration,
             )
         return AgentRunOutcome(
             validated=True,
             execution_result=execution,
+            execution_results=tuple(executions),
             tool_use_records=restricted.tool_use_records,
+            duration_seconds=duration,
         )
 
 
@@ -428,7 +526,20 @@ class AgentRunService:
             reason = _safe_failure_reason(exc)
             outcome = AgentRunOutcome(validated=False, failure_reason=reason)
         if outcome.validated:
-            self.store.mark_succeeded(project.project_id, outcome.diagnostics())
+            try:
+                self.store.mark_succeeded(project.project_id, outcome.diagnostics())
+            except Exception as exc:
+                reason = _safe_failure_reason(exc)
+                outcome = replace(
+                    outcome,
+                    validated=False,
+                    failure_reason=reason,
+                )
+                self.store.mark_failed(
+                    project.project_id,
+                    reason,
+                    outcome.diagnostics(),
+                )
         else:
             self.store.mark_failed(
                 project.project_id,
@@ -452,6 +563,29 @@ def _is_validated_result(result: ExecutionResult) -> bool:
     )
 
 
+def _execution_failure_result(error: Exception) -> ExecutionResult:
+    """Turn a CAD boundary exception into the same safe shape as subprocess output."""
+
+    return ExecutionResult(
+        status="failed",
+        exit_code=None,
+        error=_safe_failure_reason(error),
+        stdout="",
+        stderr="",
+        stdout_truncated=False,
+        stderr_truncated=False,
+        captured_solid_count=None,
+        solid_volume=None,
+        scene_artifact_exists=False,
+        scene_parse_result=SceneParseResult(
+            valid=False,
+            error="CAD execution failed before producing a Scene Artifact",
+        ),
+        artifact_entries=(),
+        duration_seconds=0.0,
+    )
+
+
 def _source_was_written(restricted: RestrictedAgentTools, initial_source: str) -> bool:
     records = restricted.tool_use_records
     if not any(record.tool_name == "write_model_source" for record in records):
@@ -459,13 +593,60 @@ def _source_was_written(restricted: RestrictedAgentTools, initial_source: str) -
     return restricted.read_model_source() != initial_source
 
 
+def _invoke_agent_with_deadline(
+    agent: Any,
+    prompt: str,
+    *,
+    deadline: float,
+    cancellation_token: CancellationToken,
+) -> tuple[str | None, bool]:
+    """Invoke the primary Agent without allowing a blocking call past the budget."""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        cancellation_token.cancel()
+        return "Agent Run exceeded the five-minute wall-clock limit", True
+
+    error: list[Exception] = []
+
+    def invoke() -> None:
+        try:
+            agent.invoke(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                "Complete this CAD generation request in the current "
+                                f"Project: {prompt}"
+                            ),
+                        }
+                    ]
+                }
+            )
+        except Exception as exc:
+            error.append(exc)
+
+    worker = threading.Thread(target=invoke, name="text-to-cad-agent", daemon=True)
+    worker.start()
+    worker.join(remaining)
+    if worker.is_alive():
+        cancellation_token.cancel()
+        return "Agent Run exceeded the five-minute wall-clock limit", True
+    if error:
+        return _safe_failure_reason(error[0]), False
+    return None, False
+
+
+def _safe_failure_text(message: str | None) -> str | None:
+    if not message:
+        return None
+    first_line = message.strip().splitlines()[0] if message.strip() else ""
+    return redact_credentials(first_line)[:500] or None
+
+
 def _safe_failure_reason(error: Exception) -> str:
-    message = (
-        str(error).strip().splitlines()[0]
-        if str(error).strip()
-        else type(error).__name__
-    )
-    return redact_credentials(message)[:500]
+    return _safe_failure_text(str(error)) or type(error).__name__
 
 
 __all__ = [
@@ -474,6 +655,10 @@ __all__ = [
     "AgentRunOutcome",
     "AgentRunService",
     "AgentSettings",
+    "AGENT_RUN_TIMEOUT_SECONDS",
+    "MAX_AGENT_RUN_SECONDS",
+    "MAX_CAD_EXECUTIONS",
+    "MAX_PROVIDER_RETRIES",
     "ReferenceGroundedAgent",
     "RESTRICTED_BUILTIN_TOOL_NAMES",
     "build_chat_model",

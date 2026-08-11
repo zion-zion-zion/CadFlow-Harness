@@ -11,11 +11,15 @@ from .cad_executor import (
 )
 from .contracts import ToolUseRecord
 from .agent import (
+    AGENT_RUN_TIMEOUT_SECONDS,
     AgentConfigurationError,
     AgentRunError,
     AgentRunOutcome,
     AgentRunService,
     AgentSettings,
+    MAX_AGENT_RUN_SECONDS,
+    MAX_CAD_EXECUTIONS,
+    MAX_PROVIDER_RETRIES,
     ReferenceGroundedAgent,
     build_chat_model,
     build_deep_agent,
@@ -44,6 +48,7 @@ from .scene_validation import SceneParseResult, validate_scene_artifact
 
 __all__ = [
     "ARTIFACT_DIRECTORY_NAME",
+    "AGENT_RUN_TIMEOUT_SECONDS",
     "AgentConfigurationError",
     "AgentRunError",
     "AgentRunOutcome",
@@ -57,6 +62,9 @@ __all__ = [
     "MODEL_SOURCE_NAME",
     "ModelSourceScaffold",
     "MAX_PROMPT_CHARS",
+    "MAX_AGENT_RUN_SECONDS",
+    "MAX_CAD_EXECUTIONS",
+    "MAX_PROVIDER_RETRIES",
     "Project",
     "ProjectError",
     "ProjectNotFoundError",

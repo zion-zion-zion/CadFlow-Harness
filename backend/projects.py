@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import threading
 import uuid
 from dataclasses import dataclass, replace
@@ -214,6 +215,36 @@ class ProjectStore:
             raise ProjectStateError("Succeeded Project has no canonical Scene Artifact")
         return artifact
 
+    def read_diagnostics(self, project_id: str) -> dict[str, Any] | None:
+        """Read the bounded diagnostic record retained for a Project."""
+
+        path = self.project_directory(project_id) / DIAGNOSTICS_NAME
+        with self._lock:
+            self.get_project(project_id)
+            if not path.is_file():
+                return None
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise ProjectError("Project diagnostics must be an object")
+            return value
+
+    def discard_unvalidated_artifacts(self, project_id: str) -> None:
+        """Remove partial Scene output so a Failed Project has no result file."""
+
+        artifact_dir = self.project_directory(project_id) / "artifacts"
+        with self._lock:
+            self.get_project(project_id)
+            if artifact_dir.is_symlink():
+                artifact_dir.unlink()
+                return
+            if not artifact_dir.is_dir():
+                return
+            for child in artifact_dir.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+
     def _mark_terminal(
         self,
         project_id: str,
@@ -236,6 +267,8 @@ class ProjectStore:
                 failure_reason=failure_reason,
             )
             self._write_metadata(project_dir, updated)
+            if state == ProjectState.FAILED:
+                self.discard_unvalidated_artifacts(project_id)
             if diagnostics is not None:
                 _write_json(project_dir / DIAGNOSTICS_NAME, diagnostics)
             return updated

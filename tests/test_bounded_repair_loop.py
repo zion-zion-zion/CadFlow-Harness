@@ -1,0 +1,318 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+import backend.agent as agent_module
+from backend.agent import (
+    AgentRunError,
+    AgentRunOutcome,
+    AgentRunService,
+    AgentSettings,
+    ReferenceGroundedAgent,
+    build_chat_model,
+    create_agent_tools,
+)
+from backend.cad_executor import ExecutionResult
+from backend.projects import ProjectState, ProjectStateError, ProjectStore
+from backend.restricted_tools import RestrictedAgentTools
+from backend.scene_validation import SceneParseResult
+
+
+def _execution_result(
+    *,
+    status: str = "failed",
+    error: str | None = "model source failed",
+    volume: float | None = None,
+    scene_valid: bool = False,
+) -> ExecutionResult:
+    return ExecutionResult(
+        status=status,
+        exit_code=0 if status == "succeeded" else 1,
+        error=error,
+        stdout="bounded stdout",
+        stderr="bounded stderr",
+        stdout_truncated=False,
+        stderr_truncated=False,
+        captured_solid_count=1 if volume is not None else 0,
+        solid_volume=volume,
+        scene_artifact_exists=scene_valid,
+        scene_parse_result=SceneParseResult(valid=scene_valid),
+        artifact_entries=("model.scene.zip",) if scene_valid else (),
+        duration_seconds=0.25,
+    )
+
+
+def _grounded_tools(tmp_path: Path, executor: object, **kwargs: object):
+    restricted = RestrictedAgentTools(
+        repo_root=Path(__file__).parents[1],
+        project_dir=tmp_path,
+        executor=executor,
+    )
+    restricted.begin_run()
+    tools = create_agent_tools(restricted, **kwargs)
+    by_name = {item.name: item for item in tools}
+    by_name["read_skill_entry"].invoke({})
+    by_name["read_api_index"].invoke({})
+    by_name["read_stdlib_index"].invoke({})
+    by_name["read_api_doc"].invoke({"api_name": "model"})
+    by_name["write_model_source"].invoke({"source": "# first source\n"})
+    return restricted, by_name
+
+
+def test_execute_model_exposes_each_diagnosis_and_hard_stops_at_three(
+    tmp_path: Path,
+) -> None:
+    class SequenceExecutor:
+        def __init__(self) -> None:
+            self.results = [
+                _execution_result(error="first failure"),
+                _execution_result(error="second failure"),
+                _execution_result(
+                    status="succeeded",
+                    error=None,
+                    volume=12.5,
+                    scene_valid=True,
+                ),
+            ]
+            self.calls = 0
+
+        def execute(self, project_dir: Path, **kwargs: object) -> ExecutionResult:
+            assert project_dir == tmp_path
+            assert kwargs["timeout_seconds"] <= 120.0
+            result = self.results[self.calls]
+            self.calls += 1
+            return result
+
+    executor = SequenceExecutor()
+    _restricted, tools = _grounded_tools(
+        tmp_path,
+        executor,
+        max_executions=3,
+        run_deadline=300.0,
+        clock=lambda: 0.0,
+    )
+
+    first = tools["execute_model"].invoke({"api_names": ["model"], "stdlib_names": []})
+    tools["write_model_source"].invoke({"source": "# repaired once\n"})
+    second = tools["execute_model"].invoke({"api_names": ["model"], "stdlib_names": []})
+    tools["write_model_source"].invoke({"source": "# repaired twice\n"})
+    third = tools["execute_model"].invoke({"api_names": ["model"], "stdlib_names": []})
+
+    assert executor.calls == 3
+    assert [item["error"] for item in (first, second, third)] == [
+        "first failure",
+        "second failure",
+        None,
+    ]
+    assert third["captured_solid_count"] == 1
+    assert third["scene_parse_result"]["valid"] is True
+
+    with pytest.raises(AgentRunError, match="at most 3 CAD executions"):
+        tools["execute_model"].invoke({"api_names": ["model"], "stdlib_names": []})
+    assert executor.calls == 3
+
+
+def test_execute_model_refuses_to_start_after_run_deadline(tmp_path: Path) -> None:
+    class NeverCalledExecutor:
+        def execute(self, *_args: object, **_kwargs: object) -> ExecutionResult:
+            raise AssertionError("CAD must not start after the Agent Run deadline")
+
+    now = [0.0]
+    _restricted, tools = _grounded_tools(
+        tmp_path,
+        NeverCalledExecutor(),
+        max_executions=3,
+        run_deadline=10.0,
+        clock=lambda: now[0],
+    )
+    now[0] = 10.001
+
+    with pytest.raises(AgentRunError, match="five-minute wall-clock limit"):
+        tools["execute_model"].invoke({"api_names": ["model"], "stdlib_names": []})
+
+
+def test_reference_agent_adapter_turns_boundary_exception_into_diagnosis(
+    tmp_path: Path,
+) -> None:
+    class RaisingExecutor:
+        def execute(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("CAD runner failed\nTraceback: hidden")
+
+    records: list[ExecutionResult] = []
+    _restricted, tools = _grounded_tools(
+        tmp_path,
+        RaisingExecutor(),
+        max_executions=3,
+        on_execution=records.append,
+        on_execution_error=records.append,
+        run_deadline=300.0,
+        clock=lambda: 0.0,
+    )
+
+    result = tools["execute_model"].invoke({"api_names": ["model"], "stdlib_names": []})
+
+    assert result["status"] == "failed"
+    assert result["error"] == "CAD runner failed"
+    assert len(records) == 1
+    assert records[0].stderr == ""
+
+
+def test_failed_project_retains_all_attempt_diagnostics_but_never_exposes_scene(
+    tmp_path: Path,
+) -> None:
+    store = ProjectStore(tmp_path)
+    project = store.create_project("Repair diagnostics")
+    store.submit_prompt(project.project_id, "Make a part.")
+    artifact = tmp_path / project.project_id / "artifacts" / "model.scene.zip"
+    artifact.parent.mkdir()
+    artifact.write_bytes(b"partial scene")
+
+    diagnostics = {
+        "cad_execution_count": 3,
+        "execution_results": [
+            {"attempt": 1, "error": "first failure", "stdout": "bounded"},
+            {"attempt": 2, "error": "second failure", "stdout": "bounded"},
+            {"attempt": 3, "error": "final failure", "stdout": "bounded"},
+        ],
+    }
+    failed = store.mark_failed(project.project_id, "final failure", diagnostics)
+
+    assert failed.state is ProjectState.FAILED
+    assert store.read_diagnostics(project.project_id) == diagnostics
+    with pytest.raises(ProjectStateError):
+        store.scene_artifact(project.project_id)
+    assert not artifact.exists()
+
+
+def test_reference_grounded_agent_repairs_latest_source_until_validated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SequenceExecutor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, project_dir: Path, **_kwargs: object) -> ExecutionResult:
+            self.calls += 1
+            if self.calls == 1:
+                return _execution_result(error="missing API argument")
+            artifact = project_dir / "artifacts" / "model.scene.zip"
+            artifact.parent.mkdir(exist_ok=True)
+            artifact.write_bytes(b"validated scene")
+            return _execution_result(
+                status="succeeded",
+                error=None,
+                volume=24.0,
+                scene_valid=True,
+            )
+
+    executor = SequenceExecutor()
+    observed: dict[str, object] = {}
+
+    class ScriptedPrimaryAgent:
+        def __init__(self, tools: tuple[object, ...]) -> None:
+            observed["agent_instances"] = int(observed.get("agent_instances", 0)) + 1
+            self.tools = {item.name: item for item in tools}  # type: ignore[attr-defined]
+
+        def invoke(self, _request: object) -> None:
+            self.tools["read_skill_entry"].invoke({})
+            self.tools["read_api_index"].invoke({})
+            self.tools["read_stdlib_index"].invoke({})
+            self.tools["read_api_doc"].invoke({"api_name": "model"})
+            self.tools["write_model_source"].invoke(
+                {"source": "# initial generated source\n"}
+            )
+            first = self.tools["execute_model"].invoke(
+                {"api_names": ["model"], "stdlib_names": []}
+            )
+            assert first["error"] == "missing API argument"
+            self.tools["write_model_source"].invoke(
+                {"source": "# repaired complete source\n"}
+            )
+            second = self.tools["execute_model"].invoke(
+                {"api_names": ["model"], "stdlib_names": []}
+            )
+            assert second["scene_parse_result"]["valid"] is True
+
+    def fake_build_deep_agent(
+        _settings: AgentSettings,
+        tools: tuple[object, ...],
+        *,
+        model: object | None = None,
+    ) -> ScriptedPrimaryAgent:
+        assert model is None
+        return ScriptedPrimaryAgent(tools)
+
+    monkeypatch.setattr(agent_module, "build_deep_agent", fake_build_deep_agent)
+    outcome = ReferenceGroundedAgent(
+        settings=AgentSettings(model_id="cad-model", api_key="test-key"),
+        repo_root=Path(__file__).parents[1],
+        project_dir=tmp_path,
+        executor=executor,
+    ).run("Make a part.")
+
+    assert outcome.validated is True
+    assert outcome.status == "succeeded"
+    assert outcome.execution_result is not None
+    assert len(outcome.execution_results) == 2
+    assert executor.calls == 2
+    assert observed["agent_instances"] == 1
+    assert (tmp_path / "model.py").read_text(encoding="utf-8") == (
+        "# repaired complete source\n"
+    )
+    assert not (tmp_path / "model.py.repair-1").exists()
+
+
+def test_agent_run_service_persists_three_attempts_and_removes_partial_output(
+    tmp_path: Path,
+) -> None:
+    store = ProjectStore(tmp_path)
+    project = store.create_project("Three attempts")
+
+    class ReturningAgent:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def run(self, _prompt: str) -> AgentRunOutcome:
+            results = tuple(
+                _execution_result(error=f"failure {i}") for i in range(1, 4)
+            )
+            return AgentRunOutcome(
+                validated=False,
+                failure_reason="failure 3",
+                execution_results=results,
+            )
+
+    service = AgentRunService(
+        store=store,
+        repo_root=Path(__file__).parents[1],
+        settings_factory=lambda: AgentSettings(
+            model_id="cad-model", api_key="test-key"
+        ),
+        agent_factory=ReturningAgent,
+    )
+    outcome = service.run(project.project_id, "Make a part.")
+
+    assert outcome.validated is False
+    assert store.get_project(project.project_id).state is ProjectState.FAILED
+    diagnostics = store.read_diagnostics(project.project_id)
+    assert diagnostics is not None
+    assert diagnostics["cad_execution_count"] == 3
+    assert [item["attempt"] for item in diagnostics["execution_results"]] == [1, 2, 3]
+    assert not (tmp_path / project.project_id / "artifacts").exists() or not any(
+        (tmp_path / project.project_id / "artifacts").iterdir()
+    )
+
+
+def test_chat_model_configures_only_two_provider_retries() -> None:
+    model = build_chat_model(
+        AgentSettings(
+            model_id="cad-model",
+            api_key="test-key",
+            base_url="https://provider.invalid/v1",
+        )
+    )
+
+    assert model.max_retries == 2
