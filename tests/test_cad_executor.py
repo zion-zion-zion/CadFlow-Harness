@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 import time
 from pathlib import Path
@@ -20,7 +21,8 @@ def test_cad_execution_returns_validated_scene_facts(tmp_path: Path) -> None:
     assert result.status == "succeeded"
     assert result.exit_code == 0
     assert result.captured_solid_count == 1
-    assert result.solid_volume is not None and result.solid_volume > 0
+    assert result.solid_volume is not None
+    assert math.isfinite(result.solid_volume) and result.solid_volume > 0
     assert result.scene_artifact_exists is True
     assert result.scene_parse_result.valid is True
     assert result.scene_parse_result.glb_asset_count == 2
@@ -57,6 +59,69 @@ def test_invalid_scene_artifact_is_not_promoted_to_success(tmp_path: Path) -> No
     assert result.scene_artifact_exists is True
     assert result.scene_parse_result.valid is False
     assert "zip" in (result.error or "").lower()
+
+
+def test_captured_solid_count_must_be_exactly_one(tmp_path: Path) -> None:
+    scaffold = create_model_source(tmp_path)
+    source = scaffold.model_path.read_text(encoding="utf-8")
+    source = source.replace(
+        "    scad.capture_result(value=final_solid)\n",
+        "    scad.capture_result(value=final_solid)\n"
+        "    second_solid = scad.make_box_rsolid(\n"
+        "        width=2.0, height=2.0, depth=2.0,\n"
+        "        bottom_face_center=(20.0, 0.0, 0.0),\n"
+        "    )\n"
+        "    scad.capture_result(value=second_solid)\n",
+    )
+    scaffold.model_path.write_text(source, encoding="utf-8")
+
+    result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
+
+    assert result.status == "failed"
+    assert result.captured_solid_count == 2
+    assert result.scene_artifact_exists is True
+    assert result.scene_parse_result.valid is True
+    assert "exactly one" in (result.error or "")
+
+
+def test_missing_captured_solid_is_observable_as_zero_solids(tmp_path: Path) -> None:
+    scaffold = create_model_source(tmp_path)
+    source = scaffold.model_path.read_text(encoding="utf-8").replace(
+        "    scad.capture_result(value=final_solid)\n",
+        "    final_part = scad.make_part_rpart(\n"
+        "        part_id='part', body=final_solid\n"
+        "    )\n"
+        "    scad.capture_result(value=final_part)\n",
+    )
+    source = source.replace("    return final_solid\n", "    return final_part\n")
+    source = source.replace(
+        "if not isinstance(FINAL_SOLID, scad.Solid):\n"
+        '    raise TypeError("Model Source must return one SimpleCADAPI Solid")\n',
+        "",
+    )
+    scaffold.model_path.write_text(source, encoding="utf-8")
+
+    result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
+
+    assert result.status == "failed"
+    assert result.captured_solid_count == 0
+    assert "captured 0 Solids" in (result.error or "")
+
+
+def test_unexpected_artifact_member_is_not_a_validated_result(tmp_path: Path) -> None:
+    scaffold = create_model_source(tmp_path)
+    source = scaffold.model_path.read_text(encoding="utf-8")
+    source += (
+        "\n(ARTIFACT_DIR / 'unexpected.log').write_text('debug', encoding='utf-8')\n"
+    )
+    scaffold.model_path.write_text(source, encoding="utf-8")
+
+    result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
+
+    assert result.status == "failed"
+    assert result.artifact_entries == ("model.scene.zip", "unexpected.log")
+    assert result.scene_parse_result.valid is True
+    assert "only artifacts/model.scene.zip" in (result.error or "")
 
 
 def test_timeout_stops_model_process(tmp_path: Path) -> None:
@@ -99,6 +164,7 @@ def test_external_cancellation_terminates_model_process(tmp_path: Path) -> None:
     assert not worker.is_alive()
     assert len(results) == 1
     assert results[0].status == "cancelled"
+    assert results[0].process_id is not None
     assert "cancel" in (results[0].error or "").lower()
 
 
@@ -122,7 +188,9 @@ def test_output_is_bounded_and_credential_like_text_is_redacted(tmp_path: Path) 
     assert "[REDACTED]" in result.stdout
 
 
-def test_cad_environment_removes_provider_credentials_but_keeps_runtime_values() -> None:
+def test_cad_environment_removes_provider_credentials_but_keeps_runtime_values() -> (
+    None
+):
     environment = build_cad_environment(
         {
             "OPENAI_API_KEY": "secret-key",

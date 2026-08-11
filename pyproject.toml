@@ -18,6 +18,10 @@ package = false
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+addopts = "-m 'not live_agent'"
+markers = [
+    "live_agent: opt-in tests that call the configured real model provider",
+]
 
 [dependency-groups]
 dev = [

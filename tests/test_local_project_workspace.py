@@ -10,8 +10,8 @@ from backend.agent import AgentRunOutcome
 from backend.app import create_app
 
 
-class _CancellableRunService:
-    """Keep a workspace run active until the public Stop/Delete path cancels it."""
+class _LifecycleRunHarness:
+    """Keep a lifecycle boundary active without making an Agent claim."""
 
     def __init__(self) -> None:
         self.started = threading.Event()
@@ -40,7 +40,7 @@ class _CancellableRunService:
 def test_project_catalog_creates_duplicate_names_and_requires_exact_delete_confirmation(
     tmp_path: Path,
 ) -> None:
-    app = create_app(projects_root=tmp_path, run_service=_CancellableRunService())
+    app = create_app(projects_root=tmp_path, run_service=_LifecycleRunHarness())
     client = TestClient(app)
 
     first = client.post("/api/projects", json={"name": "Bracket / left"}).json()
@@ -68,10 +68,10 @@ def test_project_catalog_creates_duplicate_names_and_requires_exact_delete_confi
     assert not (tmp_path / first["project_id"]).exists()
 
 
-def test_deleting_a_running_project_cancels_the_run_before_removing_it(
+def test_deleting_a_running_project_removes_data_after_lifecycle_cancellation(
     tmp_path: Path,
 ) -> None:
-    service = _CancellableRunService()
+    service = _LifecycleRunHarness()
     app = create_app(projects_root=tmp_path, run_service=service)
     client = TestClient(app)
     project = client.post("/api/projects", json={"name": "Active"}).json()
@@ -97,7 +97,7 @@ def test_deleting_a_running_project_cancels_the_run_before_removing_it(
 def test_workspace_rejects_invalid_prompt_before_starting_and_hides_scene_for_draft(
     tmp_path: Path,
 ) -> None:
-    app = create_app(projects_root=tmp_path, run_service=_CancellableRunService())
+    app = create_app(projects_root=tmp_path, run_service=_LifecycleRunHarness())
     client = TestClient(app)
     project = client.post("/api/projects", json={"name": "Draft"}).json()
 
@@ -128,7 +128,7 @@ def test_fastapi_serves_built_frontend_from_same_origin_when_dist_is_present(
     app = create_app(
         projects_root=tmp_path / "projects",
         frontend_dist=frontend_dist,
-        run_service=_CancellableRunService(),
+        run_service=_LifecycleRunHarness(),
     )
     client = TestClient(app)
 

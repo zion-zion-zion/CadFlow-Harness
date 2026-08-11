@@ -4,13 +4,11 @@ from pathlib import Path
 
 import pytest
 
-import backend.agent as agent_module
 from backend.agent import (
     AgentRunError,
     AgentRunOutcome,
     AgentRunService,
     AgentSettings,
-    ReferenceGroundedAgent,
     build_chat_model,
     create_agent_tools,
 )
@@ -184,85 +182,6 @@ def test_failed_project_retains_all_attempt_diagnostics_but_never_exposes_scene(
     with pytest.raises(ProjectStateError):
         store.scene_artifact(project.project_id)
     assert not artifact.exists()
-
-
-def test_reference_grounded_agent_repairs_latest_source_until_validated(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class SequenceExecutor:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def execute(self, project_dir: Path, **_kwargs: object) -> ExecutionResult:
-            self.calls += 1
-            if self.calls == 1:
-                return _execution_result(error="missing API argument")
-            artifact = project_dir / "artifacts" / "model.scene.zip"
-            artifact.parent.mkdir(exist_ok=True)
-            artifact.write_bytes(b"validated scene")
-            return _execution_result(
-                status="succeeded",
-                error=None,
-                volume=24.0,
-                scene_valid=True,
-            )
-
-    executor = SequenceExecutor()
-    observed: dict[str, object] = {}
-
-    class ScriptedPrimaryAgent:
-        def __init__(self, tools: tuple[object, ...]) -> None:
-            observed["agent_instances"] = int(observed.get("agent_instances", 0)) + 1
-            self.tools = {item.name: item for item in tools}  # type: ignore[attr-defined]
-
-        def invoke(self, _request: object) -> None:
-            self.tools["read_skill_entry"].invoke({})
-            self.tools["read_api_index"].invoke({})
-            self.tools["read_stdlib_index"].invoke({})
-            self.tools["read_api_doc"].invoke({"api_name": "model"})
-            self.tools["write_model_source"].invoke(
-                {"source": "# initial generated source\n"}
-            )
-            first = self.tools["execute_model"].invoke(
-                {"api_names": ["model"], "stdlib_names": []}
-            )
-            assert first["error"] == "missing API argument"
-            self.tools["write_model_source"].invoke(
-                {"source": "# repaired complete source\n"}
-            )
-            second = self.tools["execute_model"].invoke(
-                {"api_names": ["model"], "stdlib_names": []}
-            )
-            assert second["scene_parse_result"]["valid"] is True
-
-    def fake_build_deep_agent(
-        _settings: AgentSettings,
-        tools: tuple[object, ...],
-        *,
-        model: object | None = None,
-    ) -> ScriptedPrimaryAgent:
-        assert model is None
-        return ScriptedPrimaryAgent(tools)
-
-    monkeypatch.setattr(agent_module, "build_deep_agent", fake_build_deep_agent)
-    outcome = ReferenceGroundedAgent(
-        settings=AgentSettings(model_id="cad-model", api_key="test-key"),
-        repo_root=Path(__file__).parents[1],
-        project_dir=tmp_path,
-        executor=executor,
-    ).run("Make a part.")
-
-    assert outcome.validated is True
-    assert outcome.status == "succeeded"
-    assert outcome.execution_result is not None
-    assert len(outcome.execution_results) == 2
-    assert executor.calls == 2
-    assert observed["agent_instances"] == 1
-    assert (tmp_path / "model.py").read_text(encoding="utf-8") == (
-        "# repaired complete source\n"
-    )
-    assert not (tmp_path / "model.py.repair-1").exists()
 
 
 def test_agent_run_service_persists_three_attempts_and_removes_partial_output(

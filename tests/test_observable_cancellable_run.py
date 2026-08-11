@@ -111,7 +111,7 @@ def test_restart_rebuild_marks_legacy_running_project_failed(tmp_path: Path) -> 
     assert diagnostics["recovered_after_restart"] is True
 
 
-class _BlockingRunService:
+class _LifecycleRunHarness:
     def __init__(self) -> None:
         self.started = threading.Event()
 
@@ -137,8 +137,10 @@ class _BlockingRunService:
         )
 
 
-def test_global_run_conflict_and_stop_cancel_the_active_project(tmp_path: Path) -> None:
-    service = _BlockingRunService()
+def test_http_global_run_conflict_and_stop_boundary_for_lifecycle_harness(
+    tmp_path: Path,
+) -> None:
+    service = _LifecycleRunHarness()
     app = create_app(projects_root=tmp_path, run_service=service)
     client = TestClient(app)
     first = client.post("/api/projects", json={"name": "First"}).json()
@@ -171,7 +173,7 @@ def test_global_run_conflict_and_stop_cancel_the_active_project(tmp_path: Path) 
 def test_sse_replays_after_last_event_id_and_keeps_payload_curated(
     tmp_path: Path,
 ) -> None:
-    app = create_app(projects_root=tmp_path, run_service=_BlockingRunService())
+    app = create_app(projects_root=tmp_path, run_service=_LifecycleRunHarness())
     client = TestClient(app)
     project = client.post("/api/projects", json={"name": "Events"}).json()
     event_store: ProgressEventStore = app.state.event_store
@@ -204,12 +206,12 @@ def test_sse_replays_after_last_event_id_and_keeps_payload_curated(
 def test_app_restart_recovers_running_project_without_an_active_lock(
     tmp_path: Path,
 ) -> None:
-    first = create_app(projects_root=tmp_path, run_service=_BlockingRunService())
+    first = create_app(projects_root=tmp_path, run_service=_LifecycleRunHarness())
     client = TestClient(first)
     project = client.post("/api/projects", json={"name": "Restart"}).json()
     first.state.project_store.submit_prompt(project["project_id"], "Interrupted prompt")
 
-    restarted = create_app(projects_root=tmp_path, run_service=_BlockingRunService())
+    restarted = create_app(projects_root=tmp_path, run_service=_LifecycleRunHarness())
 
     recovered = restarted.state.project_store.get_project(project["project_id"])
     assert recovered.state is ProjectState.FAILED
