@@ -12,6 +12,9 @@ dependencies = [
 [tool.uv]
 package = false
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 [dependency-groups]
 dev = [
     "twine>=6.1.0",
