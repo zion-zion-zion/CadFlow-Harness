@@ -30,3 +30,17 @@ Recent commits generally use Conventional Commit prefixes such as `feat:`, `fix:
 ## Security & Configuration
 
 Copy `.env.example` to `.env` for local API configuration. Never commit `.env`, API keys, generated model artifacts, or credentials. Keep placeholders safe and update `.env.example` whenever required variables change.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked as local Markdown under `.scratch/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default five-role triage label vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository with a root glossary and system-wide ADRs. See `docs/agents/domain.md`.

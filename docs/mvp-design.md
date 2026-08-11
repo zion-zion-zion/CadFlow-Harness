@@ -217,4 +217,3 @@ GET    /api/projects/{project_id}/scene
 
 - Agent 生成的 Python 会直接执行，没有容器、AST 检查或系统调用隔离。
 - 服务只能作为可信本机 Demo 使用，不能监听不可信网络。
-- `.env.example` 中存在一段外观上像真实 API key 的已跟踪值；当前决定是不修改文件、不吊销凭证、不清理 Git 历史。该风险在实现后仍然存在。
