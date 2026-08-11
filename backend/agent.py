@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import inspect
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -19,7 +20,9 @@ from .cad_executor import (
     redact_credentials,
 )
 from .contracts import ToolUseRecord
+from .events import ProgressUpdate
 from .projects import ProjectStore
+from .projects import ProjectState
 from .references import ReferenceContractError
 from .restricted_tools import RestrictedAgentTools
 from .scene_validation import SceneParseResult
@@ -31,6 +34,10 @@ class AgentConfigurationError(RuntimeError):
 
 class AgentRunError(RuntimeError):
     """Raised when a run cannot produce a structured Agent outcome."""
+
+
+class AgentRunCancelled(AgentRunError):
+    """Raised inside a tool when the user has stopped the current Agent Run."""
 
 
 MAX_CAD_EXECUTIONS = 3
@@ -85,6 +92,7 @@ class AgentRunOutcome:
     execution_results: tuple[ExecutionResult, ...] = ()
     provider_retry_count: int = 0
     duration_seconds: float | None = None
+    cancelled: bool = False
 
     def __post_init__(self) -> None:
         results = self.execution_results
@@ -95,6 +103,8 @@ class AgentRunOutcome:
 
     @property
     def status(self) -> str:
+        if self.cancelled:
+            return "cancelled"
         return "succeeded" if self.validated else "failed"
 
     def diagnostics(self) -> dict[str, Any]:
@@ -117,6 +127,7 @@ class AgentRunOutcome:
             ],
             "provider_retry_count": self.provider_retry_count,
             "duration_seconds": self.duration_seconds,
+            "cancelled": self.cancelled,
             "tool_use_records": [
                 {
                     "sequence": record.sequence,
@@ -205,6 +216,7 @@ def create_agent_tools(
     run_deadline: float | None = None,
     clock: Callable[[], float] = time.monotonic,
     cancellation_token: object | None = None,
+    on_progress: Callable[[ProgressUpdate], None] | None = None,
 ) -> tuple[BaseTool, ...]:
     """Adapt issue 01's narrow methods to LangChain tools.
 
@@ -219,6 +231,8 @@ def create_agent_tools(
     source_written = False
 
     def require_time_remaining() -> float | None:
+        if _is_cancellation_requested(cancellation_token):
+            raise AgentRunCancelled("Agent Run stopped by caller")
         if run_deadline is None:
             return None
         remaining = run_deadline - clock()
@@ -230,48 +244,56 @@ def create_agent_tools(
     def read_skill_entry() -> str:
         """Read the packaged SimpleCADAPI Skill entry document."""
 
+        require_time_remaining()
         return restricted.read_skill_entry()
 
     @tool("read_api_index")
     def read_api_index() -> str:
         """Read the required SimpleCADAPI API index."""
 
+        require_time_remaining()
         return restricted.read_api_index()
 
     @tool("read_stdlib_index")
     def read_stdlib_index() -> str:
         """Read the required Python stdlib reference index."""
 
+        require_time_remaining()
         return restricted.read_stdlib_index()
 
     @tool("read_api_doc")
     def read_api_doc(api_name: str) -> str:
         """Read one exact SimpleCADAPI API document by name."""
 
+        require_time_remaining()
         return restricted.read_api_doc(api_name)
 
     @tool("read_stdlib_doc")
     def read_stdlib_doc(stdlib_name: str) -> str:
         """Read one exact Python stdlib document by name."""
 
+        require_time_remaining()
         return restricted.read_stdlib_doc(stdlib_name)
 
     @tool("list_examples")
     def list_examples() -> list[str]:
         """List the packaged repository examples."""
 
+        require_time_remaining()
         return list(restricted.list_examples())
 
     @tool("read_example")
     def read_example(relative_path: str) -> str:
         """Read one relevant packaged repository example."""
 
+        require_time_remaining()
         return restricted.read_example(relative_path)
 
     @tool("read_model_source")
     def read_model_source() -> str:
         """Read the complete current Project Model Source."""
 
+        require_time_remaining()
         return restricted.read_model_source()
 
     @tool("write_model_source")
@@ -283,6 +305,8 @@ def create_agent_tools(
         restricted.require_reference_grounding_for_write()
         restricted.write_model_source(source)
         source_written = True
+        if on_progress is not None:
+            on_progress(ProgressUpdate(stage="writing_model", tool="model_source"))
         return "Model Source written for the current Project."
 
     @tool("execute_model")
@@ -328,6 +352,15 @@ def create_agent_tools(
             execution_recorded = True
         if on_execution is not None and not execution_recorded:
             on_execution(result)
+        if on_progress is not None:
+            on_progress(
+                ProgressUpdate(
+                    stage="executing",
+                    tool="cad",
+                    attempt=execution_attempts,
+                    result=_execution_progress_result(result),
+                )
+            )
         return result.to_dict()
 
     return (
@@ -402,27 +435,72 @@ class ReferenceGroundedAgent:
         self.executor = executor
         self.model = model
 
-    def run(self, prompt: str) -> AgentRunOutcome:
+    def run(
+        self,
+        prompt: str,
+        *,
+        cancellation_token: CancellationToken | None = None,
+        progress_callback: Callable[[ProgressUpdate], None] | None = None,
+    ) -> AgentRunOutcome:
         if not isinstance(prompt, str) or not prompt.strip():
             raise AgentRunError("Prompt must not be empty")
         started = time.monotonic()
         deadline = started + MAX_AGENT_RUN_SECONDS
-        cancellation_token = CancellationToken()
+        token = cancellation_token or CancellationToken()
+
+        def emit(update: ProgressUpdate) -> None:
+            if progress_callback is None:
+                return
+            try:
+                progress_callback(update)
+            except Exception:
+                # A local event sink must not turn a valid CAD outcome into a
+                # model failure when observability has a transient error.
+                return
+
+        def on_tool_use(record: ToolUseRecord) -> None:
+            if record.tool_name == "prepare_model_source":
+                emit(ProgressUpdate(stage="preparing", tool="project"))
+            elif record.tool_name in {
+                "read_skill_entry",
+                "read_api_index",
+                "read_stdlib_index",
+                "read_api_doc",
+                "read_stdlib_doc",
+                "list_examples",
+                "read_example",
+            }:
+                emit(ProgressUpdate(stage="reading_references", tool="reference"))
+            elif record.tool_name in {"read_model_source", "write_model_source"}:
+                emit(ProgressUpdate(stage="writing_model", tool="model_source"))
+
         restricted = RestrictedAgentTools(
             repo_root=self.repo_root,
             project_dir=self.project_dir,
             executor=self.executor,
+            on_tool_use=on_tool_use,
         )
         scaffold = restricted.begin_run()
         initial_source = scaffold.model_path.read_text(encoding="utf-8")
+        if token.cancelled:
+            return _cancelled_outcome(
+                restricted,
+                execution_results=(),
+                duration=time.monotonic() - started,
+            )
         executions: list[ExecutionResult] = []
+
+        def record_execution(result: ExecutionResult) -> None:
+            executions.append(result)
+
         agent_tools = create_agent_tools(
             restricted,
             max_executions=MAX_CAD_EXECUTIONS,
-            on_execution=executions.append,
-            on_execution_error=executions.append,
+            on_execution=record_execution,
+            on_execution_error=record_execution,
             run_deadline=deadline,
-            cancellation_token=cancellation_token,
+            cancellation_token=token,
+            on_progress=emit,
         )
         agent_error: str | None = None
         timed_out = False
@@ -436,13 +514,19 @@ class ReferenceGroundedAgent:
                 agent,
                 prompt,
                 deadline=deadline,
-                cancellation_token=cancellation_token,
+                cancellation_token=token,
             )
         except Exception as exc:  # Agent/provider errors become a safe diagnosis.
             agent_error = _safe_failure_reason(exc)
 
         duration = time.monotonic() - started
         execution = executions[-1] if executions else None
+        if token.cancelled:
+            return _cancelled_outcome(
+                restricted,
+                execution_results=tuple(executions),
+                duration=duration,
+            )
         if timed_out or duration > MAX_AGENT_RUN_SECONDS:
             return AgentRunOutcome(
                 validated=False,
@@ -505,14 +589,55 @@ class AgentRunService:
         self.settings_factory = settings_factory or AgentSettings.from_environment
         self.agent_factory = agent_factory
 
-    def run(self, project_id: str, prompt: str) -> AgentRunOutcome:
-        project = self.store.submit_prompt(project_id, prompt)
+    def run(
+        self,
+        project_id: str,
+        prompt: str,
+        *,
+        cancellation_token: CancellationToken | None = None,
+        progress_callback: Callable[[ProgressUpdate], None] | None = None,
+        prompt_submitted: bool = False,
+    ) -> AgentRunOutcome:
+        project = (
+            self.store.get_project(project_id)
+            if prompt_submitted
+            else self.store.submit_prompt(project_id, prompt)
+        )
+        if prompt_submitted and project.state != ProjectState.RUNNING:
+            raise AgentRunError("Agent Run requires a Running Project")
+        token = cancellation_token or CancellationToken()
+        if token.cancelled:
+            outcome = AgentRunOutcome(
+                validated=False,
+                cancelled=True,
+                failure_reason="Agent Run stopped by caller",
+            )
+            self.store.mark_stopped(
+                project.project_id,
+                outcome.failure_reason or "Agent Run stopped by caller",
+                outcome.diagnostics(),
+            )
+            return outcome
         try:
             settings = self.settings_factory()
         except Exception as exc:
             reason = _safe_failure_reason(exc)
             outcome = AgentRunOutcome(validated=False, failure_reason=reason)
-            self.store.mark_failed(project.project_id, reason, outcome.diagnostics())
+            if token.cancelled:
+                outcome = replace(
+                    outcome,
+                    cancelled=True,
+                    failure_reason="Agent Run stopped by caller",
+                )
+                self.store.mark_stopped(
+                    project.project_id,
+                    outcome.failure_reason or "Agent Run stopped by caller",
+                    outcome.diagnostics(),
+                )
+            else:
+                self.store.mark_failed(
+                    project.project_id, reason, outcome.diagnostics()
+                )
             return outcome
 
         try:
@@ -521,10 +646,29 @@ class AgentRunService:
                 repo_root=self.repo_root,
                 project_dir=self.store.project_directory(project.project_id),
             )
-            outcome = agent.run(project.prompt or prompt)
+            outcome = _invoke_agent_run(
+                agent,
+                project.prompt or prompt,
+                cancellation_token=token,
+                progress_callback=progress_callback,
+            )
         except Exception as exc:
             reason = _safe_failure_reason(exc)
             outcome = AgentRunOutcome(validated=False, failure_reason=reason)
+        if token.cancelled and not outcome.cancelled:
+            outcome = replace(
+                outcome,
+                validated=False,
+                cancelled=True,
+                failure_reason="Agent Run stopped by caller",
+            )
+        if outcome.cancelled:
+            self.store.mark_stopped(
+                project.project_id,
+                outcome.failure_reason or "Agent Run stopped by caller",
+                outcome.diagnostics(),
+            )
+            return outcome
         if outcome.validated:
             try:
                 self.store.mark_succeeded(project.project_id, outcome.diagnostics())
@@ -549,6 +693,33 @@ class AgentRunService:
         return outcome
 
 
+def _invoke_agent_run(
+    agent: Any,
+    prompt: str,
+    *,
+    cancellation_token: CancellationToken,
+    progress_callback: Callable[[ProgressUpdate], None] | None,
+) -> AgentRunOutcome:
+    """Call old issue-03 test adapters and the cancellable Agent uniformly."""
+
+    run: Any = agent.run
+    kwargs: dict[str, object] = {}
+    parameters: Mapping[str, inspect.Parameter]
+    try:
+        parameters = inspect.signature(run).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    accepts_kwargs = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+    if accepts_kwargs or "cancellation_token" in parameters:
+        kwargs["cancellation_token"] = cancellation_token
+    if accepts_kwargs or "progress_callback" in parameters:
+        kwargs["progress_callback"] = progress_callback
+    return run(prompt, **kwargs)
+
+
 def _is_validated_result(result: ExecutionResult) -> bool:
     return bool(
         result.status == "succeeded"
@@ -560,6 +731,41 @@ def _is_validated_result(result: ExecutionResult) -> bool:
         and result.scene_artifact_exists
         and result.scene_parse_result.valid
         and result.artifact_entries == ("model.scene.zip",)
+    )
+
+
+def _is_cancellation_requested(token: object | None) -> bool:
+    if token is None:
+        return False
+    cancelled = getattr(token, "cancelled", False)
+    return bool(cancelled() if callable(cancelled) else cancelled)
+
+
+def _cancelled_outcome(
+    restricted: RestrictedAgentTools,
+    *,
+    execution_results: tuple[ExecutionResult, ...],
+    duration: float,
+) -> AgentRunOutcome:
+    execution = execution_results[-1] if execution_results else None
+    return AgentRunOutcome(
+        validated=False,
+        cancelled=True,
+        failure_reason="Agent Run stopped by caller",
+        execution_result=execution,
+        execution_results=execution_results,
+        tool_use_records=restricted.tool_use_records,
+        duration_seconds=duration,
+    )
+
+
+def _execution_progress_result(result: ExecutionResult) -> str:
+    if result.status == "succeeded":
+        return "CAD execution completed; validating Scene Artifact"
+    if result.status == "cancelled":
+        return "CAD execution cancelled"
+    return "CAD execution failed: " + (
+        _safe_failure_text(result.error) or "structured diagnosis retained"
     )
 
 
@@ -629,10 +835,14 @@ def _invoke_agent_with_deadline(
 
     worker = threading.Thread(target=invoke, name="text-to-cad-agent", daemon=True)
     worker.start()
-    worker.join(remaining)
-    if worker.is_alive():
-        cancellation_token.cancel()
-        return "Agent Run exceeded the five-minute wall-clock limit", True
+    while worker.is_alive():
+        worker.join(min(0.05, remaining))
+        if cancellation_token.cancelled:
+            return "Agent Run stopped by caller", False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            cancellation_token.cancel()
+            return "Agent Run exceeded the five-minute wall-clock limit", True
     if error:
         return _safe_failure_reason(error[0]), False
     return None, False
@@ -652,6 +862,7 @@ def _safe_failure_reason(error: Exception) -> str:
 __all__ = [
     "AgentConfigurationError",
     "AgentRunError",
+    "AgentRunCancelled",
     "AgentRunOutcome",
     "AgentRunService",
     "AgentSettings",

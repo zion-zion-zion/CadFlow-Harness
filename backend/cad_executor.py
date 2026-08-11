@@ -14,7 +14,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 from .model_source import (
     ARTIFACT_DIRECTORY_NAME,
@@ -39,7 +39,9 @@ _ASSIGNMENT_SECRET = re.compile(
     r"\s*([=:])\s*([^\s,;]+)"
 )
 _BEARER_SECRET = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]+")
-_TOKEN_SECRET = re.compile(r"\b(?:sk|pk|ghp|github_pat|xox[baprs])-[A-Za-z0-9._~+/=-]{8,}")
+_TOKEN_SECRET = re.compile(
+    r"\b(?:sk|pk|ghp|github_pat|xox[baprs])-[A-Za-z0-9._~+/=-]{8,}"
+)
 
 
 @dataclass(frozen=True)
@@ -89,9 +91,44 @@ class CancellationToken:
 
     def __init__(self) -> None:
         self._event = threading.Event()
+        self._lock = threading.RLock()
+        self._process: subprocess.Popen[bytes] | None = None
+        self._process_terminator: Callable[[subprocess.Popen[bytes]], None] | None = (
+            None
+        )
 
     def cancel(self) -> None:
         self._event.set()
+        with self._lock:
+            process = self._process
+            terminator = self._process_terminator
+        if process is not None and terminator is not None:
+            terminator(process)
+
+    def register_process(
+        self,
+        process: subprocess.Popen[bytes],
+        terminator: Callable[[subprocess.Popen[bytes]], None],
+    ) -> None:
+        """Bind the currently running CAD child so cancellation can terminate it."""
+
+        with self._lock:
+            self._process = process
+            self._process_terminator = terminator
+            cancelled = self._event.is_set()
+        if cancelled:
+            terminator(process)
+
+    def clear_process(self, process: subprocess.Popen[bytes]) -> None:
+        with self._lock:
+            if self._process is process:
+                self._process = None
+                self._process_terminator = None
+
+    @property
+    def active_process_id(self) -> int | None:
+        with self._lock:
+            return self._process.pid if self._process is not None else None
 
     @property
     def cancelled(self) -> bool:
@@ -158,47 +195,53 @@ class CADExecutor:
                 raise ValueError("max_output_bytes must not be negative")
             self._validate_project_paths(root, model_path, artifact_dir)
             self._clear_artifacts(artifact_dir)
-            process = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-u",
-                    "-c",
-                    _RUNNER_SOURCE,
-                    str(model_path),
-                ],
-                cwd=root,
-                env=build_cad_environment(),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                close_fds=True,
-                start_new_session=os.name == "posix",
-            )
-            stdout_thread = threading.Thread(
-                target=stdout_collector.read_from,
-                args=(process.stdout,),
-                daemon=True,
-            )
-            stderr_thread = threading.Thread(
-                target=stderr_collector.read_from,
-                args=(process.stderr,),
-                daemon=True,
-            )
-            stdout_thread.start()
-            stderr_thread.start()
-            while process.poll() is None:
-                if _is_cancelled(cancellation_token):
+            if _is_cancelled(cancellation_token):
+                forced_status = "cancelled"
+            else:
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-u",
+                        "-c",
+                        _RUNNER_SOURCE,
+                        str(model_path),
+                    ],
+                    cwd=root,
+                    env=build_cad_environment(),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    close_fds=True,
+                    start_new_session=os.name == "posix",
+                )
+                _register_process(cancellation_token, process)
+                stdout_thread = threading.Thread(
+                    target=stdout_collector.read_from,
+                    args=(process.stdout,),
+                    daemon=True,
+                )
+                stderr_thread = threading.Thread(
+                    target=stderr_collector.read_from,
+                    args=(process.stderr,),
+                    daemon=True,
+                )
+                stdout_thread.start()
+                stderr_thread.start()
+                while process.poll() is None:
+                    if _is_cancelled(cancellation_token):
+                        forced_status = "cancelled"
+                        _terminate_process(process)
+                        break
+                    if time.monotonic() - started >= timeout_seconds:
+                        forced_status = "timed_out"
+                        _terminate_process(process)
+                        break
+                    time.sleep(0.01)
+                exit_code = process.wait()
+                if forced_status is None and _is_cancelled(cancellation_token):
                     forced_status = "cancelled"
-                    _terminate_process(process)
-                    break
-                if time.monotonic() - started >= timeout_seconds:
-                    forced_status = "timed_out"
-                    _terminate_process(process)
-                    break
-                time.sleep(0.01)
-            exit_code = process.wait()
-            stdout_thread.join(timeout=1.0)
-            stderr_thread.join(timeout=1.0)
+                stdout_thread.join(timeout=1.0)
+                stderr_thread.join(timeout=1.0)
         except (OSError, ValueError) as exc:
             launch_error = str(exc)
             exit_code = process.poll() if process is not None else None
@@ -206,6 +249,8 @@ class CADExecutor:
                 _terminate_process(process)
                 exit_code = process.wait()
         finally:
+            if process is not None:
+                _clear_registered_process(cancellation_token, process)
             duration = time.monotonic() - started
 
         stdout, stdout_was_truncated = _safe_output(
@@ -223,7 +268,9 @@ class CADExecutor:
         scene_parse = (
             validate_scene_artifact(scene_path)
             if scene_exists
-            else SceneParseResult(valid=False, error="canonical Scene Artifact is missing")
+            else SceneParseResult(
+                valid=False, error="canonical Scene Artifact is missing"
+            )
         )
         payload = _runner_payload(bytes(stdout_collector.payload))
         captured_count, solid_volume = _solid_facts(payload)
@@ -242,14 +289,18 @@ class CADExecutor:
             )
         elif exit_code != 0:
             status = "failed"
-            error = _first_error(stderr, stdout, "CAD process exited with a non-zero status")
+            error = _first_error(
+                stderr, stdout, "CAD process exited with a non-zero status"
+            )
         elif payload is None:
             status = "failed"
             error = "CAD process did not report a captured Model Source result"
         elif captured_count != 1:
             status = "failed"
             error = f"Model Source captured {captured_count or 0} Solids; expected exactly one"
-        elif solid_volume is None or not math.isfinite(solid_volume) or solid_volume <= 0:
+        elif (
+            solid_volume is None or not math.isfinite(solid_volume) or solid_volume <= 0
+        ):
             status = "failed"
             error = "captured Solid volume must be finite and greater than zero"
         elif _artifact_has_symlink(artifact_dir):
@@ -379,7 +430,9 @@ def _first_error(stderr: str, stdout: str, fallback: str) -> str:
 def _artifact_entries(artifact_dir: Path) -> tuple[str, ...]:
     if not artifact_dir.is_dir():
         return ()
-    entries = [path.relative_to(artifact_dir).as_posix() for path in artifact_dir.rglob("*")]
+    entries = [
+        path.relative_to(artifact_dir).as_posix() for path in artifact_dir.rglob("*")
+    ]
     return tuple(sorted(entries))
 
 
@@ -406,6 +459,20 @@ def _is_cancelled(token: object | None) -> bool:
     return bool(cancelled() if callable(cancelled) else cancelled)
 
 
+def _register_process(token: object | None, process: subprocess.Popen[bytes]) -> None:
+    register = getattr(token, "register_process", None)
+    if callable(register):
+        register(process, _terminate_process)
+
+
+def _clear_registered_process(
+    token: object | None, process: subprocess.Popen[bytes]
+) -> None:
+    clear = getattr(token, "clear_process", None)
+    if callable(clear):
+        clear(process)
+
+
 def _terminate_process(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
@@ -429,7 +496,7 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
-_RUNNER_SOURCE = f'''\
+_RUNNER_SOURCE = f"""\
 import json
 import runpy
 import sys
@@ -462,7 +529,7 @@ payload = {{
     "solid_volumes": [float(solid.get_volume()) for solid in solids],
 }}
 print({_RESULT_PREFIX!r} + json.dumps(payload, separators=(",", ":")), flush=True)
-'''
+"""
 
 
 __all__ = [

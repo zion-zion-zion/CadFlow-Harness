@@ -18,6 +18,7 @@ MAX_PROMPT_CHARS = 32_000
 PROJECT_METADATA_NAME = "project.json"
 PROMPT_NAME = "prompt.txt"
 DIAGNOSTICS_NAME = "diagnostics.json"
+RESTART_RECOVERY_REASON = "Agent Run was interrupted by service restart"
 _PROJECT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -202,6 +203,49 @@ class ProjectStore:
             diagnostics=diagnostics,
         )
 
+    def mark_stopped(
+        self,
+        project_id: str,
+        reason: str = "Agent Run stopped by user",
+        diagnostics: Mapping[str, Any] | None = None,
+    ) -> Project:
+        """Finish a Running Project as user-stopped and hide partial output."""
+
+        if not isinstance(reason, str) or not reason.strip():
+            raise ProjectError("stop reason must not be empty")
+        return self._mark_terminal(
+            project_id,
+            state=ProjectState.STOPPED,
+            failure_reason=reason.strip(),
+            diagnostics=diagnostics,
+        )
+
+    def recover_interrupted_runs(self) -> tuple[Project, ...]:
+        """Mark persisted Running Projects as Failed after a service restart."""
+
+        recovered: list[Project] = []
+        with self._lock:
+            for project in self.list_projects():
+                if project.state != ProjectState.RUNNING:
+                    continue
+                existing = self.read_diagnostics(project.project_id) or {}
+                diagnostics = dict(existing)
+                diagnostics.update(
+                    {
+                        "status": "failed",
+                        "failure_reason": RESTART_RECOVERY_REASON,
+                        "recovered_after_restart": True,
+                    }
+                )
+                recovered.append(
+                    self.mark_failed(
+                        project.project_id,
+                        RESTART_RECOVERY_REASON,
+                        diagnostics,
+                    )
+                )
+        return tuple(recovered)
+
     def scene_artifact(self, project_id: str) -> Path:
         """Return the canonical result only for a Succeeded Project."""
 
@@ -267,7 +311,7 @@ class ProjectStore:
                 failure_reason=failure_reason,
             )
             self._write_metadata(project_dir, updated)
-            if state == ProjectState.FAILED:
+            if state in {ProjectState.FAILED, ProjectState.STOPPED}:
                 self.discard_unvalidated_artifacts(project_id)
             if diagnostics is not None:
                 _write_json(project_dir / DIAGNOSTICS_NAME, diagnostics)
@@ -360,4 +404,5 @@ __all__ = [
     "ProjectStateError",
     "ProjectStore",
     "PromptValidationError",
+    "RESTART_RECOVERY_REASON",
 ]

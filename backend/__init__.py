@@ -10,9 +10,18 @@ from .cad_executor import (
     redact_credentials,
 )
 from .contracts import ToolUseRecord
+from .events import (
+    EVENTS_NAME,
+    MAX_EVENT_RESULT_CHARS,
+    ProgressEvent,
+    ProgressEventError,
+    ProgressEventStore,
+    ProgressUpdate,
+)
 from .agent import (
     AGENT_RUN_TIMEOUT_SECONDS,
     AgentConfigurationError,
+    AgentRunCancelled,
     AgentRunError,
     AgentRunOutcome,
     AgentRunService,
@@ -43,6 +52,12 @@ from .projects import (
     ProjectStateError,
     ProjectStore,
     PromptValidationError,
+    RESTART_RECOVERY_REASON,
+)
+from .run_coordinator import (
+    AgentRunCoordinator,
+    RUN_STOP_WAIT_SECONDS,
+    RunConflictError,
 )
 from .scene_validation import SceneParseResult, validate_scene_artifact
 
@@ -50,6 +65,7 @@ __all__ = [
     "ARTIFACT_DIRECTORY_NAME",
     "AGENT_RUN_TIMEOUT_SECONDS",
     "AgentConfigurationError",
+    "AgentRunCancelled",
     "AgentRunError",
     "AgentRunOutcome",
     "AgentRunService",
@@ -59,12 +75,14 @@ __all__ = [
     "CancellationToken",
     "DEFAULT_OUTPUT_BYTES",
     "ExecutionResult",
+    "EVENTS_NAME",
     "MODEL_SOURCE_NAME",
     "ModelSourceScaffold",
     "MAX_PROMPT_CHARS",
     "MAX_AGENT_RUN_SECONDS",
     "MAX_CAD_EXECUTIONS",
     "MAX_PROVIDER_RETRIES",
+    "MAX_EVENT_RESULT_CHARS",
     "Project",
     "ProjectError",
     "ProjectNotFoundError",
@@ -72,6 +90,11 @@ __all__ = [
     "ProjectStateError",
     "ProjectStore",
     "PromptValidationError",
+    "ProgressEvent",
+    "ProgressEventError",
+    "ProgressEventStore",
+    "ProgressUpdate",
+    "RESTART_RECOVERY_REASON",
     "ReferenceCatalog",
     "ReferenceContractError",
     "ReferenceGroundedAgent",
@@ -79,6 +102,9 @@ __all__ = [
     "SCENE_ARTIFACT_NAME",
     "SceneParseResult",
     "ToolUseRecord",
+    "AgentRunCoordinator",
+    "RUN_STOP_WAIT_SECONDS",
+    "RunConflictError",
     "build_cad_environment",
     "build_chat_model",
     "build_deep_agent",

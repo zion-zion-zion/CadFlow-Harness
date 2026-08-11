@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from .contracts import ToolUseRecord
 from .model_source import ModelSourceScaffold, create_model_source
@@ -25,11 +25,13 @@ class RestrictedAgentTools:
         repo_root: str | Path,
         project_dir: str | Path,
         executor: Any | None = None,
+        on_tool_use: Callable[[ToolUseRecord], None] | None = None,
     ) -> None:
         self._catalog = ReferenceCatalog(repo_root)
         self._project_dir = Path(project_dir).expanduser().resolve()
         self._project_dir.mkdir(parents=True, exist_ok=True)
         self._executor = executor
+        self._on_tool_use = on_tool_use
         self._records: list[ToolUseRecord] = []
         self._skill_read = False
         self._api_index_read = False
@@ -192,14 +194,15 @@ class RestrictedAgentTools:
         *,
         reference_names: tuple[str, ...] = (),
     ) -> None:
-        self._records.append(
-            ToolUseRecord(
-                sequence=len(self._records) + 1,
-                tool_name=tool_name,
-                target=target,
-                reference_names=reference_names,
-            )
+        record = ToolUseRecord(
+            sequence=len(self._records) + 1,
+            tool_name=tool_name,
+            target=target,
+            reference_names=reference_names,
         )
+        self._records.append(record)
+        if self._on_tool_use is not None:
+            self._on_tool_use(record)
 
     def _model_path(self) -> Path:
         path = self._project_dir / "model.py"
