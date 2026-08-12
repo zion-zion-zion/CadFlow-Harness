@@ -12,8 +12,7 @@ canonical Scene Artifact.
 - `uv` and Node.js/npm
 - API settings copied from `.env.example` to `.env`
 
-The `feat/cadflow` branch vendors
-`vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl` (SHA256
+The repository vendors `vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl` (SHA256
 `28d45c71a3b0e4eb1f77168b984c1600f48823cc0d63f187e4529e30abae3ad8`).
 
 ```bash
