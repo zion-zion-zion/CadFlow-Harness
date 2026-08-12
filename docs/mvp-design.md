@@ -122,9 +122,12 @@ Agent 获得以下能力：
 - 读取和修改当前 Project 的 Model Source。
 - 调用唯一的零参数 `validate_model` 工具。
 - 使用 Deep Agents 的通用文件工具进行目录浏览、检索、读取和编辑。
-- 使用本地 Shell 运行命令、Python 诊断脚本和辅助工具；需要时可安装依赖。
+- 使用本地 Shell 运行命令、Python 诊断脚本，以及环境中已安装的依赖和辅助工具。
 
 通用工具由 `LocalShellBackend` 提供，以当前 Project 为默认工作目录，并继承后端进程环境。
+每次运行的 System Prompt 会注入当前 Project 的绝对路径，并要求 Agent 仅在该目录内
+读取和写入 Project 文件；仓库的 `skills/` 与 `examples/` 作为只读例外，可供 Agent
+浏览、检索和读取。Agent 不应扫描父目录、其他 Project 或无关路径。
 它不提供沙箱隔离；本项目按可信本机开发环境使用。正式 CAD 结果仍必须通过
 `validate_model` 的结构化验证。它不检查文档阅读、API 名称、源码内容或编辑方式，
 只执行当前 `model.py` 并返回验证事实。

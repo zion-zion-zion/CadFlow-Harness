@@ -149,7 +149,7 @@ and record the important assumptions in comments near the top of Model Source.
 Use a run-local plan with write_todos when useful. You have general filesystem,
 search, editing, and local shell tools. Use them freely to inspect the workspace,
 read the loaded CadFlow Skill, run Python, create diagnostic scripts, inspect
-generated artifacts, and install or use dependencies when they help.
+generated artifacts, and use installed tools or dependencies when they help.
 The shell is a trusted local development environment, not a sandbox. Keep the
 final CAD implementation in the current Project's model.py and use only
 CadFlow's documented Python-first Model/Shape API as its modeling API. Do not
@@ -173,6 +173,51 @@ Artifact contract. Continue only while the bounded tool allows another CAD
 execution; never evade that limit by replanning, using another tool, or
 creating another Agent. Stop as soon as a Validated Result is reported.
 """
+
+
+def _build_agent_system_prompt(
+    *,
+    workspace_root: str | Path,
+    skill_root: str | Path | None,
+    example_root: str | Path | None,
+) -> str:
+    """Add the concrete run-local filesystem boundaries to the Agent prompt."""
+
+    project_dir = Path(workspace_root).expanduser().resolve()
+    read_only_roots = [
+        Path(root).expanduser().resolve()
+        for root in (skill_root, example_root)
+        if root is not None
+    ]
+    read_only_lines = "\n".join(f"- `{root}`" for root in read_only_roots)
+    if not read_only_lines:
+        read_only_lines = "- None"
+    return (
+        _SYSTEM_PROMPT
+        + f"""
+
+## Filesystem boundaries for this run
+
+The current Project workspace is exactly:
+`{project_dir}`
+
+Treat that directory as the working directory and the base for every relative
+path. Read, create, edit, and delete Project files only inside that directory.
+The required Model Source is `{project_dir / "model.py"}`. Do not search parent
+directories, sibling directories, or other Projects to locate it.
+
+The following directories are read-only reference exceptions outside the
+Project workspace:
+{read_only_lines}
+
+You may list, search, and read files under those reference directories, but
+must never create, edit, rename, or delete anything there. Do not inspect or
+modify files elsewhere. Shell commands must follow the same workspace and
+reference boundaries: they may execute installed tools and the Python
+interpreter, but command outputs and generated files must stay inside the
+Project workspace.
+"""
+    )
 
 
 def build_chat_model(settings: AgentSettings) -> Any:
@@ -275,6 +320,7 @@ def build_deep_agent(
     model: Any | None = None,
     workspace_root: str | Path | None = None,
     skill_root: str | Path | None = None,
+    example_root: str | Path | None = None,
 ) -> Any:
     """Build one Deep Agent with general local tools and CAD-specific tools."""
 
@@ -298,8 +344,9 @@ def build_deep_agent(
         ),
     )
     resolved_model = build_chat_model(settings) if model is None else model
+    resolved_workspace_root = Path(workspace_root or Path.cwd()).expanduser().resolve()
     backend = LocalShellBackend(
-        root_dir=workspace_root or Path.cwd(),
+        root_dir=resolved_workspace_root,
         virtual_mode=False,
         timeout=int(CAD_EXECUTION_TIMEOUT_SECONDS),
         inherit_env=True,
@@ -307,7 +354,11 @@ def build_deep_agent(
     return create_deep_agent(
         model=resolved_model,
         tools=tuple(tools),
-        system_prompt=_SYSTEM_PROMPT,
+        system_prompt=_build_agent_system_prompt(
+            workspace_root=resolved_workspace_root,
+            skill_root=skill_root,
+            example_root=example_root,
+        ),
         subagents=(),
         skills=[str(skill_root)] if skill_root is not None else None,
         backend=backend,
@@ -399,6 +450,7 @@ class ReferenceGroundedAgent:
                 model=self.model,
                 workspace_root=self.project_dir,
                 skill_root=Path(self.repo_root) / "skills",
+                example_root=Path(self.repo_root) / "examples",
             )
             agent_error, timed_out = _invoke_agent_with_deadline(
                 agent,

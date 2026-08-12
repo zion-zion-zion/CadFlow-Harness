@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from backend.agent import (
+    _build_agent_system_prompt,
     AgentConfigurationError,
     AgentRunError,
     AgentSettings,
@@ -105,6 +106,7 @@ def test_deep_agent_can_be_compiled_without_network_call(tmp_path: Path) -> None
         model=model,
         workspace_root=tmp_path,
         skill_root=Path(__file__).parents[1] / "skills",
+        example_root=Path(__file__).parents[1] / "examples",
     )
 
     assert agent.get_graph().nodes
@@ -122,6 +124,30 @@ def test_deep_agent_can_be_compiled_without_network_call(tmp_path: Path) -> None
     # This remains one primary Text-to-CAD agent; general tools do not require
     # delegating the CAD task to another agent.
     assert "task" not in graph_tools
+
+
+def test_agent_prompt_confines_writes_and_exposes_read_only_references(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).parents[1].resolve()
+    project_dir = (tmp_path / "project").resolve()
+
+    prompt = _build_agent_system_prompt(
+        workspace_root=project_dir,
+        skill_root=repo_root / "skills",
+        example_root=repo_root / "examples",
+    )
+
+    assert f"The current Project workspace is exactly:\n`{project_dir}`" in prompt
+    assert f"The required Model Source is `{project_dir / 'model.py'}`" in prompt
+    assert f"- `{repo_root / 'skills'}`" in prompt
+    assert f"- `{repo_root / 'examples'}`" in prompt
+    assert "read-only reference exceptions" in prompt
+    assert "must never create, edit, rename, or delete anything there" in prompt
+    assert (
+        "Do not search parent\ndirectories, sibling directories, or other Projects"
+        in prompt
+    )
 
 
 def test_missing_configuration_fails_a_project_without_calling_a_model(
