@@ -33,7 +33,8 @@ def _execution_result(
         stderr="bounded stderr",
         stdout_truncated=False,
         stderr_truncated=False,
-        captured_solid_count=1 if volume is not None else 0,
+        final_shape_count=1 if volume is not None else 0,
+        solid_count=1 if volume is not None else 0,
         solid_volume=volume,
         scene_artifact_exists=scene_valid,
         scene_parse_result=SceneParseResult(valid=scene_valid),
@@ -97,7 +98,7 @@ def test_validate_model_exposes_each_diagnosis_and_hard_stops_at_three(
         "second failure",
         None,
     ]
-    assert third["captured_solid_count"] == 1
+    assert third["final_shape_count"] == 1
     assert third["scene_parse_result"]["valid"] is True
 
     with pytest.raises(AgentRunError, match="at most 3 CAD executions"):

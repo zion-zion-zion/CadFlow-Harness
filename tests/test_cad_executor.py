@@ -32,13 +32,14 @@ def test_cad_execution_returns_validated_scene_facts(tmp_path: Path) -> None:
 
     assert result.status == "succeeded"
     assert result.exit_code == 0
-    assert result.captured_solid_count == 1
+    assert result.final_shape_count == 1
+    assert result.solid_count == 1
     assert result.solid_volume is not None
     assert math.isfinite(result.solid_volume) and result.solid_volume > 0
     assert result.scene_artifact_exists is True
     assert result.scene_parse_result.valid is True
     assert result.scene_parse_result.glb_asset_count == 2
-    assert result.scene_parse_result.model_json_present is True
+    assert result.scene_parse_result.model_json_present is False
     assert result.artifact_entries == ("model.scene.zip",)
 
 
@@ -59,65 +60,57 @@ def test_nonzero_model_exit_is_observable(tmp_path: Path) -> None:
 def test_invalid_scene_artifact_is_not_promoted_to_success(tmp_path: Path) -> None:
     scaffold = create_model_source(tmp_path)
     scaffold.model_path.write_text(
-        scaffold.model_path.read_text(encoding="utf-8")
-        + "\nSCENE_ARTIFACT.write_bytes(b'not a Scene ZIP')\n",
+        """from pathlib import Path
+import cadflow as cad
+
+def build_model(model: cad.Model):
+    def invalid_export_scene(*, package, path):
+        Path(path).write_bytes(b'not a Scene ZIP')
+    cad.export_scene = invalid_export_scene
+    return model.box(width=10.0, depth=10.0, height=10.0)
+""",
         encoding="utf-8",
     )
 
     result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
 
     assert result.status == "failed"
-    assert result.captured_solid_count == 1
+    assert result.final_shape_count == 1
     assert result.scene_artifact_exists is True
     assert result.scene_parse_result.valid is False
     assert "zip" in (result.error or "").lower()
 
 
-def test_captured_solid_count_must_be_exactly_one(tmp_path: Path) -> None:
+def test_final_shape_count_must_be_exactly_one(tmp_path: Path) -> None:
     scaffold = create_model_source(tmp_path)
-    source = scaffold.model_path.read_text(encoding="utf-8")
-    source = source.replace(
-        "    scad.capture_result(value=final_solid)\n",
-        "    scad.capture_result(value=final_solid)\n"
-        "    second_solid = scad.make_box_rsolid(\n"
-        "        width=2.0, height=2.0, depth=2.0,\n"
-        "        bottom_face_center=(20.0, 0.0, 0.0),\n"
-        "    )\n"
-        "    scad.capture_result(value=second_solid)\n",
-    )
+    source = """import cadflow as cad
+
+def build_model(model: cad.Model):
+    return [model.box(width=10.0, depth=10.0, height=10.0)]
+"""
     scaffold.model_path.write_text(source, encoding="utf-8")
 
     result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
 
     assert result.status == "failed"
-    assert result.captured_solid_count == 2
-    assert result.scene_artifact_exists is True
-    assert result.scene_parse_result.valid is True
-    assert "exactly one" in (result.error or "")
+    assert result.final_shape_count is None
+    assert "CadFlow Shape" in (result.error or "")
 
 
-def test_missing_captured_solid_is_observable_as_zero_solids(tmp_path: Path) -> None:
+def test_non_solid_return_is_observable_as_failure(tmp_path: Path) -> None:
     scaffold = create_model_source(tmp_path)
-    source = scaffold.model_path.read_text(encoding="utf-8").replace(
-        "    scad.capture_result(value=final_solid)\n",
-        "    final_part = scad.make_part_rpart(\n"
-        "        part_id='part', body=final_solid\n"
-        "    )\n"
-        "    scad.capture_result(value=final_part)\n",
-    )
-    source = source.replace("    return final_solid\n", "    return final_part\n")
-    source = source.replace(
-        "if not isinstance(FINAL_SOLID, scad.Solid):\n"
-        '    raise TypeError("Model Source must return one SimpleCADAPI Solid")\n',
-        "",
-    )
+    source = """import cadflow as cad
+
+def build_model(model: cad.Model):
+    return model.polyline(((0.0, 0.0, 0.0), (1.0, 0.0, 0.0)))
+"""
     scaffold.model_path.write_text(source, encoding="utf-8")
 
     result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
 
     assert result.status == "failed"
-    assert result.captured_solid_count == 0
-    assert "captured 0 Solids" in (result.error or "")
+    assert result.final_shape_count is None
+    assert "solid-compatible" in (result.error or "")
 
 
 def test_unexpected_artifact_member_is_not_a_validated_result(tmp_path: Path) -> None:

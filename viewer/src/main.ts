@@ -32,8 +32,8 @@ app.innerHTML = `
   <main class="shell">
     <header class="topbar">
       <div class="brand">
-        <span class="brand-mark">SC</span>
-        <div><strong>SimpleCAD</strong><span>local text-to-cad workspace</span></div>
+        <span class="brand-mark">CF</span>
+        <div><strong>CadFlow</strong><span>local text-to-cad workspace</span></div>
       </div>
       <div class="topbar-actions">
         <span class="local-badge">LOCAL DEMO</span>

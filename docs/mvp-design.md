@@ -4,7 +4,7 @@
 
 ## 1. 目标
 
-构建一个本机单用户 Text-to-CAD Demo。用户创建 Project，提交一次完整的纯文本 Prompt，Deep Agent 自动查阅 SimpleCADAPI Skill、编写和执行 Python、根据错误进行有限修复，最终生成可保留的 Model Source 和供 Viewer 加载的 Scene Artifact。全过程不要求用户补充信息，也不构成多轮对话。
+构建一个本机单用户 Text-to-CAD Demo。用户创建 Project，提交一次完整的纯文本 Prompt，Deep Agent 自动查阅 CadFlow Skill、编写和执行 Python、根据错误进行有限修复，最终生成可保留的 Model Source 和供 Viewer 加载的 Scene Artifact。全过程不要求用户补充信息，也不构成多轮对话。
 
 MVP 只支持一个物理零件，最终结果必须是一个有效 Solid。
 
@@ -112,7 +112,7 @@ output/projects/<project_id>/
 
 ### 7.3 文档与工具
 
-后端通过 Deep Agents 的 SkillsMiddleware 加载 `skills/simplecadapi/`。Agent 使用
+后端通过 Deep Agents 的 SkillsMiddleware 加载 `skills/cadflow-model-part/`。Agent 使用
 内置文件工具按需阅读 Skill、API 文档和 examples；后端不再追踪阅读顺序，也不要求
 Agent 声明使用了哪些 API。
 
@@ -134,11 +134,11 @@ Agent 获得以下能力：
 后端先创建 `model.py` 骨架，固定以下约定：
 
 - 使用当前 Project 的 `artifacts/` 作为 `export_dir`。
-- 只有一个 `@scad.model` 顶层入口。
+- 只有一个 `build_model(model: cad.Model) -> cad.Shape` 顶层入口。
 - 捕获一个最终 Solid。
 - 产出 canonical `model.scene.zip`。
 
-Agent 可以编辑整个文件，以便增加导入、辅助函数和本地模块，也可以在需要时使用或安装其他依赖。建模 API 仍以 `simplecadapi` 为准；后端不做 AST、import 或危险调用检查。
+Agent 可以编辑整个文件，以便增加导入、辅助函数和本地模块，也可以在需要时使用或安装其他依赖。建模 API 以 CadFlow 文档化的 `Model`/`Shape` 为准；后端不做 AST、import 或危险调用检查。后端验证 native Shape 后，通过 CadFlow 的公开 STEP/Scene 接口生成 canonical Scene Artifact。
 
 未来支持复杂装配时，可以在同一 Project 中生成多个本地 Python 模块并互相导入，但仍不默认允许任意第三方依赖。
 

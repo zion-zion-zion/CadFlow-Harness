@@ -214,7 +214,7 @@ def test_http_boundary_persists_success_events_and_scene_artifact(
     scene_result = validate_scene_artifact(downloaded_scene)
     assert scene_result.valid is True
     assert scene_result.glb_asset_count == 2
-    assert scene_result.model_json_present is True
+    assert scene_result.model_json_present is False
 
     events_response = client.get(
         f"/api/projects/{project_id}/events?follow=false",

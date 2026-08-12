@@ -77,7 +77,7 @@ def test_live_agent_flange_smoke_crosses_service_and_scene_viewer_path(
     parsed = validate_scene_artifact(scene_path)
     assert parsed.valid is True
     assert parsed.glb_asset_count >= 1
-    assert parsed.model_json_present is True
+    assert parsed.model_json_present is False
 
 
 @pytest.mark.live_agent

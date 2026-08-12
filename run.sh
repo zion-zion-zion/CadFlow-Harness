@@ -38,7 +38,7 @@ if port_in_use "$FRONTEND_HOST" "$FRONTEND_PORT"; then
   exit 1
 fi
 
-LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/simplecadapi.XXXXXX")"
+LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cadflow.XXXXXX")"
 backend_pid=""
 frontend_pid=""
 

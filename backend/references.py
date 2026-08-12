@@ -14,24 +14,20 @@ class ReferenceCatalog:
 
     def __init__(self, repo_root: str | Path) -> None:
         self.repo_root = Path(repo_root).expanduser().resolve()
-        self.skill_root = self.repo_root / "skills" / "simplecadapi"
+        self.skill_root = self.repo_root / "skills" / "cadflow-model-part"
         self.examples_root = self.repo_root / "examples"
 
     def read_skill_entry(self) -> str:
         return self._read(self.skill_root / "SKILL.md")
 
     def read_api_index(self) -> str:
-        return self._read(self.skill_root / "references" / "docs" / "api" / "README.md")
+        return self._read(self.skill_root / "references" / "public-api.md")
 
     def read_stdlib_index(self) -> str:
-        return self._read(
-            self.skill_root / "references" / "docs" / "stdlib" / "README.md"
-        )
+        return self._read(self.skill_root / "references" / "public-api.md")
 
     def read_core_index(self) -> str:
-        return self._read(
-            self.skill_root / "references" / "docs" / "core" / "README.md"
-        )
+        return self._read(self.skill_root / "references" / "public-api.md")
 
     def list_skill_docs(self) -> tuple[str, ...]:
         root = self.skill_root.resolve()

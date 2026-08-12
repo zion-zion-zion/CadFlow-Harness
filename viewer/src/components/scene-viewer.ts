@@ -62,7 +62,7 @@ type EmbeddedSource = {
 type SceneManifest = {
   schema_version: string;
   scene_id: string;
-  generator: { profile: string; simplecadapi_version: string };
+  generator: { profile: string; name?: string; cadflow_version?: string };
   source: EmbeddedSource;
   presentation_source?: EmbeddedSource;
   coordinate_system: { length_unit: string };

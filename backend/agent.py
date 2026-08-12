@@ -148,21 +148,23 @@ and record the important assumptions in comments near the top of Model Source.
 
 Use a run-local plan with write_todos when useful. You have general filesystem,
 search, editing, and local shell tools. Use them freely to inspect the workspace,
-read the loaded SimpleCADAPI Skill, run Python, create diagnostic scripts,
-inspect generated artifacts, and install or use dependencies when they help.
+read the loaded CadFlow Skill, run Python, create diagnostic scripts, inspect
+generated artifacts, and install or use dependencies when they help.
 The shell is a trusted local development environment, not a sandbox. Keep the
-final CAD implementation in the current Project's model.py and use
-SimpleCADAPI as its modeling API.
+final CAD implementation in the current Project's model.py and use only
+CadFlow's documented Python-first Model/Shape API as its modeling API. Do not
+use CadFlow's compatibility decorator API, legacy *_rsolid operations, private
+cadflow._engine modules, or direct OCP/OpenCascade imports.
 
 Begin from the current Model Source, but you may replace the complete file and
 add imports, local modules, helper functions, or useful dependencies. Use the
-built-in file tools to edit it. Keep one top-level model entry point, one
-physical part, and one captured final Solid. Keep the canonical
-artifacts/model.scene.zip export contract.
+built-in file tools to edit it. Keep one build_model(model: cad.Model) entry
+point, one physical part, and one returned final cad.Shape. The backend creates
+the canonical artifacts/model.scene.zip after validating the Shape.
 
 After writing the complete Model Source, call validate_model. Its structured
 result is the source of truth: inspect status, exit_code, error, stdout,
-stderr, captured_solid_count, solid_volume, scene_artifact_exists,
+stderr, final_shape_count, solid_count, solid_volume, scene_artifact_exists,
 scene_parse_result, and artifact_entries. If the result is not fully valid,
 diagnose the reported facts, replace the complete current Model Source with a
 repair, and execute it again. A repair must use the latest source and may add
@@ -607,7 +609,8 @@ def _is_validated_result(result: ExecutionResult) -> bool:
     return bool(
         result.status == "succeeded"
         and result.exit_code == 0
-        and result.captured_solid_count == 1
+        and result.final_shape_count == 1
+        and result.solid_count == 1
         and result.solid_volume is not None
         and math.isfinite(result.solid_volume)
         and result.solid_volume > 0
@@ -663,7 +666,8 @@ def _execution_failure_result(error: Exception) -> ExecutionResult:
         stderr="",
         stdout_truncated=False,
         stderr_truncated=False,
-        captured_solid_count=None,
+        final_shape_count=None,
+        solid_count=None,
         solid_volume=None,
         scene_artifact_exists=False,
         scene_parse_result=SceneParseResult(
