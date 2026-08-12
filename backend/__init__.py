@@ -42,7 +42,7 @@ from .model_source import (
     create_model_source,
 )
 from .references import ReferenceCatalog, ReferenceContractError
-from .restricted_tools import RestrictedAgentTools
+from .restricted_tools import AgentModelValidator, RestrictedAgentTools
 from .projects import (
     MAX_PROMPT_CHARS,
     Project,
@@ -70,6 +70,7 @@ __all__ = [
     "AgentRunOutcome",
     "AgentRunService",
     "AgentSettings",
+    "AgentModelValidator",
     "CAD_EXECUTION_TIMEOUT_SECONDS",
     "CADExecutor",
     "CancellationToken",

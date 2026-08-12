@@ -234,7 +234,10 @@ class AgentRunCoordinator:
         project = self.store.get_project(active.project_id)
         if project.state == ProjectState.RUNNING:
             try:
-                if active.cancellation_token.cancelled or outcome.cancelled:
+                if (
+                    active.cancellation_token.cancellation_reason == "caller"
+                    or outcome.cancelled
+                ):
                     project = self.store.mark_stopped(
                         active.project_id,
                         outcome.failure_reason or "Agent Run stopped by user",

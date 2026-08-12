@@ -13,6 +13,18 @@ from backend.cad_executor import (
 from backend.model_source import create_model_source
 
 
+def test_cancellation_token_preserves_the_first_cancellation_reason() -> None:
+    caller = CancellationToken()
+    caller.cancel()
+    caller.cancel(reason="timeout")
+    assert caller.cancellation_reason == "caller"
+
+    timeout = CancellationToken()
+    timeout.cancel(reason="timeout")
+    timeout.cancel()
+    assert timeout.cancellation_reason == "timeout"
+
+
 def test_cad_execution_returns_validated_scene_facts(tmp_path: Path) -> None:
     create_model_source(tmp_path)
 

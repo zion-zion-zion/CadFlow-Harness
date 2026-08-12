@@ -39,6 +39,12 @@ type Asset = {
   content_hash: string;
   asset_to_scene: number[];
 };
+type EntityAsset = {
+  entity_asset_id: string;
+  uri: string;
+  byte_length: number;
+  content_hash: string;
+};
 type SourceFile = {
   path: string;
   uri: string;
@@ -62,6 +68,7 @@ type SceneManifest = {
   nodes: SceneNode[];
   geometry_assets: Asset[];
   edge_assets: Asset[];
+  entity_assets: EntityAsset[];
   appearances: Appearance[];
 };
 type PackageFiles = Record<string, Uint8Array>;
@@ -397,6 +404,7 @@ function packageRecords(manifest: SceneManifest): PackageRecord[] {
   };
   for (const asset of manifest.geometry_assets) addAsset(asset, 'geometry');
   for (const asset of manifest.edge_assets) addAsset(asset, 'edges');
+  for (const asset of manifest.entity_assets ?? []) records.push(asset);
   for (const source of [manifest.source, manifest.presentation_source]) {
     if (!source?.embedded_artifact_uri) continue;
     if (typeof source.embedded_artifact_byte_length !== 'number' || typeof source.artifact_hash !== 'string') throw new ScenePackageError('Embedded artifact integrity metadata is missing');

@@ -237,13 +237,14 @@ function renderWorkspace(): void {
   if (events.length === 0) {
     progressList.innerHTML = '<p class="panel-empty">No Agent Run yet.</p>';
   } else {
+    const historical = project.state !== 'Running';
     for (const event of events) {
       const item = document.createElement('article');
       item.className = 'progress-item';
       const heading = document.createElement('div');
       heading.className = 'progress-heading';
       const stage = document.createElement('strong');
-      stage.textContent = event.stage.replaceAll('_', ' ');
+      stage.textContent = `${historical ? 'history · ' : ''}${event.stage.replaceAll('_', ' ')}`;
       const time = document.createElement('time');
       time.textContent = formatTime(event.created_at);
       heading.append(stage, time);

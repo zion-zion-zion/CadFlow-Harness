@@ -92,14 +92,19 @@ class CancellationToken:
     def __init__(self) -> None:
         self._event = threading.Event()
         self._lock = threading.RLock()
+        self._reason: str | None = None
         self._process: subprocess.Popen[bytes] | None = None
         self._process_terminator: Callable[[subprocess.Popen[bytes]], None] | None = (
             None
         )
 
-    def cancel(self) -> None:
-        self._event.set()
+    def cancel(self, reason: str = "caller") -> None:
+        if reason not in {"caller", "timeout"}:
+            raise ValueError("cancellation reason must be caller or timeout")
         with self._lock:
+            if self._reason is None:
+                self._reason = reason
+            self._event.set()
             process = self._process
             terminator = self._process_terminator
         if process is not None and terminator is not None:
@@ -133,6 +138,11 @@ class CancellationToken:
     @property
     def cancelled(self) -> bool:
         return self._event.is_set()
+
+    @property
+    def cancellation_reason(self) -> str | None:
+        with self._lock:
+            return self._reason
 
 
 class _OutputCollector:

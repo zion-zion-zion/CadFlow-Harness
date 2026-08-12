@@ -28,15 +28,38 @@ class ReferenceCatalog:
             self.skill_root / "references" / "docs" / "stdlib" / "README.md"
         )
 
-    def read_api_doc(self, api_name: str) -> tuple[str, str]:
-        name = self._doc_stem(api_name)
-        path = self.skill_root / "references" / "docs" / "api" / f"{name}.md"
-        return self._read(path), self._relative_reference(path)
+    def read_core_index(self) -> str:
+        return self._read(
+            self.skill_root / "references" / "docs" / "core" / "README.md"
+        )
 
-    def read_stdlib_doc(self, stdlib_name: str) -> tuple[str, str]:
-        name = self._doc_stem(stdlib_name)
-        path = self.skill_root / "references" / "docs" / "stdlib" / f"{name}.md"
-        return self._read(path), self._relative_reference(path)
+    def list_skill_docs(self) -> tuple[str, ...]:
+        root = self.skill_root.resolve()
+        if not root.is_dir():
+            raise ReferenceContractError("the packaged Skill directory is missing")
+        paths: list[str] = []
+        for path in self.skill_root.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            resolved = path.resolve()
+            if self._is_under(resolved, root):
+                paths.append(path.relative_to(self.skill_root).as_posix())
+        return tuple(sorted(paths))
+
+    def read_skill_doc(self, relative_path: str) -> tuple[str, str]:
+        if not isinstance(relative_path, str) or not relative_path:
+            raise ReferenceContractError("Skill document path must be relative")
+        requested = Path(relative_path)
+        if requested.is_absolute() or ".." in requested.parts:
+            raise ReferenceContractError("Skill document path must stay within the Skill")
+        candidate = self.skill_root / requested
+        if candidate.is_symlink():
+            raise ReferenceContractError("Skill document must not be a symbolic link")
+        resolved = candidate.resolve()
+        if not self._is_under(resolved, self.skill_root.resolve()):
+            raise ReferenceContractError("Skill document path is outside the Skill")
+        content = self._read(resolved)
+        return content, self._relative_reference(resolved)
 
     def list_examples(self) -> tuple[str, ...]:
         if not self.examples_root.is_dir():
@@ -77,14 +100,6 @@ class ReferenceCatalog:
             return resolved.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
             raise ReferenceContractError("packaged reference is not UTF-8 text") from exc
-
-    def _doc_stem(self, name: str) -> str:
-        if not name or Path(name).is_absolute() or "/" in name or "\\" in name:
-            raise ReferenceContractError("exact reference names cannot contain a path")
-        stem = name[:-3] if name.endswith(".md") else name
-        if not stem or stem in {".", ".."}:
-            raise ReferenceContractError("exact reference name is invalid")
-        return stem
 
     def _relative_reference(self, path: Path) -> str:
         return path.resolve().relative_to(self.repo_root).as_posix()

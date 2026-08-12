@@ -23,8 +23,7 @@ from .contracts import ToolUseRecord
 from .events import ProgressUpdate
 from .projects import ProjectStore
 from .projects import ProjectState
-from .references import ReferenceContractError
-from .restricted_tools import RestrictedAgentTools
+from .restricted_tools import AgentModelValidator
 from .scene_validation import SceneParseResult
 
 
@@ -83,7 +82,7 @@ class AgentSettings:
 
 @dataclass(frozen=True)
 class AgentRunOutcome:
-    """Safe outcome of one bounded reference-grounded Agent Run."""
+    """Safe outcome of one bounded Text-to-CAD Agent Run."""
 
     validated: bool
     failure_reason: str | None = None
@@ -140,21 +139,6 @@ class AgentRunOutcome:
         }
 
 
-RESTRICTED_BUILTIN_TOOL_NAMES = frozenset(
-    {
-        "ls",
-        "read_file",
-        "write_file",
-        "edit_file",
-        "glob",
-        "grep",
-        "execute",
-        "delete_file",
-        "delete",
-        "task",
-    }
-)
-
 _SYSTEM_PROMPT = """You are the one and only primary Text-to-CAD Agent for this run.
 
 Treat the user's Prompt as complete. Never ask a clarification question or wait
@@ -162,24 +146,21 @@ for another turn. If a length unit is omitted, use millimetres. If dimensions or
 construction details are underspecified, choose reasonable engineering values
 and record the important assumptions in comments near the top of Model Source.
 
-Use a run-local plan with write_todos when useful. Work only through the
-reference-grounded tools supplied to you. Do not use shell, generic filesystem
-tools, task/subagent tools, external memory, or any unlisted dependency.
-
-Before the first write_model_source or execute_model call, you must:
-1. read the Skill entry with read_skill_entry;
-2. read both required API and stdlib indexes;
-3. read the exact documentation for every SimpleCADAPI API and Python stdlib
-   module used by the Model Source; and
-4. consult relevant repository examples when an established workflow is useful.
+Use a run-local plan with write_todos when useful. You have general filesystem,
+search, editing, and local shell tools. Use them freely to inspect the workspace,
+read the loaded SimpleCADAPI Skill, run Python, create diagnostic scripts,
+inspect generated artifacts, and install or use dependencies when they help.
+The shell is a trusted local development environment, not a sandbox. Keep the
+final CAD implementation in the current Project's model.py and use
+SimpleCADAPI as its modeling API.
 
 Begin from the current Model Source, but you may replace the complete file and
-add imports or helper functions. Keep one entry file, one top-level model
-entry point, one physical part, and one captured final Solid. Keep the
-canonical artifacts/model.scene.zip export contract. The only allowed source
-dependencies are Python's standard library and simplecadapi.
+add imports, local modules, helper functions, or useful dependencies. Use the
+built-in file tools to edit it. Keep one top-level model entry point, one
+physical part, and one captured final Solid. Keep the canonical
+artifacts/model.scene.zip export contract.
 
-After writing the complete Model Source, call execute_model. Its structured
+After writing the complete Model Source, call validate_model. Its structured
 result is the source of truth: inspect status, exit_code, error, stdout,
 stderr, captured_solid_count, solid_volume, scene_artifact_exists,
 scene_parse_result, and artifact_entries. If the result is not fully valid,
@@ -201,6 +182,7 @@ def build_chat_model(settings: AgentSettings) -> Any:
         "model": settings.model_id,
         "api_key": settings.api_key,
         "max_retries": MAX_PROVIDER_RETRIES,
+        "timeout": MAX_AGENT_RUN_SECONDS,
     }
     if settings.base_url is not None:
         arguments["base_url"] = settings.base_url
@@ -208,7 +190,7 @@ def build_chat_model(settings: AgentSettings) -> Any:
 
 
 def create_agent_tools(
-    restricted: RestrictedAgentTools,
+    validator: AgentModelValidator,
     *,
     max_executions: int = 1,
     on_execution: Callable[[ExecutionResult], None] | None = None,
@@ -218,18 +200,11 @@ def create_agent_tools(
     cancellation_token: object | None = None,
     on_progress: Callable[[ProgressUpdate], None] | None = None,
 ) -> tuple[BaseTool, ...]:
-    """Adapt issue 01's narrow methods to LangChain tools.
-
-    The wrappers close over one ``RestrictedAgentTools`` instance, so each
-    Agent Run receives fresh reference gates and no Project-local state leaks
-    into another run.
-    """
+    """Expose one zero-argument structured CAD validation tool."""
 
     if max_executions < 1:
         raise ValueError("max_executions must be positive")
     execution_attempts = 0
-    source_written = False
-
     def require_time_remaining() -> float | None:
         if _is_cancellation_requested(cancellation_token):
             raise AgentRunCancelled("Agent Run stopped by caller")
@@ -240,82 +215,11 @@ def create_agent_tools(
             raise AgentRunError("Agent Run exceeded the five-minute wall-clock limit")
         return remaining
 
-    @tool("read_skill_entry")
-    def read_skill_entry() -> str:
-        """Read the packaged SimpleCADAPI Skill entry document."""
-
-        require_time_remaining()
-        return restricted.read_skill_entry()
-
-    @tool("read_api_index")
-    def read_api_index() -> str:
-        """Read the required SimpleCADAPI API index."""
-
-        require_time_remaining()
-        return restricted.read_api_index()
-
-    @tool("read_stdlib_index")
-    def read_stdlib_index() -> str:
-        """Read the required Python stdlib reference index."""
-
-        require_time_remaining()
-        return restricted.read_stdlib_index()
-
-    @tool("read_api_doc")
-    def read_api_doc(api_name: str) -> str:
-        """Read one exact SimpleCADAPI API document by name."""
-
-        require_time_remaining()
-        return restricted.read_api_doc(api_name)
-
-    @tool("read_stdlib_doc")
-    def read_stdlib_doc(stdlib_name: str) -> str:
-        """Read one exact Python stdlib document by name."""
-
-        require_time_remaining()
-        return restricted.read_stdlib_doc(stdlib_name)
-
-    @tool("list_examples")
-    def list_examples() -> list[str]:
-        """List the packaged repository examples."""
-
-        require_time_remaining()
-        return list(restricted.list_examples())
-
-    @tool("read_example")
-    def read_example(relative_path: str) -> str:
-        """Read one relevant packaged repository example."""
-
-        require_time_remaining()
-        return restricted.read_example(relative_path)
-
-    @tool("read_model_source")
-    def read_model_source() -> str:
-        """Read the complete current Project Model Source."""
-
-        require_time_remaining()
-        return restricted.read_model_source()
-
-    @tool("write_model_source")
-    def write_model_source(source: str) -> str:
-        """Replace the complete current Project Model Source with source text."""
-
-        nonlocal source_written
-        require_time_remaining()
-        restricted.require_reference_grounding_for_write()
-        restricted.write_model_source(source)
-        source_written = True
-        if on_progress is not None:
-            on_progress(ProgressUpdate(stage="writing_model", tool="model_source"))
-        return "Model Source written for the current Project."
-
-    @tool("execute_model")
-    def execute_model(api_names: list[str], stdlib_names: list[str]) -> dict[str, Any]:
-        """Execute the current Model Source after exact reference reads."""
+    @tool("validate_model")
+    def validate_model() -> dict[str, Any]:
+        """Run and structurally validate the current model.py and Scene Artifact."""
 
         nonlocal execution_attempts
-        if not source_written:
-            raise AgentRunError("write the complete Model Source before execute_model")
         if execution_attempts >= max_executions:
             execution_word = "execution" if max_executions == 1 else "executions"
             raise AgentRunError(
@@ -325,9 +229,7 @@ def create_agent_tools(
         execution_attempts += 1
         execution_recorded = False
         try:
-            result = restricted.execute_model(
-                api_names=api_names,
-                stdlib_names=stdlib_names,
+            result = validator.validate_model(
                 cancellation_token=cancellation_token,
                 timeout_seconds=(
                     min(CAD_EXECUTION_TIMEOUT_SECONDS, remaining)
@@ -335,8 +237,6 @@ def create_agent_tools(
                     else None
                 ),
             )
-        except ReferenceContractError:
-            raise
         except Exception as exc:
             if on_execution_error is None:
                 raise
@@ -344,7 +244,7 @@ def create_agent_tools(
             on_execution_error(result)
             execution_recorded = True
         if not isinstance(result, ExecutionResult):
-            error = AgentRunError("execute_model returned an invalid structured result")
+            error = AgentRunError("validate_model returned an invalid structured result")
             if on_execution_error is None:
                 raise error
             result = _execution_failure_result(error)
@@ -363,18 +263,7 @@ def create_agent_tools(
             )
         return result.to_dict()
 
-    return (
-        read_skill_entry,
-        read_api_index,
-        read_stdlib_index,
-        read_api_doc,
-        read_stdlib_doc,
-        list_examples,
-        read_example,
-        read_model_source,
-        write_model_source,
-        execute_model,
-    )
+    return (validate_model,)
 
 
 def build_deep_agent(
@@ -382,8 +271,10 @@ def build_deep_agent(
     tools: Sequence[BaseTool],
     *,
     model: Any | None = None,
+    workspace_root: str | Path | None = None,
+    skill_root: str | Path | None = None,
 ) -> Any:
-    """Build one real Deep Agent with only the issue 01 tool surface."""
+    """Build one Deep Agent with general local tools and CAD-specific tools."""
 
     from deepagents import (
         GeneralPurposeSubagentProfile,
@@ -391,6 +282,7 @@ def build_deep_agent(
         create_deep_agent,
         register_harness_profile,
     )
+    from deepagents.backends import LocalShellBackend
     from langchain.agents.middleware import TodoListMiddleware
 
     def planning_middleware() -> list[Any]:
@@ -399,17 +291,24 @@ def build_deep_agent(
     register_harness_profile(
         settings.deep_agent_model_spec,
         HarnessProfile(
-            excluded_tools=RESTRICTED_BUILTIN_TOOL_NAMES,
             general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
             extra_middleware=planning_middleware,
         ),
     )
     resolved_model = build_chat_model(settings) if model is None else model
+    backend = LocalShellBackend(
+        root_dir=workspace_root or Path.cwd(),
+        virtual_mode=False,
+        timeout=int(CAD_EXECUTION_TIMEOUT_SECONDS),
+        inherit_env=True,
+    )
     return create_deep_agent(
         model=resolved_model,
         tools=tuple(tools),
         system_prompt=_SYSTEM_PROMPT,
         subagents=(),
+        skills=[str(skill_root)] if skill_root is not None else None,
+        backend=backend,
         memory=None,
         checkpointer=None,
         store=None,
@@ -461,30 +360,17 @@ class ReferenceGroundedAgent:
         def on_tool_use(record: ToolUseRecord) -> None:
             if record.tool_name == "prepare_model_source":
                 emit(ProgressUpdate(stage="preparing", tool="project"))
-            elif record.tool_name in {
-                "read_skill_entry",
-                "read_api_index",
-                "read_stdlib_index",
-                "read_api_doc",
-                "read_stdlib_doc",
-                "list_examples",
-                "read_example",
-            }:
-                emit(ProgressUpdate(stage="reading_references", tool="reference"))
-            elif record.tool_name in {"read_model_source", "write_model_source"}:
-                emit(ProgressUpdate(stage="writing_model", tool="model_source"))
 
-        restricted = RestrictedAgentTools(
+        validator = AgentModelValidator(
             repo_root=self.repo_root,
             project_dir=self.project_dir,
             executor=self.executor,
             on_tool_use=on_tool_use,
         )
-        scaffold = restricted.begin_run()
-        initial_source = scaffold.model_path.read_text(encoding="utf-8")
-        if token.cancelled:
+        validator.begin_run()
+        if token.cancelled and token.cancellation_reason != "timeout":
             return _cancelled_outcome(
-                restricted,
+                validator,
                 execution_results=(),
                 duration=time.monotonic() - started,
             )
@@ -494,7 +380,7 @@ class ReferenceGroundedAgent:
             executions.append(result)
 
         agent_tools = create_agent_tools(
-            restricted,
+            validator,
             max_executions=MAX_CAD_EXECUTIONS,
             on_execution=record_execution,
             on_execution_error=record_execution,
@@ -509,6 +395,8 @@ class ReferenceGroundedAgent:
                 self.settings,
                 agent_tools,
                 model=self.model,
+                workspace_root=self.project_dir,
+                skill_root=Path(self.repo_root) / "skills",
             )
             agent_error, timed_out = _invoke_agent_with_deadline(
                 agent,
@@ -521,27 +409,27 @@ class ReferenceGroundedAgent:
 
         duration = time.monotonic() - started
         execution = executions[-1] if executions else None
-        if token.cancelled:
-            return _cancelled_outcome(
-                restricted,
-                execution_results=tuple(executions),
-                duration=duration,
-            )
-        if timed_out or duration > MAX_AGENT_RUN_SECONDS:
+        if timed_out or token.cancellation_reason == "timeout" or duration > MAX_AGENT_RUN_SECONDS:
             return AgentRunOutcome(
                 validated=False,
                 failure_reason="Agent Run exceeded the five-minute wall-clock limit",
                 execution_result=execution,
                 execution_results=tuple(executions),
-                tool_use_records=restricted.tool_use_records,
+                tool_use_records=validator.tool_use_records,
                 duration_seconds=duration,
+            )
+        if token.cancelled:
+            return _cancelled_outcome(
+                validator,
+                execution_results=tuple(executions),
+                duration=duration,
             )
         if execution is None:
             return AgentRunOutcome(
                 validated=False,
                 failure_reason=agent_error
                 or "Agent finished without executing the Model Source",
-                tool_use_records=restricted.tool_use_records,
+                tool_use_records=validator.tool_use_records,
                 duration_seconds=duration,
             )
         if not _is_validated_result(execution):
@@ -552,23 +440,14 @@ class ReferenceGroundedAgent:
                 or "CAD execution did not produce a Validated Result",
                 execution_result=execution,
                 execution_results=tuple(executions),
-                tool_use_records=restricted.tool_use_records,
-                duration_seconds=duration,
-            )
-        if not _source_was_written(restricted, initial_source):
-            return AgentRunOutcome(
-                validated=False,
-                failure_reason="Agent did not write a complete Model Source",
-                execution_result=execution,
-                execution_results=tuple(executions),
-                tool_use_records=restricted.tool_use_records,
+                tool_use_records=validator.tool_use_records,
                 duration_seconds=duration,
             )
         return AgentRunOutcome(
             validated=True,
             execution_result=execution,
             execution_results=tuple(executions),
-            tool_use_records=restricted.tool_use_records,
+            tool_use_records=validator.tool_use_records,
             duration_seconds=duration,
         )
 
@@ -655,7 +534,11 @@ class AgentRunService:
         except Exception as exc:
             reason = _safe_failure_reason(exc)
             outcome = AgentRunOutcome(validated=False, failure_reason=reason)
-        if token.cancelled and not outcome.cancelled:
+        if (
+            token.cancelled
+            and token.cancellation_reason != "timeout"
+            and not outcome.cancelled
+        ):
             outcome = replace(
                 outcome,
                 validated=False,
@@ -742,7 +625,7 @@ def _is_cancellation_requested(token: object | None) -> bool:
 
 
 def _cancelled_outcome(
-    restricted: RestrictedAgentTools,
+    validator: AgentModelValidator,
     *,
     execution_results: tuple[ExecutionResult, ...],
     duration: float,
@@ -754,7 +637,7 @@ def _cancelled_outcome(
         failure_reason="Agent Run stopped by caller",
         execution_result=execution,
         execution_results=execution_results,
-        tool_use_records=restricted.tool_use_records,
+        tool_use_records=validator.tool_use_records,
         duration_seconds=duration,
     )
 
@@ -792,13 +675,6 @@ def _execution_failure_result(error: Exception) -> ExecutionResult:
     )
 
 
-def _source_was_written(restricted: RestrictedAgentTools, initial_source: str) -> bool:
-    records = restricted.tool_use_records
-    if not any(record.tool_name == "write_model_source" for record in records):
-        return False
-    return restricted.read_model_source() != initial_source
-
-
 def _invoke_agent_with_deadline(
     agent: Any,
     prompt: str,
@@ -810,7 +686,7 @@ def _invoke_agent_with_deadline(
 
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        cancellation_token.cancel()
+        cancellation_token.cancel(reason="timeout")
         return "Agent Run exceeded the five-minute wall-clock limit", True
 
     error: list[Exception] = []
@@ -841,7 +717,7 @@ def _invoke_agent_with_deadline(
             return "Agent Run stopped by caller", False
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            cancellation_token.cancel()
+            cancellation_token.cancel(reason="timeout")
             return "Agent Run exceeded the five-minute wall-clock limit", True
     if error:
         return _safe_failure_reason(error[0]), False
@@ -871,7 +747,6 @@ __all__ = [
     "MAX_CAD_EXECUTIONS",
     "MAX_PROVIDER_RETRIES",
     "ReferenceGroundedAgent",
-    "RESTRICTED_BUILTIN_TOOL_NAMES",
     "build_chat_model",
     "build_deep_agent",
     "create_agent_tools",

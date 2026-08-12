@@ -42,7 +42,7 @@ def _execution_result(
     )
 
 
-def _grounded_tools(tmp_path: Path, executor: object, **kwargs: object):
+def _validation_tools(tmp_path: Path, executor: object, **kwargs: object):
     restricted = RestrictedAgentTools(
         repo_root=Path(__file__).parents[1],
         project_dir=tmp_path,
@@ -51,15 +51,10 @@ def _grounded_tools(tmp_path: Path, executor: object, **kwargs: object):
     restricted.begin_run()
     tools = create_agent_tools(restricted, **kwargs)
     by_name = {item.name: item for item in tools}
-    by_name["read_skill_entry"].invoke({})
-    by_name["read_api_index"].invoke({})
-    by_name["read_stdlib_index"].invoke({})
-    by_name["read_api_doc"].invoke({"api_name": "model"})
-    by_name["write_model_source"].invoke({"source": "# first source\n"})
     return restricted, by_name
 
 
-def test_execute_model_exposes_each_diagnosis_and_hard_stops_at_three(
+def test_validate_model_exposes_each_diagnosis_and_hard_stops_at_three(
     tmp_path: Path,
 ) -> None:
     class SequenceExecutor:
@@ -84,7 +79,7 @@ def test_execute_model_exposes_each_diagnosis_and_hard_stops_at_three(
             return result
 
     executor = SequenceExecutor()
-    _restricted, tools = _grounded_tools(
+    _restricted, tools = _validation_tools(
         tmp_path,
         executor,
         max_executions=3,
@@ -92,11 +87,9 @@ def test_execute_model_exposes_each_diagnosis_and_hard_stops_at_three(
         clock=lambda: 0.0,
     )
 
-    first = tools["execute_model"].invoke({"api_names": ["model"], "stdlib_names": []})
-    tools["write_model_source"].invoke({"source": "# repaired once\n"})
-    second = tools["execute_model"].invoke({"api_names": ["model"], "stdlib_names": []})
-    tools["write_model_source"].invoke({"source": "# repaired twice\n"})
-    third = tools["execute_model"].invoke({"api_names": ["model"], "stdlib_names": []})
+    first = tools["validate_model"].invoke({})
+    second = tools["validate_model"].invoke({})
+    third = tools["validate_model"].invoke({})
 
     assert executor.calls == 3
     assert [item["error"] for item in (first, second, third)] == [
@@ -108,17 +101,17 @@ def test_execute_model_exposes_each_diagnosis_and_hard_stops_at_three(
     assert third["scene_parse_result"]["valid"] is True
 
     with pytest.raises(AgentRunError, match="at most 3 CAD executions"):
-        tools["execute_model"].invoke({"api_names": ["model"], "stdlib_names": []})
+        tools["validate_model"].invoke({})
     assert executor.calls == 3
 
 
-def test_execute_model_refuses_to_start_after_run_deadline(tmp_path: Path) -> None:
+def test_validate_model_refuses_to_start_after_run_deadline(tmp_path: Path) -> None:
     class NeverCalledExecutor:
         def execute(self, *_args: object, **_kwargs: object) -> ExecutionResult:
             raise AssertionError("CAD must not start after the Agent Run deadline")
 
     now = [0.0]
-    _restricted, tools = _grounded_tools(
+    _restricted, tools = _validation_tools(
         tmp_path,
         NeverCalledExecutor(),
         max_executions=3,
@@ -128,7 +121,7 @@ def test_execute_model_refuses_to_start_after_run_deadline(tmp_path: Path) -> No
     now[0] = 10.001
 
     with pytest.raises(AgentRunError, match="five-minute wall-clock limit"):
-        tools["execute_model"].invoke({"api_names": ["model"], "stdlib_names": []})
+        tools["validate_model"].invoke({})
 
 
 def test_reference_agent_adapter_turns_boundary_exception_into_diagnosis(
@@ -139,7 +132,7 @@ def test_reference_agent_adapter_turns_boundary_exception_into_diagnosis(
             raise RuntimeError("CAD runner failed\nTraceback: hidden")
 
     records: list[ExecutionResult] = []
-    _restricted, tools = _grounded_tools(
+    _restricted, tools = _validation_tools(
         tmp_path,
         RaisingExecutor(),
         max_executions=3,
@@ -149,7 +142,7 @@ def test_reference_agent_adapter_turns_boundary_exception_into_diagnosis(
         clock=lambda: 0.0,
     )
 
-    result = tools["execute_model"].invoke({"api_names": ["model"], "stdlib_names": []})
+    result = tools["validate_model"].invoke({})
 
     assert result["status"] == "failed"
     assert result["error"] == "CAD runner failed"
