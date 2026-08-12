@@ -83,6 +83,7 @@ output/projects/<project_id>/
 ├── prompt.txt
 ├── model.py
 ├── events.jsonl
+├── agent-run.jsonl
 ├── logs/
 │   ├── attempt-1.stdout.log
 │   ├── attempt-1.stderr.log
@@ -93,7 +94,8 @@ output/projects/<project_id>/
 
 - `project.json` 是 Project 状态和时间戳的持久记录。
 - `events.jsonl` 保存经过整理、可按 ID 重放的 Progress Event。
-- 日志按执行次数保存，设置大小上限，并对疑似凭证文本做脱敏。
+- `agent-run.jsonl` 是一条记录一行的 JSON Lines 日志：首行只记录一次模型配置，后续按发生顺序记录发给模型的完整消息、模型返回的正文/工具调用、实际工具参数和结果/错误。它不记录 token 统计等 Provider 元数据，不限制字段长度，只对凭据脱敏；该文件只供本机诊断，不通过 SSE 或产品界面暴露。
+- `logs/` 下的 CAD 子进程输出按执行次数保存并设置大小上限，对疑似凭证文本做脱敏。
 - 只保留最新 `model.py`，不保存每轮源码快照，也不创建 Git 提交。
 - Scene Artifact 只有通过全部验收后才能作为成功结果提供给 Viewer。
 

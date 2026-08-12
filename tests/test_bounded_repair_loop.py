@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -217,6 +218,13 @@ def test_agent_run_service_persists_three_attempts_and_removes_partial_output(
     assert not (tmp_path / project.project_id / "artifacts").exists() or not any(
         (tmp_path / project.project_id / "artifacts").iterdir()
     )
+    agent_log = tmp_path / project.project_id / "agent-run.jsonl"
+    assert agent_log.is_file()
+    records = [
+        json.loads(line)
+        for line in agent_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert records[-1]["status"] == "failed"
 
 
 def test_chat_model_configures_only_two_provider_retries() -> None:

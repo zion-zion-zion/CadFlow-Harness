@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import math
 import os
-import inspect
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -13,6 +13,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from langchain_core.tools import BaseTool, tool
 
+from .agent_logging import AgentRunLog
 from .cad_executor import (
     CAD_EXECUTION_TIMEOUT_SECONDS,
     CancellationToken,
@@ -380,12 +381,14 @@ class ReferenceGroundedAgent:
         project_dir: str | Path,
         executor: Any | None = None,
         model: Any | None = None,
+        run_log: AgentRunLog | None = None,
     ) -> None:
         self.settings = settings
         self.repo_root = repo_root
         self.project_dir = project_dir
         self.executor = executor
         self.model = model
+        self.run_log = run_log
 
     def run(
         self,
@@ -411,6 +414,11 @@ class ReferenceGroundedAgent:
                 return
 
         def on_tool_use(record: ToolUseRecord) -> None:
+            if (
+                self.run_log is not None
+                and record.tool_name == "prepare_model_source"
+            ):
+                self.run_log.record_internal_tool(record.tool_name, record.target)
             if record.tool_name == "prepare_model_source":
                 emit(ProgressUpdate(stage="preparing", tool="project"))
 
@@ -457,6 +465,7 @@ class ReferenceGroundedAgent:
                 prompt,
                 deadline=deadline,
                 cancellation_token=token,
+                run_log=self.run_log,
             )
         except Exception as exc:  # Agent/provider errors become a safe diagnosis.
             agent_error = _safe_failure_reason(exc)
@@ -539,6 +548,9 @@ class AgentRunService:
         if prompt_submitted and project.state != ProjectState.RUNNING:
             raise AgentRunError("Agent Run requires a Running Project")
         token = cancellation_token or CancellationToken()
+        run_log = AgentRunLog(
+            self.store.project_directory(project.project_id),
+        )
         if token.cancelled:
             outcome = AgentRunOutcome(
                 validated=False,
@@ -550,9 +562,18 @@ class AgentRunService:
                 outcome.failure_reason or "Agent Run stopped by caller",
                 outcome.diagnostics(),
             )
+            run_log.finish(
+                status=outcome.status,
+                failure_reason=outcome.failure_reason,
+            )
             return outcome
         try:
             settings = self.settings_factory()
+            run_log.configure(
+                provider=settings.provider,
+                model_id=settings.model_id,
+                base_url=settings.base_url,
+            )
         except Exception as exc:
             reason = _safe_failure_reason(exc)
             outcome = AgentRunOutcome(validated=False, failure_reason=reason)
@@ -571,14 +592,31 @@ class AgentRunService:
                 self.store.mark_failed(
                     project.project_id, reason, outcome.diagnostics()
                 )
+            run_log.finish(
+                status=outcome.status,
+                failure_reason=outcome.failure_reason,
+            )
             return outcome
 
         try:
-            agent = self.agent_factory(
-                settings=settings,
-                repo_root=self.repo_root,
-                project_dir=self.store.project_directory(project.project_id),
-            )
+            factory_kwargs: dict[str, Any] = {
+                "settings": settings,
+                "repo_root": self.repo_root,
+                "project_dir": self.store.project_directory(project.project_id),
+            }
+            try:
+                factory_parameters = inspect.signature(self.agent_factory).parameters
+            except (TypeError, ValueError):
+                factory_parameters = {}
+            if (
+                "run_log" in factory_parameters
+                or any(
+                    item.kind is inspect.Parameter.VAR_KEYWORD
+                    for item in factory_parameters.values()
+                )
+            ):
+                factory_kwargs["run_log"] = run_log
+            agent = self.agent_factory(**factory_kwargs)
             outcome = _invoke_agent_run(
                 agent,
                 project.prompt or prompt,
@@ -605,6 +643,10 @@ class AgentRunService:
                 outcome.failure_reason or "Agent Run stopped by caller",
                 outcome.diagnostics(),
             )
+            run_log.finish(
+                status=outcome.status,
+                failure_reason=outcome.failure_reason,
+            )
             return outcome
         if outcome.validated:
             try:
@@ -627,6 +669,10 @@ class AgentRunService:
                 outcome.failure_reason or "Agent Run failed",
                 outcome.diagnostics(),
             )
+        run_log.finish(
+            status=outcome.status,
+            failure_reason=outcome.failure_reason,
+        )
         return outcome
 
 
@@ -737,6 +783,7 @@ def _invoke_agent_with_deadline(
     *,
     deadline: float,
     cancellation_token: CancellationToken,
+    run_log: AgentRunLog | None = None,
 ) -> tuple[str | None, bool]:
     """Invoke the primary Agent without allowing a blocking call past the budget."""
 
@@ -749,6 +796,9 @@ def _invoke_agent_with_deadline(
 
     def invoke() -> None:
         try:
+            config: dict[str, Any] = {}
+            if run_log is not None:
+                config["callbacks"] = [run_log.callback_handler()]
             agent.invoke(
                 {
                     "messages": [
@@ -760,7 +810,8 @@ def _invoke_agent_with_deadline(
                             ),
                         }
                     ]
-                }
+                },
+                config=config or None,
             )
         except Exception as exc:
             error.append(exc)
