@@ -35,7 +35,7 @@ Copy `.env.example` to `.env` for local API configuration. Never commit `.env`, 
 
 ### Issue tracker
 
-Issues and specs are tracked as local Markdown under `.scratch/`. See `docs/agents/issue-tracker.md`.
+Issues and specs are tracked in GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
