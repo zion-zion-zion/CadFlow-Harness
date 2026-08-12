@@ -1,4 +1,6 @@
 import { strFromU8, unzipSync } from 'fflate';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '@noble/hashes/utils';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -430,9 +432,16 @@ async function validatePackageMembers(files: PackageFiles, manifest: SceneManife
     if (!Number.isSafeInteger(record.byte_length) || record.byte_length < 0 || payload.byteLength !== record.byte_length) throw new ScenePackageError(`Package member length differs from scene.json: ${record.uri}`);
     const expected = /^sha256:([0-9a-f]{64})$/.exec(record.content_hash)?.[1];
     if (!expected) throw new ScenePackageError(`Invalid package member hash: ${record.uri}`);
-    const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', payload)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    const digest = await sha256Hex(payload);
     if (digest !== expected) throw new ScenePackageError(`Package member hash differs from scene.json: ${record.uri}`);
   }
+}
+
+async function sha256Hex(payload: Uint8Array): Promise<string> {
+  if (globalThis.crypto?.subtle) {
+    return bytesToHex(new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', payload)));
+  }
+  return bytesToHex(sha256(payload));
 }
 
 function unzipPackage(raw: Uint8Array): PackageFiles {

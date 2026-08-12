@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from backend import __main__ as entrypoint
 from backend.__main__ import load_backend_environment
 from backend.agent import AgentSettings
 
@@ -24,3 +25,19 @@ def test_backend_entrypoint_loads_dotenv_without_overriding_environment(
     assert settings.api_key == "file-key"
     assert settings.model_id == "exported-model"
     assert settings.base_url == "https://provider.invalid/v1"
+
+
+def test_backend_entrypoint_uses_configured_host(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("TEXT_TO_CAD_HOST", "0.0.0.0")
+    monkeypatch.setattr(entrypoint, "load_backend_environment", lambda: None)
+    monkeypatch.setattr(
+        entrypoint.uvicorn,
+        "run",
+        lambda app, **kwargs: captured.update(app=app, **kwargs),
+    )
+
+    entrypoint.main()
+
+    assert captured["host"] == "0.0.0.0"

@@ -10,6 +10,7 @@
     "prepare:example": "uv run python ../examples/10_part_assembly.py"
   },
   "dependencies": {
+    "@noble/hashes": "^1.8.0",
     "fflate": "0.8.2",
     "three": "0.178.0"
   },
