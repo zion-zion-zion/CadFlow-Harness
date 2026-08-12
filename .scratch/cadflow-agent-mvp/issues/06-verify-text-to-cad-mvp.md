@@ -22,5 +22,5 @@
 - 新增 `tests/test_mvp_application_boundary.py`，通过 FastAPI `TestClient` 覆盖 Draft → Running → Succeeded/Failed/Stopped、Prompt 与 metadata 持久化、SSE `Last-Event-ID` 重放、Scene 获取、全局运行冲突、Stop、删除和服务重启恢复。确定性 harness 只运行真实 `CADExecutor`，不模拟自主 Agent。
 - 扩展 `tests/test_cad_executor.py`，覆盖多/零 Solid、正体积与有限性、额外 artifact、非零退出、超时、取消进程、输出截断、凭据脱敏和 Scene 解析结果。
 - 移除前置测试中用 `ScriptedPrimaryAgent` 替代自主修复的测试；新增 `tests/test_live_agent.py`，真实 Provider 才能执行固定法兰盘 smoke 和真实 Agent/CAD 子进程 Stop 验证。
-- `pyproject.toml` 默认使用 `-m 'not live_agent'`；`tests/conftest.py` 要求 `TEXT_TO_CAD_RUN_LIVE_AGENT=1` 以及 `OPENAI_API_KEY`、`OPENAI_MODEL_ID`，否则 live 测试直接 skip。运行命令和人工验证清单见 `.scratch/text-to-cad-agent-mvp/verification.md`。
+- `pyproject.toml` 默认使用 `-m 'not live_agent'`；`tests/conftest.py` 要求 `TEXT_TO_CAD_RUN_LIVE_AGENT=1` 以及 `OPENAI_API_KEY`、`OPENAI_MODEL_ID`，否则 live 测试直接 skip。运行命令和人工验证清单见 `.scratch/cadflow-agent-mvp/verification.md`。
 - 本次已验证：`uv run pytest -q`（50 passed, 2 deselected）、`uv run pytest -o addopts='' -m live_agent tests/test_live_agent.py -q`（未 opt-in，2 skipped）、`uv run --with mypy mypy backend --ignore-missing-imports`、`uv run python -m compileall -q backend tests`、`uv run ruff check backend tests`、变更测试文件 `black --check`、`git diff --check`、`cd viewer && npm run build`。live Provider smoke 未在本次默认验证中调用，避免未显式授权的模型费用；人工浏览器记录保留给 human review。

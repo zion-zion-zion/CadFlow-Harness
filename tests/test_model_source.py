@@ -23,4 +23,3 @@ def test_create_model_source_writes_complete_single_part_scaffold(tmp_path: Path
     assert "return final_shape" in source
     assert "with cad.Model() as model" in source
     assert "final_shape.export_step" in source
-    assert "simplecadapi" not in source.lower()

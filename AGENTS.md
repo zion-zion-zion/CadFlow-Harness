@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository hosts a text-to-CAD agent workspace built around CadFlow. Python dependencies and project metadata live in `pyproject.toml`; exact versions are locked in `uv.lock`. The project currently targets Python 3.12/Linux x86_64 because the bundled CadFlow wheel is platform-specific. Runnable CAD examples belong in `examples/`. The browser-based scene viewer is isolated in `viewer/`, with TypeScript source under `viewer/src/` and Vite configuration beside it. Agent reference material is packaged under `skills/cadflow-model-part/`. `backend/` is currently a scaffold; place future server modules there and mirror them with tests under `tests/`. Generated CAD files and viewer build output are ignored and should not be committed.
+CadFlowAgent is a text-to-CAD agent workspace built around CadFlow. Python dependencies and project metadata live in `pyproject.toml`; exact versions are locked in `uv.lock`. The project currently targets Python 3.12/Linux x86_64 because the bundled CadFlow wheel is platform-specific. Runnable CAD examples belong in `examples/`. The browser-based scene viewer is isolated in `viewer/`, with TypeScript source under `viewer/src/` and Vite configuration beside it. Agent reference material is packaged under `skills/cadflow-model-part/`. `backend/` is currently a scaffold; place future server modules there and mirror them with tests under `tests/`. Generated CAD files and viewer build output are ignored and should not be committed.
 
 ## Build, Test, and Development Commands
 

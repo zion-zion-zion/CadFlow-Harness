@@ -246,6 +246,53 @@ requires-dist = [
 provides-extras = ["test", "collision", "inspect"]
 
 [[package]]
+name = "cadflowagent"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "cadflow" },
+    { name = "deepagents" },
+    { name = "fastapi" },
+    { name = "langchain-openai" },
+    { name = "python-dotenv" },
+    { name = "uvicorn" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "datamodel-code-generator" },
+    { name = "ipykernel" },
+    { name = "jupyterlab" },
+    { name = "matplotlib" },
+    { name = "numpy-stl" },
+    { name = "pytest" },
+    { name = "trimesh" },
+    { name = "twine" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cadflow", path = "vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl" },
+    { name = "deepagents", specifier = "==0.7.5" },
+    { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "langchain-openai", specifier = ">=1.0,<2" },
+    { name = "python-dotenv", specifier = ">=1.0,<2" },
+    { name = "uvicorn", specifier = ">=0.34,<1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "datamodel-code-generator", specifier = "==0.32.0" },
+    { name = "ipykernel", specifier = ">=6.29.5" },
+    { name = "jupyterlab", specifier = ">=4.5.5" },
+    { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "numpy-stl", specifier = ">=3.2.0" },
+    { name = "pytest" },
+    { name = "trimesh", specifier = ">=4.11.3" },
+    { name = "twine", specifier = ">=6.1.0" },
+]
+
+[[package]]
 name = "cadquery-ocp"
 version = "7.9.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2290,53 +2337,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8a/11/965c6fd8e5cc254f1fe142d547387da17a8ebfd75a3455f637c663fb38a0/terminado-0.18.1.tar.gz", hash = "sha256:de09f2c4b85de4765f7714688fff57d3e75bad1f909b589fde880460c753fd2e", size = 32701, upload-time = "2024-03-12T14:34:39.026Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6a/9e/2064975477fdc887e47ad42157e214526dcad8f317a948dee17e1659a62f/terminado-0.18.1-py3-none-any.whl", hash = "sha256:a4468e1b37bb318f8a86514f65814e1afc977cf29b3992a4500d9dd305dcceb0", size = 14154, upload-time = "2024-03-12T14:34:36.569Z" },
-]
-
-[[package]]
-name = "text-to-cad-agent"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "cadflow" },
-    { name = "deepagents" },
-    { name = "fastapi" },
-    { name = "langchain-openai" },
-    { name = "python-dotenv" },
-    { name = "uvicorn" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "datamodel-code-generator" },
-    { name = "ipykernel" },
-    { name = "jupyterlab" },
-    { name = "matplotlib" },
-    { name = "numpy-stl" },
-    { name = "pytest" },
-    { name = "trimesh" },
-    { name = "twine" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cadflow", path = "vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl" },
-    { name = "deepagents", specifier = "==0.7.5" },
-    { name = "fastapi", specifier = ">=0.115,<1" },
-    { name = "langchain-openai", specifier = ">=1.0,<2" },
-    { name = "python-dotenv", specifier = ">=1.0,<2" },
-    { name = "uvicorn", specifier = ">=0.34,<1" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "datamodel-code-generator", specifier = "==0.32.0" },
-    { name = "ipykernel", specifier = ">=6.29.5" },
-    { name = "jupyterlab", specifier = ">=4.5.5" },
-    { name = "matplotlib", specifier = ">=3.10.8" },
-    { name = "numpy-stl", specifier = ">=3.2.0" },
-    { name = "pytest" },
-    { name = "trimesh", specifier = ">=4.11.3" },
-    { name = "twine", specifier = ">=6.1.0" },
 ]
 
 [[package]]

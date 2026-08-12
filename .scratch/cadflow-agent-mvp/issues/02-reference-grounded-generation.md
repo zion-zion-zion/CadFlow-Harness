@@ -1,6 +1,6 @@
 # 02 — 实现 reference-grounded 单轮 CAD 生成
 
-**What to build:** 让一个主 Deep Agent 接收 Project 的完整 Prompt，自主查阅 SimpleCADAPI 依据、完成 Model Source 并执行一次成功路径，不向用户追问，也不依赖跨 Project 记忆或 subagent。
+**What to build:** 让一个主 Deep Agent 接收 Project 的完整 Prompt，自主查阅 CadFlow 依据、完成 Model Source 并执行一次成功路径，不向用户追问，也不依赖跨 Project 记忆或 subagent。
 
 **Blocked by:** 01 — 定义 Agent Run 契约与受限工具面.
 

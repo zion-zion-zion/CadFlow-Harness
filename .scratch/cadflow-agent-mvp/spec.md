@@ -4,11 +4,11 @@ Status: ready-for-agent
 
 ## Problem Statement
 
-用户目前只有 SimpleCADAPI SDK、示例和一个独立 Scene Viewer，缺少从自然语言 Prompt 到可运行 Model Source、Validated Result 和可交互渲染的完整 Agent 闭环。用户需要一个最小但真实的本机 Demo：创建 Project、提交一次完整零件描述后，系统自行查文档、生成 SimpleCADAPI Python、执行、修复、验证并渲染，不要求用户补充信息，也不引入多轮对话、数据库、队列或复杂部署。
+用户目前只有 CadFlow SDK、示例和一个独立 Scene Viewer，缺少从自然语言 Prompt 到可运行 Model Source、Validated Result 和可交互渲染的完整 Agent 闭环。用户需要一个最小但真实的本机 Demo：创建 Project、提交一次完整零件描述后，系统自行查文档、生成 CadFlow Python、执行、修复、验证并渲染，不要求用户补充信息，也不引入多轮对话、数据库、队列或复杂部署。
 
 ## Solution
 
-提供一个可信本机、单用户、单轮的 Text-to-CAD Agent 工作区。页面采用 Project Catalog、当前 Project 操作区和 CAD Viewer 三栏布局。FastAPI 管理持久 Project、REST 控制接口、可重放 SSE Progress Event 和单个后台 Agent Run。LangChain Deep Agents 主 Agent 通过受限工具按需阅读 SimpleCADAPI Skill 与示例，在后端提供的 Model Source 骨架上编写一个单零件程序，最多执行三次并根据结构化错误自动修复。通过退出码、单 Solid、正体积和 canonical Scene Artifact 解析检查后，Viewer 自动加载结果。
+提供一个可信本机、单用户、单轮的 CadFlowAgent 工作区。页面采用 Project Catalog、当前 Project 操作区和 CAD Viewer 三栏布局。FastAPI 管理持久 Project、REST 控制接口、可重放 SSE Progress Event 和单个后台 Agent Run。LangChain Deep Agents 主 Agent 通过受限工具按需阅读 CadFlow Skill 与示例，在后端提供的 Model Source 骨架上编写一个单零件程序，最多执行三次并根据结构化错误自动修复。通过退出码、单 Solid、正体积和 canonical Scene Artifact 解析检查后，Viewer 自动加载结果。
 
 ## User Stories
 
@@ -25,7 +25,7 @@ Status: ready-for-agent
 11. As a CAD Demo user, I want missing dimensions or construction details inferred automatically, so that the run never pauses for clarification.
 12. As a CAD Demo user, I want unspecified lengths interpreted as millimetres, so that Agent assumptions are consistent.
 13. As a CAD Demo user, I want key inferred assumptions recorded in the Model Source, so that I can understand how an underspecified Prompt was resolved.
-14. As a CAD Demo user, I want generation to read the packaged SimpleCADAPI Skill and precise API references, so that Model Source follows the SDK contract rather than guessing APIs.
+14. As a CAD Demo user, I want generation to read the packaged CadFlow Skill and precise API references, so that Model Source follows the SDK contract rather than guessing APIs.
 15. As a CAD Demo user, I want generation to consult relevant repository examples, so that established modeling workflows are reused.
 16. As a CAD Demo user, I want to see curated Progress Events while the Agent works, so that I know whether it is reading, writing, executing, repairing, or validating.
 17. As a CAD Demo user, I want Progress Events restored after switching Projects or refreshing, so that the visible timeline remains coherent.
@@ -50,7 +50,7 @@ Status: ready-for-agent
 36. As a CAD Demo user, I want Draft, Running, Failed, and Stopped Projects to show their own empty Viewer state, so that another Project's geometry is never shown under the wrong Prompt.
 37. As a CAD Demo user, I want to rotate, pan, zoom, fit, and automatically frame the generated part, so that I can inspect it interactively.
 38. As a CAD Demo user, I want the Viewer to focus only on the rendered result, so that model trees, inspectors, source editors, and local ZIP upload do not distract from the Demo.
-39. As a CAD developer, I want the generated Model Source persisted in the Project directory, so that the SimpleCADAPI Python deliverable exists independently of the UI.
+39. As a CAD developer, I want the generated Model Source persisted in the Project directory, so that the CadFlow Python deliverable exists independently of the UI.
 40. As a CAD developer, I want only the latest Model Source retained, so that MVP storage does not become a source-control system.
 41. As a CAD developer, I want each execution's stdout and stderr bounded and credential-like text redacted, so that diagnostics remain useful without growing indefinitely or exposing secrets.
 42. As a local operator, I want completed Projects reconstructed from disk after service restart, so that Project persistence does not depend on process memory.
@@ -76,9 +76,9 @@ Status: ready-for-agent
 - Deliver Progress Events through server-sent events with keepalives, monotonically increasing event IDs, persistence, and replay after Last-Event-ID.
 - Send only curated stage, tool, attempt, and short-result information through SSE. Do not expose natural-language model streaming, chain of thought, full tool arguments, raw logs, or model credentials.
 - Use LangChain Deep Agents as a hard requirement. Use one primary Agent with run-local planning, no subagents, and no cross-Project memory.
-- Seed a complete Model Source scaffold before Agent work. Require one SimpleCADAPI model entry point, one captured final Solid, the Project artifact directory, and canonical `model.scene.zip` generation.
-- Allow the Agent to edit the entire current Model Source so it can add imports and helper functions. Current MVP guidance permits Python standard-library modules and SimpleCADAPI only.
-- Give the Agent read-only access to the packaged SimpleCADAPI Skill, exact API documentation, and repository examples; give it Project-scoped source read/write access and one dedicated `execute_model` tool. Do not expose a general Shell.
+- Seed a complete Model Source scaffold before Agent work. Require one CadFlow model entry point, one captured final Solid, the Project artifact directory, and canonical `model.scene.zip` generation.
+- Allow the Agent to edit the entire current Model Source so it can add imports and helper functions. Current MVP guidance permits Python standard-library modules and CadFlow only.
+- Give the Agent read-only access to the packaged CadFlow Skill, exact API documentation, and repository examples; give it Project-scoped source read/write access and one dedicated `execute_model` tool. Do not expose a general Shell.
 - Require the Agent to read the Skill entry document, required API/stdlib indexes, and the exact documentation for each API it chooses.
 - Do not perform AST, import, or dangerous-call inspection before running Model Source. Treat allowed imports as an Agent instruction rather than a security boundary.
 - Execute Model Source with the backend's Python interpreter in the Project working directory. Remove model API credentials from the subprocess environment, cap output, enforce a 120-second per-execution timeout, and support process termination.
@@ -105,7 +105,7 @@ Status: ready-for-agent
 - Cover cancellation with a real active Agent Run and observe Stopped plus child-process termination. Cover deletion through the API and observe removal from the Project Catalog and filesystem.
 - Cover service restart by persisting representative terminal Projects and an interrupted Running Project, recreating the service, and observing Catalog reconstruction plus Running-to-Failed recovery.
 - Run the ordinary Python test suite without live model calls. Run live Agent tests explicitly. Type-check and build the Viewer as the minimum frontend automated check, then record a manual visual verification for the three-column layout and interactive CAD controls.
-- Prefer existing seams: canonical Scene ZIP validation and SimpleCADAPI model/export behavior already exercised by repository examples. The backend currently has no prior tests, so the new HTTP application boundary should remain the dominant test surface rather than introducing multiple internal mocking seams.
+- Prefer existing seams: canonical Scene ZIP validation and CadFlow model/export behavior already exercised by repository examples. The backend currently has no prior tests, so the new HTTP application boundary should remain the dominant test surface rather than introducing multiple internal mocking seams.
 
 ## Out of Scope
 
@@ -121,7 +121,7 @@ Status: ready-for-agent
 ## Further Notes
 
 - The existing backend is a scaffold; the existing Viewer already supplies the canonical Scene ZIP parser, integrity checks, Three.js scene construction, and camera/render loop that should be preserved.
-- The packaged SimpleCADAPI Skill imposes mandatory exact-document lookup, keyword arguments, one model entry point, explicit capture, incremental validation, and one-part-per-file discipline.
+- The packaged CadFlow Skill imposes mandatory exact-document lookup, keyword arguments, one model entry point, explicit capture, incremental validation, and one-part-per-file discipline.
 - ADR-0001 limits generated-code execution to a trusted localhost Demo. ADR-0002 requires a bounded Deep Agents loop. ADR-0003 defines Scene ZIP as the rendering boundary. ADR-0004 records the deliberate absence of static source inspection. ADR-0005 keeps orchestration in one service process.
 - The security posture is operational control, not isolation. Project-scoped working directories, timeouts, output caps, credential-stripped subprocess environments, and cancellation do not make arbitrary Python safe for untrusted users.
 - This specification is implementation-ready under the `ready-for-agent` triage role.

@@ -81,7 +81,7 @@ def create_app(
     )
     coordinator.recover_interrupted_runs()
 
-    app = FastAPI(title="CadFlow Text-to-CAD Agent")
+    app = FastAPI(title="CadFlowAgent")
     app.state.project_store = project_store
     app.state.event_store = event_store
     app.state.run_coordinator = coordinator

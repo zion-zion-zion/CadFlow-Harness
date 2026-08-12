@@ -1,6 +1,6 @@
-# CadFlow Text-to-CAD Agent
+# CadFlowAgent
 
-这是一个可信的本机 Text-to-CAD 工作区。用户创建一个 Project，提交一次
+CadFlowAgent 是一个可信的本机 Text-to-CAD 工作区。用户创建一个 Project，提交一次
 完整的零件描述，Deep Agent 使用 CadFlow 编写并验证 Python Model Source，
 然后由 Viewer 加载 canonical Scene Artifact。
 

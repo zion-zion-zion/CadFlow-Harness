@@ -1,6 +1,6 @@
-# CadFlow Text-to-CAD Agent
+# CadFlowAgent
 
-This repository is a trusted local Text-to-CAD workspace. A user creates one
+CadFlowAgent is a trusted local Text-to-CAD workspace. A user creates one
 Project, submits one complete part description, and a bounded Deep Agent writes
 and validates a CadFlow Python Model Source before the Viewer loads its
 canonical Scene Artifact.

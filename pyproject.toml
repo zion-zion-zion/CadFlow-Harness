@@ -1,7 +1,7 @@
 [project]
-name = "text-to-cad-agent"
+name = "CadFlowAgent"
 version = "0.1.0"
-description = "A text-to-CAD agent built on CadFlow"
+description = "CadFlowAgent, a text-to-CAD agent built on CadFlow"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.13"

@@ -816,7 +816,7 @@ def _invoke_agent_with_deadline(
         except Exception as exc:
             error.append(exc)
 
-    worker = threading.Thread(target=invoke, name="text-to-cad-agent", daemon=True)
+    worker = threading.Thread(target=invoke, name="cadflow-agent", daemon=True)
     worker.start()
     while worker.is_alive():
         worker.join(min(0.05, remaining))

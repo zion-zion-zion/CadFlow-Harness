@@ -33,7 +33,7 @@ app.innerHTML = `
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark">CF</span>
-        <div><strong>CadFlow</strong><span>local text-to-cad workspace</span></div>
+        <div><strong>CadFlowAgent</strong><span>local text-to-cad workspace</span></div>
       </div>
       <div class="topbar-actions">
         <span class="local-badge">LOCAL DEMO</span>

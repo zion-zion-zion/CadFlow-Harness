@@ -7,7 +7,7 @@
 **Status:** ready-for-human
 
 - [x] 每次 Agent Run 开始前都会生成完整的单零件 Model Source 骨架，明确一个模型入口、最终 Solid 捕获方式、Project artifact 目录和 canonical Scene Artifact 输出要求。
-- [x] Agent 只能读取打包的 SimpleCADAPI Skill、API/stdlib 索引、精确 API 文档和仓库示例，只能读写当前 Project 的 Model Source，并且没有通用 Shell 或跨 Project 文件工具。
+- [x] Agent 只能读取打包的 CadFlow Skill、API/stdlib 索引、精确 API 文档和仓库示例，只能读写当前 Project 的 Model Source，并且没有通用 Shell 或跨 Project 文件工具。
 - [x] 工具契约要求 Agent 先读 Skill 入口和规定索引，再读取其实际采用的每个 API 的精确文档；这些要求能从 Agent Run 的工具使用记录中验证。
 - [x] Model Source 使用服务自身的 Python 解释器和 Project 工作目录执行，不做 AST、import 或危险调用静态检查；允许依赖仍是 Agent 指令，不被描述成安全隔离。
 - [x] CAD 子进程环境不包含模型 Provider 的 key、endpoint 等凭据，stdout/stderr 有大小上限并对 credential-like 内容脱敏。

@@ -174,6 +174,15 @@ class _DeterministicBlockingCadHarness:
         )
 
 
+def test_application_uses_cadflow_agent_product_name(tmp_path: Path) -> None:
+    app = create_app(
+        projects_root=tmp_path,
+        run_service=_DeterministicFailureHarness(),
+    )
+
+    assert app.title == "CadFlowAgent"
+
+
 def test_http_boundary_persists_success_events_and_scene_artifact(
     tmp_path: Path,
 ) -> None:
