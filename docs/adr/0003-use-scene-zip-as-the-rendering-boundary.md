@@ -1,3 +1,3 @@
 # Use Scene ZIP as the rendering boundary
 
-The backend and viewer exchange the canonical `.scene.zip` produced by SimpleCADAPI instead of designing another mesh protocol or routing rendering through STEP/STL. A successful Project retains only the Model Source and Scene Artifact required by the demo; additional manufacturing export formats are outside the first version.
+The backend and viewer exchange the canonical `.scene.zip` produced through CadFlow's Scene compiler instead of designing another mesh protocol or routing rendering through STEP/STL. A CadFlow native `Shape` is validated first, exported to a temporary STEP file, wrapped through CadFlow's public inspection/compatibility boundary, and compiled into the Scene ZIP. The temporary STEP is not a Project artifact. A successful Project retains only the Model Source and Scene Artifact required by the demo; additional manufacturing export formats are outside the first version.

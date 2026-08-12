@@ -29,7 +29,7 @@ The lifecycle state of a Project: Draft, Running, Succeeded, Failed, or Stopped.
 _Avoid_: Chat status, generation history
 
 **Model Source**:
-The generated set of SimpleCADAPI Python source files that defines the requested CAD model. The current single-part scope has one entry file; future complex models may contain project-local modules.
+The generated set of CadFlow Python source files that defines the requested CAD model. The current single-part scope has one entry file with `build_model(model: cad.Model) -> cad.Shape`; future complex models may contain project-local modules.
 _Avoid_: Snippet, response, generated text
 
 **Generated Part**:

@@ -24,7 +24,7 @@ def main() -> None:
     load_backend_environment()
     uvicorn.run(
         "backend.app:app",
-        host="127.0.0.1",
+        host=os.environ.get("TEXT_TO_CAD_HOST", "127.0.0.1"),
         port=int(os.environ.get("TEXT_TO_CAD_PORT", "8000")),
         workers=1,
     )

@@ -1,11 +1,1 @@
 out/
-*.step
-*.stl
-*.json
-*.FCStd
-*.FCBak
-*.fcstd
-*.fcbak
-*.scene.zip
-*.zip
-*.log

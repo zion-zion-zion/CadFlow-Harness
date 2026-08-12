@@ -18,8 +18,9 @@ def test_create_model_source_writes_complete_single_part_scaffold(tmp_path: Path
     assert scaffold.artifact_dir.is_dir()
 
     source = scaffold.model_path.read_text(encoding="utf-8")
-    assert "@scad.model(graph_id=\"model\", export_dir=ARTIFACT_DIR)" in source
-    assert "def build_model()" in source
-    assert "scad.capture_result(value=final_solid)" in source
-    assert "MODEL_RESULT = build_model()" in source
-    assert "SCENE_ARTIFACT = ARTIFACT_DIR / \"model.scene.zip\"" in source
+    assert "import cadflow as cad" in source
+    assert "def build_model(model: cad.Model) -> cad.Shape" in source
+    assert "return final_shape" in source
+    assert "with cad.Model() as model" in source
+    assert "final_shape.export_step" in source
+    assert "simplecadapi" not in source.lower()

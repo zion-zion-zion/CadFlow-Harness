@@ -1,9 +1,4 @@
-"""Validation of the canonical ``.scene.zip`` rendering boundary.
-
-The first pass mirrors the browser Viewer limits and package-reference checks.
-The second pass delegates the manifest, entity, and GLB contract to the
-SimpleCADAPI Scene validator shipped with the installed SDK.
-"""
+"""Validation of the canonical CadFlow ``.scene.zip`` rendering boundary."""
 
 from __future__ import annotations
 
@@ -313,7 +308,7 @@ def _validate_sdk_scene_contract(
     members: Mapping[str, bytes], manifest: Mapping[str, Any]
 ) -> None:
     try:
-        from simplecadapi.scene.validation import validate_scene_package
+        from cadflow.scene import validate_scene_package
 
         # The SDK validator receives the manifest-referenced blobs; the
         # transport-only ``scene.json`` member is validated by the Viewer
@@ -324,7 +319,7 @@ def _validate_sdk_scene_contract(
         )
     except (ImportError, KeyError, TypeError, ValueError) as exc:
         raise SceneArtifactValidationError(
-            "SimpleCADAPI Scene validator is unavailable"
+            "CadFlow Scene validator is unavailable"
         ) from exc
     if report.valid:
         return

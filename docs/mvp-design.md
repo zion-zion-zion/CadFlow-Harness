@@ -4,7 +4,7 @@
 
 ## 1. 目标
 
-构建一个本机单用户 Text-to-CAD Demo。用户创建 Project，提交一次完整的纯文本 Prompt，Deep Agent 自动查阅 SimpleCADAPI Skill、编写和执行 Python、根据错误进行有限修复，最终生成可保留的 Model Source 和供 Viewer 加载的 Scene Artifact。全过程不要求用户补充信息，也不构成多轮对话。
+构建一个本机单用户 Text-to-CAD Demo。用户创建 Project，提交一次完整的纯文本 Prompt，Deep Agent 自动查阅 CadFlow Skill、编写和执行 Python、根据错误进行有限修复，最终生成可保留的 Model Source 和供 Viewer 加载的 Scene Artifact。全过程不要求用户补充信息，也不构成多轮对话。
 
 MVP 只支持一个物理零件，最终结果必须是一个有效 Solid。
 
@@ -83,6 +83,7 @@ output/projects/<project_id>/
 ├── prompt.txt
 ├── model.py
 ├── events.jsonl
+├── agent-run.jsonl
 ├── logs/
 │   ├── attempt-1.stdout.log
 │   ├── attempt-1.stderr.log
@@ -93,7 +94,8 @@ output/projects/<project_id>/
 
 - `project.json` 是 Project 状态和时间戳的持久记录。
 - `events.jsonl` 保存经过整理、可按 ID 重放的 Progress Event。
-- 日志按执行次数保存，设置大小上限，并对疑似凭证文本做脱敏。
+- `agent-run.jsonl` 是一条记录一行的 JSON Lines 日志：首行只记录一次模型配置，后续按发生顺序记录发给模型的完整消息、模型返回的正文/工具调用、实际工具参数和结果/错误。它不记录 token 统计等 Provider 元数据，不限制字段长度，只对凭据脱敏；该文件只供本机诊断，不通过 SSE 或产品界面暴露。
+- `logs/` 下的 CAD 子进程输出按执行次数保存并设置大小上限，对疑似凭证文本做脱敏。
 - 只保留最新 `model.py`，不保存每轮源码快照，也不创建 Git 提交。
 - Scene Artifact 只有通过全部验收后才能作为成功结果提供给 Viewer。
 
@@ -112,7 +114,7 @@ output/projects/<project_id>/
 
 ### 7.3 文档与工具
 
-后端通过 Deep Agents 的 SkillsMiddleware 加载 `skills/simplecadapi/`。Agent 使用
+后端通过 Deep Agents 的 SkillsMiddleware 加载 `skills/cadflow-model-part/`。Agent 使用
 内置文件工具按需阅读 Skill、API 文档和 examples；后端不再追踪阅读顺序，也不要求
 Agent 声明使用了哪些 API。
 
@@ -122,9 +124,12 @@ Agent 获得以下能力：
 - 读取和修改当前 Project 的 Model Source。
 - 调用唯一的零参数 `validate_model` 工具。
 - 使用 Deep Agents 的通用文件工具进行目录浏览、检索、读取和编辑。
-- 使用本地 Shell 运行命令、Python 诊断脚本和辅助工具；需要时可安装依赖。
+- 使用本地 Shell 运行命令、Python 诊断脚本，以及环境中已安装的依赖和辅助工具。
 
 通用工具由 `LocalShellBackend` 提供，以当前 Project 为默认工作目录，并继承后端进程环境。
+每次运行的 System Prompt 会注入当前 Project 的绝对路径，并要求 Agent 仅在该目录内
+读取和写入 Project 文件；仓库的 `skills/` 与 `examples/` 作为只读例外，可供 Agent
+浏览、检索和读取。Agent 不应扫描父目录、其他 Project 或无关路径。
 它不提供沙箱隔离；本项目按可信本机开发环境使用。正式 CAD 结果仍必须通过
 `validate_model` 的结构化验证。它不检查文档阅读、API 名称、源码内容或编辑方式，
 只执行当前 `model.py` 并返回验证事实。
@@ -134,11 +139,11 @@ Agent 获得以下能力：
 后端先创建 `model.py` 骨架，固定以下约定：
 
 - 使用当前 Project 的 `artifacts/` 作为 `export_dir`。
-- 只有一个 `@scad.model` 顶层入口。
+- 只有一个 `build_model(model: cad.Model) -> cad.Shape` 顶层入口。
 - 捕获一个最终 Solid。
 - 产出 canonical `model.scene.zip`。
 
-Agent 可以编辑整个文件，以便增加导入、辅助函数和本地模块，也可以在需要时使用或安装其他依赖。建模 API 仍以 `simplecadapi` 为准；后端不做 AST、import 或危险调用检查。
+Agent 可以编辑整个文件，以便增加导入、辅助函数和本地模块，也可以在需要时使用或安装其他依赖。建模 API 以 CadFlow 文档化的 `Model`/`Shape` 为准；后端不做 AST、import 或危险调用检查。后端验证 native Shape 后，通过 CadFlow 的公开 STEP/Scene 接口生成 canonical Scene Artifact。
 
 未来支持复杂装配时，可以在同一 Project 中生成多个本地 Python 模块并互相导入，但仍不默认允许任意第三方依赖。
 

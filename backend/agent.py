@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import math
 import os
-import inspect
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -13,6 +13,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from langchain_core.tools import BaseTool, tool
 
+from .agent_logging import AgentRunLog
 from .cad_executor import (
     CAD_EXECUTION_TIMEOUT_SECONDS,
     CancellationToken,
@@ -148,21 +149,23 @@ and record the important assumptions in comments near the top of Model Source.
 
 Use a run-local plan with write_todos when useful. You have general filesystem,
 search, editing, and local shell tools. Use them freely to inspect the workspace,
-read the loaded SimpleCADAPI Skill, run Python, create diagnostic scripts,
-inspect generated artifacts, and install or use dependencies when they help.
+read the loaded CadFlow Skill, run Python, create diagnostic scripts, inspect
+generated artifacts, and use installed tools or dependencies when they help.
 The shell is a trusted local development environment, not a sandbox. Keep the
-final CAD implementation in the current Project's model.py and use
-SimpleCADAPI as its modeling API.
+final CAD implementation in the current Project's model.py and use only
+CadFlow's documented Python-first Model/Shape API as its modeling API. Do not
+use CadFlow's compatibility decorator API, legacy *_rsolid operations, private
+cadflow._engine modules, or direct OCP/OpenCascade imports.
 
 Begin from the current Model Source, but you may replace the complete file and
 add imports, local modules, helper functions, or useful dependencies. Use the
-built-in file tools to edit it. Keep one top-level model entry point, one
-physical part, and one captured final Solid. Keep the canonical
-artifacts/model.scene.zip export contract.
+built-in file tools to edit it. Keep one build_model(model: cad.Model) entry
+point, one physical part, and one returned final cad.Shape. The backend creates
+the canonical artifacts/model.scene.zip after validating the Shape.
 
 After writing the complete Model Source, call validate_model. Its structured
 result is the source of truth: inspect status, exit_code, error, stdout,
-stderr, captured_solid_count, solid_volume, scene_artifact_exists,
+stderr, final_shape_count, solid_count, solid_volume, scene_artifact_exists,
 scene_parse_result, and artifact_entries. If the result is not fully valid,
 diagnose the reported facts, replace the complete current Model Source with a
 repair, and execute it again. A repair must use the latest source and may add
@@ -171,6 +174,51 @@ Artifact contract. Continue only while the bounded tool allows another CAD
 execution; never evade that limit by replanning, using another tool, or
 creating another Agent. Stop as soon as a Validated Result is reported.
 """
+
+
+def _build_agent_system_prompt(
+    *,
+    workspace_root: str | Path,
+    skill_root: str | Path | None,
+    example_root: str | Path | None,
+) -> str:
+    """Add the concrete run-local filesystem boundaries to the Agent prompt."""
+
+    project_dir = Path(workspace_root).expanduser().resolve()
+    read_only_roots = [
+        Path(root).expanduser().resolve()
+        for root in (skill_root, example_root)
+        if root is not None
+    ]
+    read_only_lines = "\n".join(f"- `{root}`" for root in read_only_roots)
+    if not read_only_lines:
+        read_only_lines = "- None"
+    return (
+        _SYSTEM_PROMPT
+        + f"""
+
+## Filesystem boundaries for this run
+
+The current Project workspace is exactly:
+`{project_dir}`
+
+Treat that directory as the working directory and the base for every relative
+path. Read, create, edit, and delete Project files only inside that directory.
+The required Model Source is `{project_dir / "model.py"}`. Do not search parent
+directories, sibling directories, or other Projects to locate it.
+
+The following directories are read-only reference exceptions outside the
+Project workspace:
+{read_only_lines}
+
+You may list, search, and read files under those reference directories, but
+must never create, edit, rename, or delete anything there. Do not inspect or
+modify files elsewhere. Shell commands must follow the same workspace and
+reference boundaries: they may execute installed tools and the Python
+interpreter, but command outputs and generated files must stay inside the
+Project workspace.
+"""
+    )
 
 
 def build_chat_model(settings: AgentSettings) -> Any:
@@ -273,6 +321,7 @@ def build_deep_agent(
     model: Any | None = None,
     workspace_root: str | Path | None = None,
     skill_root: str | Path | None = None,
+    example_root: str | Path | None = None,
 ) -> Any:
     """Build one Deep Agent with general local tools and CAD-specific tools."""
 
@@ -296,8 +345,9 @@ def build_deep_agent(
         ),
     )
     resolved_model = build_chat_model(settings) if model is None else model
+    resolved_workspace_root = Path(workspace_root or Path.cwd()).expanduser().resolve()
     backend = LocalShellBackend(
-        root_dir=workspace_root or Path.cwd(),
+        root_dir=resolved_workspace_root,
         virtual_mode=False,
         timeout=int(CAD_EXECUTION_TIMEOUT_SECONDS),
         inherit_env=True,
@@ -305,7 +355,11 @@ def build_deep_agent(
     return create_deep_agent(
         model=resolved_model,
         tools=tuple(tools),
-        system_prompt=_SYSTEM_PROMPT,
+        system_prompt=_build_agent_system_prompt(
+            workspace_root=resolved_workspace_root,
+            skill_root=skill_root,
+            example_root=example_root,
+        ),
         subagents=(),
         skills=[str(skill_root)] if skill_root is not None else None,
         backend=backend,
@@ -327,12 +381,14 @@ class ReferenceGroundedAgent:
         project_dir: str | Path,
         executor: Any | None = None,
         model: Any | None = None,
+        run_log: AgentRunLog | None = None,
     ) -> None:
         self.settings = settings
         self.repo_root = repo_root
         self.project_dir = project_dir
         self.executor = executor
         self.model = model
+        self.run_log = run_log
 
     def run(
         self,
@@ -358,6 +414,11 @@ class ReferenceGroundedAgent:
                 return
 
         def on_tool_use(record: ToolUseRecord) -> None:
+            if (
+                self.run_log is not None
+                and record.tool_name == "prepare_model_source"
+            ):
+                self.run_log.record_internal_tool(record.tool_name, record.target)
             if record.tool_name == "prepare_model_source":
                 emit(ProgressUpdate(stage="preparing", tool="project"))
 
@@ -397,12 +458,14 @@ class ReferenceGroundedAgent:
                 model=self.model,
                 workspace_root=self.project_dir,
                 skill_root=Path(self.repo_root) / "skills",
+                example_root=Path(self.repo_root) / "examples",
             )
             agent_error, timed_out = _invoke_agent_with_deadline(
                 agent,
                 prompt,
                 deadline=deadline,
                 cancellation_token=token,
+                run_log=self.run_log,
             )
         except Exception as exc:  # Agent/provider errors become a safe diagnosis.
             agent_error = _safe_failure_reason(exc)
@@ -485,6 +548,9 @@ class AgentRunService:
         if prompt_submitted and project.state != ProjectState.RUNNING:
             raise AgentRunError("Agent Run requires a Running Project")
         token = cancellation_token or CancellationToken()
+        run_log = AgentRunLog(
+            self.store.project_directory(project.project_id),
+        )
         if token.cancelled:
             outcome = AgentRunOutcome(
                 validated=False,
@@ -496,9 +562,18 @@ class AgentRunService:
                 outcome.failure_reason or "Agent Run stopped by caller",
                 outcome.diagnostics(),
             )
+            run_log.finish(
+                status=outcome.status,
+                failure_reason=outcome.failure_reason,
+            )
             return outcome
         try:
             settings = self.settings_factory()
+            run_log.configure(
+                provider=settings.provider,
+                model_id=settings.model_id,
+                base_url=settings.base_url,
+            )
         except Exception as exc:
             reason = _safe_failure_reason(exc)
             outcome = AgentRunOutcome(validated=False, failure_reason=reason)
@@ -517,14 +592,31 @@ class AgentRunService:
                 self.store.mark_failed(
                     project.project_id, reason, outcome.diagnostics()
                 )
+            run_log.finish(
+                status=outcome.status,
+                failure_reason=outcome.failure_reason,
+            )
             return outcome
 
         try:
-            agent = self.agent_factory(
-                settings=settings,
-                repo_root=self.repo_root,
-                project_dir=self.store.project_directory(project.project_id),
-            )
+            factory_kwargs: dict[str, Any] = {
+                "settings": settings,
+                "repo_root": self.repo_root,
+                "project_dir": self.store.project_directory(project.project_id),
+            }
+            try:
+                factory_parameters = inspect.signature(self.agent_factory).parameters
+            except (TypeError, ValueError):
+                factory_parameters = {}
+            if (
+                "run_log" in factory_parameters
+                or any(
+                    item.kind is inspect.Parameter.VAR_KEYWORD
+                    for item in factory_parameters.values()
+                )
+            ):
+                factory_kwargs["run_log"] = run_log
+            agent = self.agent_factory(**factory_kwargs)
             outcome = _invoke_agent_run(
                 agent,
                 project.prompt or prompt,
@@ -551,6 +643,10 @@ class AgentRunService:
                 outcome.failure_reason or "Agent Run stopped by caller",
                 outcome.diagnostics(),
             )
+            run_log.finish(
+                status=outcome.status,
+                failure_reason=outcome.failure_reason,
+            )
             return outcome
         if outcome.validated:
             try:
@@ -573,6 +669,10 @@ class AgentRunService:
                 outcome.failure_reason or "Agent Run failed",
                 outcome.diagnostics(),
             )
+        run_log.finish(
+            status=outcome.status,
+            failure_reason=outcome.failure_reason,
+        )
         return outcome
 
 
@@ -607,7 +707,8 @@ def _is_validated_result(result: ExecutionResult) -> bool:
     return bool(
         result.status == "succeeded"
         and result.exit_code == 0
-        and result.captured_solid_count == 1
+        and result.final_shape_count == 1
+        and result.solid_count == 1
         and result.solid_volume is not None
         and math.isfinite(result.solid_volume)
         and result.solid_volume > 0
@@ -663,7 +764,8 @@ def _execution_failure_result(error: Exception) -> ExecutionResult:
         stderr="",
         stdout_truncated=False,
         stderr_truncated=False,
-        captured_solid_count=None,
+        final_shape_count=None,
+        solid_count=None,
         solid_volume=None,
         scene_artifact_exists=False,
         scene_parse_result=SceneParseResult(
@@ -681,6 +783,7 @@ def _invoke_agent_with_deadline(
     *,
     deadline: float,
     cancellation_token: CancellationToken,
+    run_log: AgentRunLog | None = None,
 ) -> tuple[str | None, bool]:
     """Invoke the primary Agent without allowing a blocking call past the budget."""
 
@@ -693,6 +796,9 @@ def _invoke_agent_with_deadline(
 
     def invoke() -> None:
         try:
+            config: dict[str, Any] = {}
+            if run_log is not None:
+                config["callbacks"] = [run_log.callback_handler()]
             agent.invoke(
                 {
                     "messages": [
@@ -704,7 +810,8 @@ def _invoke_agent_with_deadline(
                             ),
                         }
                     ]
-                }
+                },
+                config=config or None,
             )
         except Exception as exc:
             error.append(exc)

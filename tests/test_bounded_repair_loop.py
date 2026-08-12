@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -33,7 +34,8 @@ def _execution_result(
         stderr="bounded stderr",
         stdout_truncated=False,
         stderr_truncated=False,
-        captured_solid_count=1 if volume is not None else 0,
+        final_shape_count=1 if volume is not None else 0,
+        solid_count=1 if volume is not None else 0,
         solid_volume=volume,
         scene_artifact_exists=scene_valid,
         scene_parse_result=SceneParseResult(valid=scene_valid),
@@ -97,7 +99,7 @@ def test_validate_model_exposes_each_diagnosis_and_hard_stops_at_three(
         "second failure",
         None,
     ]
-    assert third["captured_solid_count"] == 1
+    assert third["final_shape_count"] == 1
     assert third["scene_parse_result"]["valid"] is True
 
     with pytest.raises(AgentRunError, match="at most 3 CAD executions"):
@@ -216,6 +218,13 @@ def test_agent_run_service_persists_three_attempts_and_removes_partial_output(
     assert not (tmp_path / project.project_id / "artifacts").exists() or not any(
         (tmp_path / project.project_id / "artifacts").iterdir()
     )
+    agent_log = tmp_path / project.project_id / "agent-run.jsonl"
+    assert agent_log.is_file()
+    records = [
+        json.loads(line)
+        for line in agent_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert records[-1]["status"] == "failed"
 
 
 def test_chat_model_configures_only_two_provider_retries() -> None:

@@ -26,7 +26,7 @@ from .scene_validation import SceneParseResult, validate_scene_artifact
 
 CAD_EXECUTION_TIMEOUT_SECONDS = 120.0
 DEFAULT_OUTPUT_BYTES = 64 * 1024
-_RESULT_PREFIX = "__SIMPLECAD_EXECUTION_RESULT__"
+_RESULT_PREFIX = "__CADFLOW_EXECUTION_RESULT__"
 
 _SENSITIVE_ENV_NAME = re.compile(
     r"(?i)(api[_-]?(?:key|token)|access[_-]?token|secret|password|credential|"
@@ -55,7 +55,8 @@ class ExecutionResult:
     stderr: str
     stdout_truncated: bool
     stderr_truncated: bool
-    captured_solid_count: int | None
+    final_shape_count: int | None
+    solid_count: int | None
     solid_volume: float | None
     scene_artifact_exists: bool
     scene_parse_result: SceneParseResult
@@ -76,7 +77,8 @@ class ExecutionResult:
             "stderr": self.stderr,
             "stdout_truncated": self.stdout_truncated,
             "stderr_truncated": self.stderr_truncated,
-            "captured_solid_count": self.captured_solid_count,
+            "final_shape_count": self.final_shape_count,
+            "solid_count": self.solid_count,
             "solid_volume": self.solid_volume,
             "scene_artifact_exists": self.scene_artifact_exists,
             "scene_parse_result": self.scene_parse_result.to_dict(),
@@ -283,7 +285,7 @@ class CADExecutor:
             )
         )
         payload = _runner_payload(bytes(stdout_collector.payload))
-        captured_count, solid_volume = _solid_facts(payload)
+        shape_count, solid_count, solid_volume = _shape_facts(payload)
 
         status = "succeeded"
         error: str | None = None
@@ -304,15 +306,18 @@ class CADExecutor:
             )
         elif payload is None:
             status = "failed"
-            error = "CAD process did not report a captured Model Source result"
-        elif captured_count != 1:
+            error = "CAD process did not report a CadFlow Model Source result"
+        elif shape_count != 1:
             status = "failed"
-            error = f"Model Source captured {captured_count or 0} Solids; expected exactly one"
+            error = f"Model Source returned {shape_count or 0} Shapes; expected exactly one"
+        elif solid_count != 1:
+            status = "failed"
+            error = f"Model Source Shape contains {solid_count or 0} solids; expected exactly one"
         elif (
             solid_volume is None or not math.isfinite(solid_volume) or solid_volume <= 0
         ):
             status = "failed"
-            error = "captured Solid volume must be finite and greater than zero"
+            error = "final Shape volume must be finite and greater than zero"
         elif _artifact_has_symlink(artifact_dir):
             status = "failed"
             error = "artifacts must not contain symbolic links"
@@ -331,7 +336,8 @@ class CADExecutor:
             stderr=stderr,
             stdout_truncated=stdout_was_truncated,
             stderr_truncated=stderr_was_truncated,
-            captured_solid_count=captured_count,
+            final_shape_count=shape_count,
+            solid_count=solid_count,
             solid_volume=solid_volume,
             scene_artifact_exists=scene_exists,
             scene_parse_result=scene_parse,
@@ -415,19 +421,21 @@ def _runner_payload(raw_stdout: bytes) -> dict[str, object] | None:
     return None
 
 
-def _solid_facts(payload: dict[str, object] | None) -> tuple[int | None, float | None]:
+def _shape_facts(
+    payload: dict[str, object] | None,
+) -> tuple[int | None, int | None, float | None]:
     if payload is None:
-        return None, None
-    count = payload.get("captured_solid_count")
-    volumes = payload.get("solid_volumes")
+        return None, None, None
+    count = payload.get("final_shape_count")
+    solid_count = payload.get("solid_count")
+    volume = payload.get("solid_volume")
     if not isinstance(count, int) or isinstance(count, bool):
-        return None, None
-    volume = None
-    if count == 1 and isinstance(volumes, list) and len(volumes) == 1:
-        candidate = volumes[0]
-        if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
-            volume = float(candidate)
-    return count, volume
+        return None, None, None
+    if not isinstance(solid_count, int) or isinstance(solid_count, bool):
+        solid_count = None
+    if not isinstance(volume, (int, float)) or isinstance(volume, bool):
+        volume = None
+    return count, solid_count, float(volume) if volume is not None else None
 
 
 def _first_error(stderr: str, stdout: str, fallback: str) -> str:
@@ -510,33 +518,46 @@ _RUNNER_SOURCE = f"""\
 import json
 import runpy
 import sys
+import tempfile
+from pathlib import Path
 
-import simplecadapi as scad
-
-
-namespace = runpy.run_path(sys.argv[1], run_name="__main__")
-model_result = namespace.get("MODEL_RESULT")
-if model_result is None:
-    raise RuntimeError("Model Source must define MODEL_RESULT from its @scad.model entry point")
+import cadflow as cad
 
 
-solids = []
+model_path = Path(sys.argv[1]).resolve()
+namespace = runpy.run_path(str(model_path), run_name="cadflow_model_source")
+build_model = namespace.get("build_model")
+if not callable(build_model):
+    raise RuntimeError("Model Source must define build_model(model) -> cad.Shape")
 
-
-def collect(value):
-    if isinstance(value, scad.Solid):
-        solids.append(value)
-    elif isinstance(value, (list, tuple, set, frozenset)):
-        for item in value:
-            collect(item)
-
-
-for captured in model_result.session.captured_values:
-    collect(captured)
+with cad.Model() as model:
+    final_shape = build_model(model)
+    if not isinstance(final_shape, cad.Shape):
+        raise TypeError("Model Source must return one CadFlow Shape")
+    topology = final_shape.topology
+    solid_count = int(topology.get("solids", 0))
+    solid_volume = float(final_shape.volume)
+    artifact_dir = model_path.parent / "artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".cadflow-bridge-", dir=model_path.parent) as bridge_dir:
+        step_path = Path(bridge_dir) / "model.step"
+        final_shape.export_step(str(step_path))
+        ocp_shape = cad.inspection.brep.load_step_rshape(step_path)
+        compat_solid = cad.Solid(ocp_shape)
+        package = cad.compile_scene(
+            scene_id="model",
+            roots=(cad.SceneRoot(root_id="main", value=compat_solid),),
+            source=cad.SceneSource(kind="manual", source_id="model.py"),
+        )
+        cad.export_scene(
+            package=package,
+            path=artifact_dir / "model.scene.zip",
+        )
 
 payload = {{
-    "captured_solid_count": len(solids),
-    "solid_volumes": [float(solid.get_volume()) for solid in solids],
+    "final_shape_count": 1,
+    "solid_count": solid_count,
+    "solid_volume": solid_volume,
 }}
 print({_RESULT_PREFIX!r} + json.dumps(payload, separators=(",", ":")), flush=True)
 """

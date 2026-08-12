@@ -1,21 +1,24 @@
 [project]
 name = "text-to-cad-agent"
 version = "0.1.0"
-description = "A text-to-CAD agent built on SimpleCADAPI"
+description = "A text-to-CAD agent built on CadFlow"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.12,<3.13"
 dependencies = [
+    "cadflow==0.1.0",
     "deepagents==0.7.5",
     "fastapi>=0.115,<1",
     "langchain-openai>=1.0,<2",
     "python-dotenv>=1.0,<2",
-    "simplecadapi @ git+https://github.com/NiJingzhe/SimpleCADAPI.git@058624ea0ea2cba0d292f7d30882facdab043d57",
     "uvicorn>=0.34,<1",
 ]
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+cadflow = { path = "vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
