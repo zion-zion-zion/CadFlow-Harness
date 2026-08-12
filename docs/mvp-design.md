@@ -112,21 +112,22 @@ output/projects/<project_id>/
 
 ### 7.3 文档与工具
 
-System Prompt 告知 Agent SimpleCADAPI Skill、API 文档和 examples 的只读入口。Agent 必须读取：
+后端通过 Deep Agents 的 SkillsMiddleware 加载 `skills/simplecadapi/`。Agent 使用
+内置文件工具按需阅读 Skill、API 文档和 examples；后端不再追踪阅读顺序，也不要求
+Agent 声明使用了哪些 API。
 
-1. `skills/simplecadapi/SKILL.md`。
-2. Skill 要求的 API/stdlib 索引。
-3. 实际使用的每个 API 的精确文档。
+Agent 获得以下能力：
 
-文档按需读取，不把整个 Skill 一次性塞进模型上下文。
-
-Agent 只获得以下能力：
-
-- 读取允许的 Skill、API 文档和 examples。
+- 按需读取 Skill、API 文档和 examples。
 - 读取和修改当前 Project 的 Model Source。
-- 调用专用 `execute_model` 工具。
+- 调用唯一的零参数 `validate_model` 工具。
+- 使用 Deep Agents 的通用文件工具进行目录浏览、检索、读取和编辑。
+- 使用本地 Shell 运行命令、Python 诊断脚本和辅助工具；需要时可安装依赖。
 
-不提供通用 Shell，也不允许工具修改其他 Project 或仓库文件。
+通用工具由 `LocalShellBackend` 提供，以当前 Project 为默认工作目录，并继承后端进程环境。
+它不提供沙箱隔离；本项目按可信本机开发环境使用。正式 CAD 结果仍必须通过
+`validate_model` 的结构化验证。它不检查文档阅读、API 名称、源码内容或编辑方式，
+只执行当前 `model.py` 并返回验证事实。
 
 ### 7.4 Model Source
 
@@ -137,7 +138,7 @@ Agent 只获得以下能力：
 - 捕获一个最终 Solid。
 - 产出 canonical `model.scene.zip`。
 
-Agent 可以编辑整个文件，以便增加导入和辅助函数。当前 MVP 的代码约束是只使用 Python 标准库和 `simplecadapi`；这一约束通过 Agent 指令执行，后端不做 AST、import 或危险调用检查。
+Agent 可以编辑整个文件，以便增加导入、辅助函数和本地模块，也可以在需要时使用或安装其他依赖。建模 API 仍以 `simplecadapi` 为准；后端不做 AST、import 或危险调用检查。
 
 未来支持复杂装配时，可以在同一 Project 中生成多个本地 Python 模块并互相导入，但仍不默认允许任意第三方依赖。
 
@@ -152,7 +153,7 @@ Prompt 未给出单位时默认使用毫米；缺少尺寸或结构细节时由 
 - CAD 子进程使用 FastAPI 当前的 Python 解释器，以 Project 为工作目录，并从环境中移除模型 API key 等无关凭证。
 - 不进行容器隔离或生成源码静态安全检查。
 
-`execute_model` 返回结构化结果，包括退出码、截断错误、最终 Solid 数量和体积、Scene ZIP 是否存在及能否解析。Agent 根据结果决定是否修复；三次仍未通过则 Project 成为 Failed。
+`validate_model` 返回结构化结果，包括退出码、截断错误、最终 Solid 数量和体积、Scene ZIP 是否存在及能否解析。Agent 根据结果决定是否修复；三次仍未通过则 Project 成为 Failed。
 
 ## 8. 成功条件
 

@@ -4,13 +4,25 @@ version = "0.1.0"
 description = "A text-to-CAD agent built on SimpleCADAPI"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.11,<3.14"
 dependencies = [
+    "deepagents==0.7.5",
+    "fastapi>=0.115,<1",
+    "langchain-openai>=1.0,<2",
+    "python-dotenv>=1.0,<2",
     "simplecadapi @ git+https://github.com/NiJingzhe/SimpleCADAPI.git@058624ea0ea2cba0d292f7d30882facdab043d57",
+    "uvicorn>=0.34,<1",
 ]
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-m 'not live_agent'"
+markers = [
+    "live_agent: opt-in tests that call the configured real model provider",
+]
 
 [dependency-groups]
 dev = [
