@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import math
 import os
-import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -40,10 +40,11 @@ class AgentRunCancelled(AgentRunError):
     """Raised inside a tool when the user has stopped the current Agent Run."""
 
 
-MAX_CAD_EXECUTIONS = 3
-MAX_AGENT_RUN_SECONDS = 5 * 60.0
+MAX_AGENT_RUN_SECONDS = 10 * 60.0
 AGENT_RUN_TIMEOUT_SECONDS = MAX_AGENT_RUN_SECONDS
 MAX_PROVIDER_RETRIES = 2
+
+_AGENT_RUN_TIMEOUT_MESSAGE = "Agent Run exceeded the ten-minute wall-clock limit"
 
 
 @dataclass(frozen=True)
@@ -166,13 +167,22 @@ the canonical artifacts/model.scene.zip after validating the Shape.
 After writing the complete Model Source, call validate_model. Its structured
 result is the source of truth: inspect status, exit_code, error, stdout,
 stderr, final_shape_count, solid_count, solid_volume, scene_artifact_exists,
-scene_parse_result, and artifact_entries. If the result is not fully valid,
-diagnose the reported facts, replace the complete current Model Source with a
-repair, and execute it again. A repair must use the latest source and may add
-imports or helpers, but must preserve the one-part and canonical Scene
-Artifact contract. Continue only while the bounded tool allows another CAD
-execution; never evade that limit by replanning, using another tool, or
-creating another Agent. Stop as soon as a Validated Result is reported.
+scene_parse_result, and artifact_entries.
+
+On each failed validation:
+1. Identify the failure category from the structured result.
+2. Identify the likely geometric, API, or source-code cause.
+3. Modify only what is necessary to address that specific failure, using the
+   latest Model Source while preserving the one-part and canonical Scene
+   Artifact contract.
+4. Revalidate the repaired Model Source only if it has materially changed.
+
+Never retry an unchanged or semantically equivalent model after validation
+failure. Each retry must address a specific reported failure. There is no CAD
+execution-count limit. Retry whenever a concrete repair has been made and time
+remains within the ten-minute Agent Run deadline. Do not continue merely to use
+the available time. Never evade the deadline by replanning, using another tool,
+or creating another Agent. Stop as soon as a Validated Result is reported.
 """
 
 
@@ -240,7 +250,6 @@ def build_chat_model(settings: AgentSettings) -> Any:
 def create_agent_tools(
     validator: AgentModelValidator,
     *,
-    max_executions: int = 1,
     on_execution: Callable[[ExecutionResult], None] | None = None,
     on_execution_error: Callable[[ExecutionResult], None] | None = None,
     run_deadline: float | None = None,
@@ -250,9 +259,8 @@ def create_agent_tools(
 ) -> tuple[BaseTool, ...]:
     """Expose one zero-argument structured CAD validation tool."""
 
-    if max_executions < 1:
-        raise ValueError("max_executions must be positive")
     execution_attempts = 0
+
     def require_time_remaining() -> float | None:
         if _is_cancellation_requested(cancellation_token):
             raise AgentRunCancelled("Agent Run stopped by caller")
@@ -260,7 +268,7 @@ def create_agent_tools(
             return None
         remaining = run_deadline - clock()
         if remaining <= 0:
-            raise AgentRunError("Agent Run exceeded the five-minute wall-clock limit")
+            raise AgentRunError(_AGENT_RUN_TIMEOUT_MESSAGE)
         return remaining
 
     @tool("validate_model")
@@ -268,11 +276,6 @@ def create_agent_tools(
         """Run and structurally validate the current model.py and Scene Artifact."""
 
         nonlocal execution_attempts
-        if execution_attempts >= max_executions:
-            execution_word = "execution" if max_executions == 1 else "executions"
-            raise AgentRunError(
-                f"this Agent Run allows at most {max_executions} CAD {execution_word}"
-            )
         remaining = require_time_remaining()
         execution_attempts += 1
         execution_recorded = False
@@ -371,7 +374,7 @@ def build_deep_agent(
 
 
 class ReferenceGroundedAgent:
-    """Run one primary Deep Agent with a bounded repair budget."""
+    """Run one primary Deep Agent within a wall-clock deadline."""
 
     def __init__(
         self,
@@ -442,7 +445,6 @@ class ReferenceGroundedAgent:
 
         agent_tools = create_agent_tools(
             validator,
-            max_executions=MAX_CAD_EXECUTIONS,
             on_execution=record_execution,
             on_execution_error=record_execution,
             run_deadline=deadline,
@@ -475,7 +477,7 @@ class ReferenceGroundedAgent:
         if timed_out or token.cancellation_reason == "timeout" or duration > MAX_AGENT_RUN_SECONDS:
             return AgentRunOutcome(
                 validated=False,
-                failure_reason="Agent Run exceeded the five-minute wall-clock limit",
+                failure_reason=_AGENT_RUN_TIMEOUT_MESSAGE,
                 execution_result=execution,
                 execution_results=tuple(executions),
                 tool_use_records=validator.tool_use_records,
@@ -785,21 +787,19 @@ def _invoke_agent_with_deadline(
     cancellation_token: CancellationToken,
     run_log: AgentRunLog | None = None,
 ) -> tuple[str | None, bool]:
-    """Invoke the primary Agent without allowing a blocking call past the budget."""
+    """Invoke the primary Agent and cancel its task on Stop or timeout."""
 
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         cancellation_token.cancel(reason="timeout")
-        return "Agent Run exceeded the five-minute wall-clock limit", True
+        return _AGENT_RUN_TIMEOUT_MESSAGE, True
 
-    error: list[Exception] = []
-
-    def invoke() -> None:
-        try:
-            config: dict[str, Any] = {}
-            if run_log is not None:
-                config["callbacks"] = [run_log.callback_handler()]
-            agent.invoke(
+    async def invoke() -> tuple[str | None, bool]:
+        config: dict[str, Any] = {}
+        if run_log is not None:
+            config["callbacks"] = [run_log.callback_handler()]
+        task = asyncio.create_task(
+            agent.ainvoke(
                 {
                     "messages": [
                         {
@@ -813,22 +813,46 @@ def _invoke_agent_with_deadline(
                 },
                 config=config or None,
             )
-        except Exception as exc:
-            error.append(exc)
+        )
+        try:
+            while not task.done():
+                if cancellation_token.cancelled:
+                    task.cancel()
+                    await _await_cancelled_task(task)
+                    timed_out = cancellation_token.cancellation_reason == "timeout"
+                    return (
+                        _AGENT_RUN_TIMEOUT_MESSAGE
+                        if timed_out
+                        else "Agent Run stopped by caller",
+                        timed_out,
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    cancellation_token.cancel(reason="timeout")
+                    task.cancel()
+                    await _await_cancelled_task(task)
+                    return _AGENT_RUN_TIMEOUT_MESSAGE, True
+                await asyncio.wait({task}, timeout=min(0.05, remaining))
+            try:
+                task.result()
+            except Exception as exc:
+                return _safe_failure_reason(exc), False
+            return None, False
+        finally:
+            if not task.done():
+                task.cancel()
+                await _await_cancelled_task(task)
 
-    worker = threading.Thread(target=invoke, name="cadflow-agent", daemon=True)
-    worker.start()
-    while worker.is_alive():
-        worker.join(min(0.05, remaining))
-        if cancellation_token.cancelled:
-            return "Agent Run stopped by caller", False
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            cancellation_token.cancel(reason="timeout")
-            return "Agent Run exceeded the five-minute wall-clock limit", True
-    if error:
-        return _safe_failure_reason(error[0]), False
-    return None, False
+    return asyncio.run(invoke())
+
+
+async def _await_cancelled_task(task: asyncio.Task[Any]) -> None:
+    """Wait until Agent cancellation has propagated through LangGraph cleanup."""
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 def _safe_failure_text(message: str | None) -> str | None:
@@ -851,7 +875,6 @@ __all__ = [
     "AgentSettings",
     "AGENT_RUN_TIMEOUT_SECONDS",
     "MAX_AGENT_RUN_SECONDS",
-    "MAX_CAD_EXECUTIONS",
     "MAX_PROVIDER_RETRIES",
     "ReferenceGroundedAgent",
     "build_chat_model",

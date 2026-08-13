@@ -484,13 +484,13 @@ async function stopRun(): Promise<void> {
 async function deleteProject(): Promise<void> {
   const project = currentProject();
   if (!project) return;
-  const confirmation = window.prompt(`Type the Project name to permanently delete “${project.name}”:`);
-  if (confirmation === null) return;
+  const confirmed = window.confirm(`Permanently delete “${project.name}”?`);
+  if (!confirmed) return;
   try {
     await request<void>(`/api/projects/${encodeURIComponent(project.project_id)}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirm_name: confirmation }),
+      body: JSON.stringify({ confirm_name: project.name }),
     });
     closeProgressStream();
     sceneRequest?.abort();

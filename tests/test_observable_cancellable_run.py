@@ -152,8 +152,8 @@ class _TimeoutRunHarness:
         cancellation_token.cancel(reason="timeout")
         return AgentRunOutcome(
             validated=False,
-            failure_reason="Agent Run exceeded the five-minute wall-clock limit",
-            duration_seconds=300.0,
+            failure_reason="Agent Run exceeded the ten-minute wall-clock limit",
+            duration_seconds=600.0,
         )
 
 
@@ -172,7 +172,7 @@ def test_internal_timeout_is_failed_instead_of_stopped(tmp_path: Path) -> None:
     failed = client.get(f"/api/projects/{project['project_id']}").json()
     assert failed["state"] == "Failed"
     assert failed["failure_reason"] == (
-        "Agent Run exceeded the five-minute wall-clock limit"
+        "Agent Run exceeded the ten-minute wall-clock limit"
     )
     events = app.state.event_store.read_after(project["project_id"], 0)
     assert events[-1].stage == "failed"

@@ -56,7 +56,7 @@ def _validation_tools(tmp_path: Path, executor: object, **kwargs: object):
     return restricted, by_name
 
 
-def test_validate_model_exposes_each_diagnosis_and_hard_stops_at_three(
+def test_validate_model_allows_retries_beyond_three_attempts(
     tmp_path: Path,
 ) -> None:
     class SequenceExecutor:
@@ -64,6 +64,8 @@ def test_validate_model_exposes_each_diagnosis_and_hard_stops_at_three(
             self.results = [
                 _execution_result(error="first failure"),
                 _execution_result(error="second failure"),
+                _execution_result(error="third failure"),
+                _execution_result(error="fourth failure"),
                 _execution_result(
                     status="succeeded",
                     error=None,
@@ -84,27 +86,22 @@ def test_validate_model_exposes_each_diagnosis_and_hard_stops_at_three(
     _restricted, tools = _validation_tools(
         tmp_path,
         executor,
-        max_executions=3,
-        run_deadline=300.0,
+        run_deadline=600.0,
         clock=lambda: 0.0,
     )
 
-    first = tools["validate_model"].invoke({})
-    second = tools["validate_model"].invoke({})
-    third = tools["validate_model"].invoke({})
+    results = [tools["validate_model"].invoke({}) for _ in range(5)]
 
-    assert executor.calls == 3
-    assert [item["error"] for item in (first, second, third)] == [
+    assert executor.calls == 5
+    assert [item["error"] for item in results] == [
         "first failure",
         "second failure",
+        "third failure",
+        "fourth failure",
         None,
     ]
-    assert third["final_shape_count"] == 1
-    assert third["scene_parse_result"]["valid"] is True
-
-    with pytest.raises(AgentRunError, match="at most 3 CAD executions"):
-        tools["validate_model"].invoke({})
-    assert executor.calls == 3
+    assert results[-1]["final_shape_count"] == 1
+    assert results[-1]["scene_parse_result"]["valid"] is True
 
 
 def test_validate_model_refuses_to_start_after_run_deadline(tmp_path: Path) -> None:
@@ -116,13 +113,12 @@ def test_validate_model_refuses_to_start_after_run_deadline(tmp_path: Path) -> N
     _restricted, tools = _validation_tools(
         tmp_path,
         NeverCalledExecutor(),
-        max_executions=3,
         run_deadline=10.0,
         clock=lambda: now[0],
     )
     now[0] = 10.001
 
-    with pytest.raises(AgentRunError, match="five-minute wall-clock limit"):
+    with pytest.raises(AgentRunError, match="ten-minute wall-clock limit"):
         tools["validate_model"].invoke({})
 
 
@@ -137,10 +133,9 @@ def test_reference_agent_adapter_turns_boundary_exception_into_diagnosis(
     _restricted, tools = _validation_tools(
         tmp_path,
         RaisingExecutor(),
-        max_executions=3,
         on_execution=records.append,
         on_execution_error=records.append,
-        run_deadline=300.0,
+        run_deadline=600.0,
         clock=lambda: 0.0,
     )
 
