@@ -41,6 +41,8 @@ class AgentModelValidator:
         *,
         cancellation_token: Any | None = None,
         timeout_seconds: float | None = None,
+        attempt: int | None = None,
+        preview_callback: Callable[[Any], None] | None = None,
     ) -> Any:
         executor = self._executor
         if executor is None:
@@ -52,6 +54,10 @@ class AgentModelValidator:
         kwargs: dict[str, Any] = {"cancellation_token": cancellation_token}
         if timeout_seconds is not None:
             kwargs["timeout_seconds"] = timeout_seconds
+        if attempt is not None:
+            kwargs["attempt"] = attempt
+        if preview_callback is not None:
+            kwargs["preview_callback"] = preview_callback
         return executor.execute(self._project_dir, **kwargs)
 
     def _record(self, tool_name: str, target: str) -> None:

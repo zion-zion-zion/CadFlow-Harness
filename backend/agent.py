@@ -18,6 +18,7 @@ from .cad_executor import (
     CAD_EXECUTION_TIMEOUT_SECONDS,
     CancellationToken,
     ExecutionResult,
+    PreviewFrame,
     redact_credentials,
 )
 from .contracts import ToolUseRecord
@@ -292,6 +293,22 @@ def create_agent_tools(
         remaining = require_time_remaining()
         execution_attempts += 1
         execution_recorded = False
+
+        def report_preview(frame: PreviewFrame) -> None:
+            if on_progress is None:
+                return
+            on_progress(
+                ProgressUpdate(
+                    stage="preview_ready",
+                    tool="cad",
+                    attempt=execution_attempts,
+                    result=f"{frame.operation} preview",
+                    preview_attempt=frame.attempt,
+                    preview_revision=frame.revision,
+                    preview_operation=frame.operation,
+                )
+            )
+
         try:
             result = validator.validate_model(
                 cancellation_token=cancellation_token,
@@ -300,6 +317,8 @@ def create_agent_tools(
                     if remaining is not None
                     else None
                 ),
+                attempt=execution_attempts,
+                preview_callback=report_preview if on_progress is not None else None,
             )
         except Exception as exc:
             if on_execution_error is None:

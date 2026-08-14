@@ -30,6 +30,9 @@ class ProgressUpdate:
     tool: str | None = None
     attempt: int | None = None
     result: str | None = None
+    preview_attempt: int | None = None
+    preview_revision: int | None = None
+    preview_operation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,9 @@ class ProgressEvent:
     tool: str | None = None
     attempt: int | None = None
     result: str | None = None
+    preview_attempt: int | None = None
+    preview_revision: int | None = None
+    preview_operation: str | None = None
 
     @property
     def id(self) -> int:
@@ -50,7 +56,7 @@ class ProgressEvent:
         return self.event_id
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "id": self.event_id,
             "created_at": self.created_at,
             "stage": self.stage,
@@ -58,10 +64,18 @@ class ProgressEvent:
             "attempt": self.attempt,
             "result": self.result,
         }
+        if self.preview_revision is not None:
+            payload["preview"] = {
+                "attempt": self.preview_attempt,
+                "revision": self.preview_revision,
+                "operation": self.preview_operation,
+            }
+        return payload
 
     def to_sse(self) -> str:
         data = json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"))
-        return f"id: {self.event_id}\nevent: progress\ndata: {data}\n\n"
+        event_name = "scene-preview" if self.preview_revision is not None else "progress"
+        return f"id: {self.event_id}\nevent: {event_name}\ndata: {data}\n\n"
 
 
 class ProgressEventStore:
@@ -84,6 +98,9 @@ class ProgressEventStore:
         tool: str | None = None,
         attempt: int | None = None,
         result: str | None = None,
+        preview_attempt: int | None = None,
+        preview_revision: int | None = None,
+        preview_operation: str | None = None,
     ) -> ProgressEvent:
         """Append one whitelisted operational update and return its ID."""
 
@@ -96,6 +113,11 @@ class ProgressEventStore:
             not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1
         ):
             raise ProgressEventError("Progress Event attempt must be positive")
+        _validate_preview_fields(
+            preview_attempt=preview_attempt,
+            preview_revision=preview_revision,
+            preview_operation=preview_operation,
+        )
         event = None
         with self._condition:
             path = self._events_path(project_id)
@@ -109,6 +131,9 @@ class ProgressEventStore:
                 tool=tool.strip()[:80] if tool is not None else None,
                 attempt=attempt,
                 result=_short_result(result),
+                preview_attempt=preview_attempt,
+                preview_revision=preview_revision,
+                preview_operation=preview_operation,
             )
             with path.open("a", encoding="utf-8") as stream:
                 stream.write(
@@ -214,6 +239,14 @@ def _event_from_dict(data: Any) -> ProgressEvent:
     tool = data.get("tool")
     attempt = data.get("attempt")
     result = data.get("result")
+    preview = data.get("preview")
+    preview_attempt = preview_revision = preview_operation = None
+    if preview is not None:
+        if not isinstance(preview, dict):
+            raise ProgressEventError("preview event payload is invalid")
+        preview_attempt = preview.get("attempt")
+        preview_revision = preview.get("revision")
+        preview_operation = preview.get("operation")
     if (
         not isinstance(event_id, int)
         or isinstance(event_id, bool)
@@ -228,6 +261,11 @@ def _event_from_dict(data: Any) -> ProgressEvent:
         or (result is not None and not isinstance(result, str))
     ):
         raise ProgressEventError("Progress Event fields are invalid")
+    _validate_preview_fields(
+        preview_attempt=preview_attempt,
+        preview_revision=preview_revision,
+        preview_operation=preview_operation,
+    )
     return ProgressEvent(
         event_id=event_id,
         created_at=created_at,
@@ -235,6 +273,9 @@ def _event_from_dict(data: Any) -> ProgressEvent:
         tool=tool,
         attempt=attempt,
         result=result,
+        preview_attempt=preview_attempt,
+        preview_revision=preview_revision,
+        preview_operation=preview_operation,
     )
 
 
@@ -253,6 +294,28 @@ def _short_result(result: str | None) -> str | None:
         raise ProgressEventError("Progress Event result must be text")
     first_line = result.strip().splitlines()[0] if result.strip() else ""
     return redact_credentials(first_line)[:MAX_EVENT_RESULT_CHARS] or None
+
+
+def _validate_preview_fields(
+    *,
+    preview_attempt: object,
+    preview_revision: object,
+    preview_operation: object,
+) -> None:
+    values = (preview_attempt, preview_revision, preview_operation)
+    if all(value is None for value in values):
+        return
+    if (
+        not isinstance(preview_attempt, int)
+        or isinstance(preview_attempt, bool)
+        or preview_attempt < 1
+        or not isinstance(preview_revision, int)
+        or isinstance(preview_revision, bool)
+        or preview_revision < 1
+        or not isinstance(preview_operation, str)
+        or not preview_operation.strip()
+    ):
+        raise ProgressEventError("preview event fields are invalid")
 
 
 def _timestamp() -> str:

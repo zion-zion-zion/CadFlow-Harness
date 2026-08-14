@@ -67,6 +67,51 @@ def test_progress_event_sse_payload_is_curated_and_has_no_raw_diagnostics(
     assert '"stderr"' not in payload
 
 
+def test_scene_preview_event_and_artifact_are_available_during_a_run(
+    tmp_path: Path,
+) -> None:
+    app = create_app(projects_root=tmp_path, run_service=_LifecycleRunHarness())
+    client = TestClient(app)
+    project = client.post("/api/projects", json={"name": "Preview"}).json()
+    running = app.state.project_store.submit_prompt(project["project_id"], "Create a box.")
+    assert running.state is ProjectState.RUNNING
+    preview_dir = tmp_path / project["project_id"] / "previews" / "1"
+    preview_dir.mkdir(parents=True)
+    (preview_dir / "1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "operation": "union",
+                "vertices": [0, 0, 0, 1, 0, 0, 0, 1, 0],
+                "triangles": [0, 1, 2],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        f"/api/projects/{project['project_id']}/previews/1/1"
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["operation"] == "union"
+    assert client.get(
+        f"/api/projects/{project['project_id']}/previews/1/2"
+    ).status_code == 404
+
+    event = app.state.event_store.append(
+        project["project_id"],
+        stage="preview_ready",
+        tool="cad",
+        attempt=1,
+        result="union preview",
+        preview_attempt=1,
+        preview_revision=1,
+        preview_operation="union",
+    )
+    assert event.to_sse().startswith("id: 1\nevent: scene-preview\ndata: ")
+
+
 def test_stopped_project_keeps_source_prompt_events_and_diagnostics_but_not_scene(
     tmp_path: Path,
 ) -> None:

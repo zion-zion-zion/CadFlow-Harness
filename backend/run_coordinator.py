@@ -226,6 +226,9 @@ class AgentRunCoordinator:
                 tool=update.tool,
                 attempt=update.attempt,
                 result=update.result,
+                preview_attempt=update.preview_attempt,
+                preview_revision=update.preview_revision,
+                preview_operation=update.preview_operation,
             )
 
         return record

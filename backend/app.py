@@ -209,6 +209,19 @@ def create_app(
             filename="model.scene.zip",
         )
 
+    @app.get("/api/projects/{project_id}/previews/{attempt}/{revision}")
+    def project_preview(project_id: str, attempt: int, revision: int) -> FileResponse:
+        _get_project_or_404(project_store, project_id)
+        try:
+            preview = project_store.preview_artifact(project_id, attempt, revision)
+        except ProjectStateError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(
+            preview,
+            media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
+
     _mount_frontend(app, frontend_dist)
     return app
 

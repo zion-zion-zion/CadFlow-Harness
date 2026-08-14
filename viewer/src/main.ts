@@ -23,6 +23,11 @@ type ProgressRecord = {
   tool: string | null;
   attempt: number | null;
   result: string | null;
+  preview?: {
+    attempt: number;
+    revision: number;
+    operation: string;
+  };
 };
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -131,6 +136,10 @@ let selectedVersion = 0;
 let progressByProject = new Map<string, ProgressRecord[]>();
 let eventSource: EventSource | null = null;
 let sceneRequest: AbortController | null = null;
+let previewRequest: AbortController | null = null;
+let previewProjectId: string | null = null;
+let latestPreviewAttempt = 0;
+let latestPreviewRevision = 0;
 let loadedSceneProjectId: string | null = null;
 let workspaceMessage = '';
 
@@ -258,7 +267,7 @@ function renderWorkspace(): void {
 
 function renderViewerEmpty(): void {
   const project = currentProject();
-  const visible = loadedSceneProjectId !== project?.project_id;
+  const visible = loadedSceneProjectId !== project?.project_id && previewProjectId !== project?.project_id;
   viewerEmpty.hidden = !visible;
   if (!project) {
     viewerEmptyTitle.textContent = 'No Project selected';
@@ -297,6 +306,43 @@ function closeProgressStream(): void {
   eventSource = null;
 }
 
+async function handlePreviewEvent(event: MessageEvent, projectId: string, version: number): Promise<void> {
+  if (version !== selectedVersion || selectedProjectId !== projectId || currentProject()?.state !== 'Running') return;
+  let controller: AbortController | null = null;
+  try {
+    const record = JSON.parse(event.data) as ProgressRecord;
+    const preview = record.preview;
+    if (!preview || !Number.isSafeInteger(preview.attempt) || preview.attempt < 1 || !Number.isSafeInteger(preview.revision) || preview.revision < 1 || typeof preview.operation !== 'string') return;
+    if (preview.attempt !== latestPreviewAttempt) {
+      if (preview.attempt < latestPreviewAttempt) return;
+      latestPreviewAttempt = preview.attempt;
+      latestPreviewRevision = 0;
+    }
+    if (preview.revision <= latestPreviewRevision) return;
+    latestPreviewRevision = preview.revision;
+    previewRequest?.abort();
+    controller = new AbortController();
+    previewRequest = controller;
+    const response = await fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/previews/${preview.attempt}/${preview.revision}`,
+      { signal: controller.signal },
+    );
+    if (!response.ok) throw new Error(`Preview request failed (${response.status})`);
+    const payload = await response.json() as unknown;
+    if (version !== selectedVersion || selectedProjectId !== projectId || latestPreviewAttempt !== preview.attempt || latestPreviewRevision !== preview.revision) return;
+    await sceneViewer.loadPreview(payload, `${preview.operation} preview`);
+    if (version === selectedVersion && selectedProjectId === projectId && latestPreviewAttempt === preview.attempt && latestPreviewRevision === preview.revision) {
+      previewProjectId = projectId;
+      renderViewerEmpty();
+    }
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return;
+    if (version === selectedVersion && selectedProjectId === projectId) setMessage('Live preview could not be displayed.');
+  } finally {
+    if (controller !== null && previewRequest === controller) previewRequest = null;
+  }
+}
+
 function openProgressStream(projectId: string, version: number): void {
   closeProgressStream();
   const source = new EventSource(`/api/projects/${encodeURIComponent(projectId)}/events`);
@@ -316,6 +362,18 @@ function openProgressStream(projectId: string, version: number): void {
       setMessage('Progress Event could not be displayed.');
     }
   });
+  source.addEventListener('scene-preview', (event) => {
+    void handlePreviewEvent(event as MessageEvent, projectId, version);
+    try {
+      const record = JSON.parse((event as MessageEvent).data) as ProgressRecord;
+      const events = progressByProject.get(projectId) ?? [];
+      if (!events.some((item) => item.id === record.id)) events.push(record);
+      progressByProject.set(projectId, events);
+      renderWorkspace();
+    } catch {
+      setMessage('Progress Event could not be displayed.');
+    }
+  });
 }
 
 async function refreshSelectedProject(version: number): Promise<void> {
@@ -330,9 +388,11 @@ async function refreshSelectedProject(version: number): Promise<void> {
     if (project.state === 'Succeeded' && loadedSceneProjectId !== projectId) await loadScene(project, version);
     if (project.state !== 'Succeeded' && loadedSceneProjectId === projectId) {
       loadedSceneProjectId = null;
-      sceneViewer.clear();
+      if (project.state === 'Failed' || project.state === 'Stopped') sceneViewer.markPreviewUnvalidated();
+      else sceneViewer.clear();
       renderViewerEmpty();
     }
+    if (project.state === 'Failed' || project.state === 'Stopped') sceneViewer.markPreviewUnvalidated();
   } catch (error) {
     if (version === selectedVersion) setMessage(errorMessage(error));
   }
@@ -344,6 +404,11 @@ async function loadScene(project: Project, version: number): Promise<void> {
   const controller = new AbortController();
   sceneRequest = controller;
   loadedSceneProjectId = null;
+  previewRequest?.abort();
+  previewRequest = null;
+  previewProjectId = null;
+  latestPreviewAttempt = 0;
+  latestPreviewRevision = 0;
   sceneViewer.clear('Loading canonical Scene Artifact');
   viewerEmpty.hidden = true;
   viewerLoading.hidden = false;
@@ -378,6 +443,11 @@ async function selectProject(projectId: string): Promise<void> {
   workspaceMessage = '';
   closeProgressStream();
   sceneRequest?.abort();
+  previewRequest?.abort();
+  previewRequest = null;
+  previewProjectId = null;
+  latestPreviewAttempt = 0;
+  latestPreviewRevision = 0;
   loadedSceneProjectId = null;
   sceneViewer.clear();
   progressByProject.set(projectId, []);
@@ -401,6 +471,11 @@ async function refreshCatalog(): Promise<void> {
       closeProgressStream();
       selectedProjectId = null;
       selectedVersion += 1;
+      previewRequest?.abort();
+      previewRequest = null;
+      previewProjectId = null;
+      latestPreviewAttempt = 0;
+      latestPreviewRevision = 0;
       loadedSceneProjectId = null;
       sceneViewer.clear();
     }
@@ -494,6 +569,11 @@ async function deleteProject(): Promise<void> {
     });
     closeProgressStream();
     sceneRequest?.abort();
+    previewRequest?.abort();
+    previewRequest = null;
+    previewProjectId = null;
+    latestPreviewAttempt = 0;
+    latestPreviewRevision = 0;
     projects = projects.filter((item) => item.project_id !== project.project_id);
     selectedProjectId = null;
     selectedVersion += 1;
@@ -533,6 +613,7 @@ promptInput.addEventListener('keydown', (event) => {
 window.addEventListener('beforeunload', () => {
   closeProgressStream();
   sceneRequest?.abort();
+  previewRequest?.abort();
   sceneViewer.dispose();
 });
 
