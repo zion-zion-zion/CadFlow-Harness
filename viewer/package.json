@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
-    "prepare:example": "uv run python ../examples/10_part_assembly.py"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@noble/hashes": "^1.8.0",

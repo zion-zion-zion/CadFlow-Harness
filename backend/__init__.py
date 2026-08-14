@@ -40,7 +40,6 @@ from .model_source import (
     ModelSourceScaffold,
     create_model_source,
 )
-from .references import ReferenceCatalog, ReferenceContractError
 from .restricted_tools import AgentModelValidator, RestrictedAgentTools
 from .projects import (
     MAX_PROMPT_CHARS,
@@ -94,8 +93,6 @@ __all__ = [
     "ProgressEventStore",
     "ProgressUpdate",
     "RESTART_RECOVERY_REASON",
-    "ReferenceCatalog",
-    "ReferenceContractError",
     "ReferenceGroundedAgent",
     "RestrictedAgentTools",
     "SCENE_ARTIFACT_NAME",

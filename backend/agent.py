@@ -150,13 +150,19 @@ and record the important assumptions in comments near the top of Model Source.
 
 Use a run-local plan with write_todos when useful. You have general filesystem,
 search, editing, and local shell tools. Use them freely to inspect the workspace,
-read the loaded CadFlow Skill, run Python, create diagnostic scripts, inspect
+read applicable CadFlow Skills, run Python, create diagnostic scripts, inspect
 generated artifacts, and use installed tools or dependencies when they help.
-The shell is a trusted local development environment, not a sandbox. Keep the
-final CAD implementation in the current Project's model.py and use only
-CadFlow's documented Python-first Model/Shape API as its modeling API. Do not
-use CadFlow's compatibility decorator API, legacy *_rsolid operations, private
-cadflow._engine modules, or direct OCP/OpenCascade imports.
+Use each Skill's description to decide whether it applies, then read the full
+SKILL.md before following it. Select only relevant Skills; combine modeling and
+validation guidance when both apply.
+
+The reusable Skill library may describe workflows and output types beyond this
+application. The Project contract below takes precedence for this run. The
+shell is a trusted local development environment, not a sandbox. Keep the final
+CAD implementation in the current Project's model.py and use only CadFlow's
+documented Python-first Model/Shape API as its modeling API. Do not use CadFlow's
+compatibility decorator API, legacy *_rsolid operations, private cadflow._engine
+modules, or direct OCP/OpenCascade imports.
 
 Begin from the current Model Source, but you may replace the complete file and
 add imports, local modules, helper functions, or useful dependencies. Use the

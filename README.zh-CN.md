@@ -11,9 +11,8 @@ CadFlowAgent 是一个可信的本机 Text-to-CAD 工作区。用户创建一个
 - `uv` 和 Node.js/npm
 - 将 `.env.example` 复制为 `.env` 并填写模型配置
 
-`feat/cadflow` 分支内置
-`vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl`，SHA256 为
-`28d45c71a3b0e4eb1f77168b984c1600f48823cc0d63f187e4529e30abae3ad8`。
+仓库内置 `vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl`，SHA256 为
+`d48acda48f29f5c022695c377f7e0f6089c188923091fd45c3fd2c0e3234886a`。
 
 ```bash
 uv sync --group dev
@@ -30,9 +29,14 @@ cd viewer && npm ci
 如需让其他机器访问本机 Viewer，可设置 `TEXT_TO_CAD_HOST`；该服务仍只适合
 可信的本机演示环境。
 
-## Model Source
+## Skills 与 Model Source
 
-Agent 读取 `skills/cadflow-model-part/`，生成如下契约的单文件 `model.py`：
+Agent 自动发现 `skills/` 下的 `SKILL.md` 工作流，根据描述选择与任务相关的
+skill，并仅在需要时读取完整说明。CadFlow 工作流和 API 引用以这些 skill 文件
+为准。
+
+当前应用仍采用更窄的执行契约：每个 Project 生成一个刚性单零件 `model.py`，
+入口如下：
 
 ```python
 import cadflow as cad
@@ -44,6 +48,8 @@ def build_model(model: cad.Model) -> cad.Shape:
 
 生成代码只能使用 CadFlow 文档化的 `Model`/`Shape` API。后端验证 Shape 后，
 内部生成 `artifacts/model.scene.zip`，STEP 只用于 Scene 桥接，不作为项目产物。
+展示柔性网格、可重放图或装配体的 skills 与 examples 属于 SDK 参考，不会扩大
+当前 Project 契约。
 
 ## 检查
 

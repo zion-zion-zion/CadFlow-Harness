@@ -226,7 +226,7 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { filename = "cadflow-0.1.0-cp312-cp312-linux_x86_64.whl", hash = "sha256:28d45c71a3b0e4eb1f77168b984c1600f48823cc0d63f187e4529e30abae3ad8" },
+    { filename = "cadflow-0.1.0-cp312-cp312-linux_x86_64.whl", hash = "sha256:d48acda48f29f5c022695c377f7e0f6089c188923091fd45c3fd2c0e3234886a" },
 ]
 
 [package.metadata]

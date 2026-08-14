@@ -219,6 +219,24 @@ def test_agent_prompt_confines_writes_and_exposes_read_only_references(
     )
 
 
+def test_agent_prompt_routes_through_applicable_skills_without_widening_contract(
+    tmp_path: Path,
+) -> None:
+    prompt = _build_agent_system_prompt(
+        workspace_root=tmp_path,
+        skill_root=Path(__file__).parents[1] / "skills",
+        example_root=Path(__file__).parents[1] / "examples",
+    )
+
+    assert "read applicable CadFlow Skills" in prompt
+    assert "Use each Skill's description to decide whether it applies" in prompt
+    assert "read the full\nSKILL.md before following it" in prompt
+    assert "combine modeling and\nvalidation guidance when both apply" in prompt
+    assert "The Project contract below takes precedence for this run" in prompt
+    assert "one returned final cad.Shape" in prompt
+    assert "read the loaded CadFlow Skill" not in prompt
+
+
 def test_agent_prompt_requires_diagnostic_repairs_before_retry(tmp_path: Path) -> None:
     prompt = _build_agent_system_prompt(
         workspace_root=tmp_path,

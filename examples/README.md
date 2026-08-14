@@ -1,13 +1,50 @@
 # CadFlow Examples
 
-These examples are copied from the local CadFlow checkout and use only the
-Python-first `cad.Model` and `cad.Shape` modeling boundary. They are reference
-material for the Text-to-CAD Agent; compatibility-layer examples using
-`@cad.model`, `capture_result`, or legacy `*_rsolid` operations are
-intentionally excluded.
+Run examples from the repository root with Python 3.12. Generated files are
+written under `examples/out/` and ignored by Git.
 
-Run an example from the repository root with Python 3.12:
+## Python-first Model/Shape examples
+
+These are the closest references for the Agent application's current
+single-rigid-part `model.py` contract:
+
+- `cadflow_complex_mounting_bracket.py`
+- `cadflow_sketch_support_bracket.py`
+- `cadflow_apartment_floor_plan.py`
+- `cadflow_flexible_jumpsuit.py` (a flexible-looking garment represented as a
+  rigid BREP)
+- `cadflow_sun_wukong_portrait.py`
 
 ```bash
 uv run python examples/cadflow_complex_mounting_bracket.py
 ```
+
+Adapt the construction techniques rather than copying an example entry point:
+the application runner still requires `build_model(model) -> cad.Shape` and one
+solid.
+
+## Static flexible mesh
+
+`cadflow_static_flexible_garment.py` uses `cadflow.flexible` to build and export
+a static mesh. It demonstrates the flexible SDK but does not satisfy the
+application's current `cad.Shape` return contract.
+
+```bash
+uv run python examples/cadflow_static_flexible_garment.py
+```
+
+## Replayable and compatibility APIs
+
+- `cadflow_ceramic_cup.py` uses replayable solid constructors.
+- `cadflow_weeping_willow.py` combines replayable constructors with specialized
+  rendering helpers.
+- `16_compact_two_stage_planetary_reducer/` is a modular replayable assembly.
+- `20_integrated_bldc_joint_actuator/` is a modular motor and reducer assembly.
+
+```bash
+uv run python examples/16_compact_two_stage_planetary_reducer/main.py
+uv run python examples/20_integrated_bldc_joint_actuator/main.py
+```
+
+These examples cover CadFlow SDK capabilities beyond the Agent application's
+single-part Model/Shape boundary.

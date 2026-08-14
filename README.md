@@ -13,7 +13,7 @@ canonical Scene Artifact.
 - API settings copied from `.env.example` to `.env`
 
 The repository vendors `vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl` (SHA256
-`28d45c71a3b0e4eb1f77168b984c1600f48823cc0d63f187e4529e30abae3ad8`).
+`d48acda48f29f5c022695c377f7e0f6089c188923091fd45c3fd2c0e3234886a`).
 
 ```bash
 uv sync --group dev
@@ -30,10 +30,15 @@ The backend listens on `127.0.0.1:8000` by default and the Vite viewer on
 `127.0.0.1:5173`. `TEXT_TO_CAD_HOST` may be set when the local viewer needs to
 reach the backend from another machine; this remains a trusted-demo boundary.
 
-## Model Source
+## Skills and Model Source
 
-The Agent reads `skills/cadflow-model-part/` and generates a single
-`model.py` with this public contract:
+The Agent discovers the `SKILL.md` workflows under `skills/`, selects the ones
+whose descriptions match the request, and reads their full instructions only
+when needed. The skill files are the source of truth for CadFlow workflows and
+API references.
+
+The current application still has a deliberately narrower execution contract:
+each Project generates a single rigid-part `model.py` with this entry point:
 
 ```python
 import cadflow as cad
@@ -45,7 +50,9 @@ def build_model(model: cad.Model) -> cad.Shape:
 
 Generated code must use only CadFlow's documented `Model`/`Shape` API. The
 backend creates `artifacts/model.scene.zip` after validating the returned Shape
-and keeps STEP conversion internal to the Scene bridge.
+and keeps STEP conversion internal to the Scene bridge. Skills and examples
+that demonstrate flexible meshes, replayable graphs, or assemblies are SDK
+references; they do not widen this Project contract.
 
 ## Checks
 
