@@ -32,7 +32,7 @@ class AgentModelValidator:
         return tuple(self._records)
 
     def begin_run(self) -> ModelSourceScaffold:
-        scaffold = create_model_source(self._project_dir, overwrite=True)
+        scaffold = create_model_source(self._project_dir, overwrite=False)
         self._record("prepare_model_source", "model.py")
         return scaffold
 

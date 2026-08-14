@@ -27,6 +27,7 @@ from .scene_validation import SceneParseResult, validate_scene_artifact
 CAD_EXECUTION_TIMEOUT_SECONDS = 120.0
 DEFAULT_OUTPUT_BYTES = 64 * 1024
 _RESULT_PREFIX = "__CADFLOW_EXECUTION_RESULT__"
+_PREFLIGHT_PREFIX = "__CADFLOW_PREFLIGHT__"
 
 _SENSITIVE_ENV_NAME = re.compile(
     r"(?i)(api[_-]?(?:key|token)|access[_-]?token|secret|password|credential|"
@@ -42,6 +43,7 @@ _BEARER_SECRET = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]+")
 _TOKEN_SECRET = re.compile(
     r"\b(?:sk|pk|ghp|github_pat|xox[baprs])-[A-Za-z0-9._~+/=-]{8,}"
 )
+_TRACEBACK_LOCATION = re.compile(r'File "([^"]+)", line (\d+)')
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,10 @@ class ExecutionResult:
     artifact_entries: tuple[str, ...]
     duration_seconds: float
     process_id: int | None = None
+    error_type: str | None = None
+    error_location: str | None = None
+    preflight_status: str = "not_run"
+    imported_modules: tuple[str, ...] = ()
 
     @property
     def output_truncated(self) -> bool:
@@ -85,6 +91,10 @@ class ExecutionResult:
             "artifact_entries": list(self.artifact_entries),
             "duration_seconds": self.duration_seconds,
             "process_id": self.process_id,
+            "error_type": self.error_type,
+            "error_location": self.error_location,
+            "preflight_status": self.preflight_status,
+            "imported_modules": list(self.imported_modules),
         }
 
 
@@ -182,10 +192,12 @@ class CADExecutor:
     ) -> ExecutionResult:
         """Execute ``model.py`` in the Project's working directory.
 
-        The source is intentionally executed without AST, import, or
-        dangerous-call inspection. This is the trusted-local-demo decision in
-        ADR-0004; the subprocess timeout, output bound, environment filtering,
-        and process termination are operational controls only.
+        The source is intentionally executed without policy-based AST, import,
+        or dangerous-call inspection. The compile/import preflight only reports
+        source errors; it does not reject an API based on its origin. This is
+        the trusted-local-demo decision in ADR-0004; the subprocess timeout,
+        output bound, environment filtering, and process termination are
+        operational controls only.
         """
 
         started = time.monotonic()
@@ -197,6 +209,10 @@ class CADExecutor:
         exit_code: int | None = None
         forced_status: str | None = None
         launch_error: str | None = None
+        preflight_error: str | None = None
+        preflight_location: str | None = None
+        preflight_status = "not_run"
+        imported_modules: tuple[str, ...] = ()
         stdout_collector = _OutputCollector(max_output_bytes)
         stderr_collector = _OutputCollector(max_output_bytes)
 
@@ -210,50 +226,55 @@ class CADExecutor:
             if _is_cancelled(cancellation_token):
                 forced_status = "cancelled"
             else:
-                process = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-u",
-                        "-c",
-                        _RUNNER_SOURCE,
-                        str(model_path),
-                    ],
-                    cwd=root,
-                    env=build_cad_environment(),
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    close_fds=True,
-                    start_new_session=os.name == "posix",
-                )
-                _register_process(cancellation_token, process)
-                stdout_thread = threading.Thread(
-                    target=stdout_collector.read_from,
-                    args=(process.stdout,),
-                    daemon=True,
-                )
-                stderr_thread = threading.Thread(
-                    target=stderr_collector.read_from,
-                    args=(process.stderr,),
-                    daemon=True,
-                )
-                stdout_thread.start()
-                stderr_thread.start()
-                while process.poll() is None:
-                    if _is_cancelled(cancellation_token):
+                preflight_error, preflight_location = _preflight_source(model_path)
+                if preflight_error is None:
+                    preflight_status = "passed"
+                    process = subprocess.Popen(
+                        [
+                            sys.executable,
+                            "-u",
+                            "-c",
+                            _RUNNER_SOURCE,
+                            str(model_path),
+                        ],
+                        cwd=root,
+                        env=build_cad_environment(),
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        close_fds=True,
+                        start_new_session=os.name == "posix",
+                    )
+                    _register_process(cancellation_token, process)
+                    stdout_thread = threading.Thread(
+                        target=stdout_collector.read_from,
+                        args=(process.stdout,),
+                        daemon=True,
+                    )
+                    stderr_thread = threading.Thread(
+                        target=stderr_collector.read_from,
+                        args=(process.stderr,),
+                        daemon=True,
+                    )
+                    stdout_thread.start()
+                    stderr_thread.start()
+                    while process.poll() is None:
+                        if _is_cancelled(cancellation_token):
+                            forced_status = "cancelled"
+                            _terminate_process(process)
+                            break
+                        if time.monotonic() - started >= timeout_seconds:
+                            forced_status = "timed_out"
+                            _terminate_process(process)
+                            break
+                        time.sleep(0.01)
+                    exit_code = process.wait()
+                    if forced_status is None and _is_cancelled(cancellation_token):
                         forced_status = "cancelled"
-                        _terminate_process(process)
-                        break
-                    if time.monotonic() - started >= timeout_seconds:
-                        forced_status = "timed_out"
-                        _terminate_process(process)
-                        break
-                    time.sleep(0.01)
-                exit_code = process.wait()
-                if forced_status is None and _is_cancelled(cancellation_token):
-                    forced_status = "cancelled"
-                stdout_thread.join(timeout=1.0)
-                stderr_thread.join(timeout=1.0)
+                    stdout_thread.join(timeout=1.0)
+                    stderr_thread.join(timeout=1.0)
+                else:
+                    preflight_status = "failed"
         except (OSError, ValueError) as exc:
             launch_error = str(exc)
             exit_code = process.poll() if process is not None else None
@@ -285,13 +306,30 @@ class CADExecutor:
             )
         )
         payload = _runner_payload(bytes(stdout_collector.payload))
+        preflight_payload = _runner_preflight_payload(bytes(stdout_collector.payload))
+        if preflight_payload is not None:
+            imported_modules = _module_names(preflight_payload)
+        elif (
+            preflight_status == "passed"
+            and exit_code != 0
+            and _looks_like_import_error(stderr, stdout)
+        ):
+            preflight_status = "failed"
         shape_count, solid_count, solid_volume = _shape_facts(payload)
 
         status = "succeeded"
         error: str | None = None
-        if launch_error is not None:
+        error_type: str | None = None
+        error_location: str | None = None
+        if preflight_error is not None:
+            status = "failed"
+            error = redact_credentials(preflight_error)
+            error_type = "syntax"
+            error_location = preflight_location
+        elif launch_error is not None:
             status = "failed"
             error = redact_credentials(launch_error)
+            error_type = "preflight"
         elif forced_status is not None:
             status = forced_status
             error = (
@@ -299,34 +337,46 @@ class CADExecutor:
                 if forced_status == "cancelled"
                 else f"CAD execution timed out after {timeout_seconds:g} seconds"
             )
+            error_type = forced_status
         elif exit_code != 0:
             status = "failed"
             error = _first_error(
                 stderr, stdout, "CAD process exited with a non-zero status"
             )
+            error_type = _classify_process_error(stderr, stdout)
+            error_location = _traceback_location(stderr, stdout)
         elif payload is None:
             status = "failed"
             error = "CAD process did not report a CadFlow Model Source result"
+            error_type = "execution"
         elif shape_count != 1:
             status = "failed"
             error = f"Model Source returned {shape_count or 0} Shapes; expected exactly one"
+            error_type = "topology"
         elif solid_count != 1:
             status = "failed"
             error = f"Model Source Shape contains {solid_count or 0} solids; expected exactly one"
+            error_type = "topology"
         elif (
             solid_volume is None or not math.isfinite(solid_volume) or solid_volume <= 0
         ):
             status = "failed"
             error = "final Shape volume must be finite and greater than zero"
+            error_type = "geometry"
         elif _artifact_has_symlink(artifact_dir):
             status = "failed"
             error = "artifacts must not contain symbolic links"
+            error_type = "scene"
         elif artifact_entries != (SCENE_ARTIFACT_NAME,):
             status = "failed"
             error = "artifacts must contain only artifacts/model.scene.zip"
+            error_type = "scene"
         elif not scene_parse.valid:
             status = "failed"
             error = scene_parse.error or "canonical Scene Artifact could not be parsed"
+            error_type = "scene"
+        if error_location is None and error_type in {"syntax", "import", "api"}:
+            error_location = _traceback_location(stderr, stdout)
 
         return ExecutionResult(
             status=status,
@@ -344,6 +394,10 @@ class CADExecutor:
             artifact_entries=artifact_entries,
             duration_seconds=duration,
             process_id=process.pid if process is not None else None,
+            error_type=error_type,
+            error_location=error_location,
+            preflight_status=preflight_status,
+            imported_modules=imported_modules,
         )
 
     @staticmethod
@@ -419,6 +473,72 @@ def _runner_payload(raw_stdout: bytes) -> dict[str, object] | None:
             return None
         return payload if isinstance(payload, dict) else None
     return None
+
+
+def _runner_preflight_payload(raw_stdout: bytes) -> dict[str, object] | None:
+    text = raw_stdout.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        if not line.startswith(_PREFLIGHT_PREFIX):
+            continue
+        try:
+            payload = json.loads(line[len(_PREFLIGHT_PREFIX) :])
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
+def _preflight_source(model_path: Path) -> tuple[str | None, str | None]:
+    """Compile Model Source without executing it or creating a pyc file."""
+
+    try:
+        source = model_path.read_text(encoding="utf-8")
+        compile(source, str(model_path), "exec")
+    except SyntaxError as exc:
+        location = f"{model_path}:{exc.lineno or 0}:{exc.offset or 0}"
+        return f"SyntaxError: {exc.msg}", location
+    except (OSError, UnicodeError) as exc:
+        return str(exc), str(model_path)
+    return None, None
+
+
+def _module_names(payload: dict[str, object]) -> tuple[str, ...]:
+    values = payload.get("imported_modules")
+    if not isinstance(values, list):
+        return ()
+    return tuple(value for value in values if isinstance(value, str))
+
+
+def _looks_like_import_error(stderr: str, stdout: str) -> bool:
+    text = f"{stderr}\n{stdout}"
+    return "ModuleNotFoundError" in text or "ImportError" in text
+
+
+def _classify_process_error(stderr: str, stdout: str) -> str:
+    text = f"{stderr}\n{stdout}"
+    if "SyntaxError" in text:
+        return "syntax"
+    if "ModuleNotFoundError" in text or "ImportError" in text:
+        return "import"
+    if any(
+        marker in text
+        for marker in (
+            "TypeError",
+            "AttributeError",
+            "NameError",
+            "NotImplementedError",
+        )
+    ):
+        return "api"
+    return "execution"
+
+
+def _traceback_location(stderr: str, stdout: str) -> str | None:
+    matches = _TRACEBACK_LOCATION.findall(f"{stderr}\n{stdout}")
+    if not matches:
+        return None
+    path, line = matches[-1]
+    return f"{path}:{line}"
 
 
 def _shape_facts(
@@ -516,6 +636,7 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
 
 _RUNNER_SOURCE = f"""\
 import json
+import builtins
 import runpy
 import sys
 import tempfile
@@ -525,10 +646,26 @@ import cadflow as cad
 
 
 model_path = Path(sys.argv[1]).resolve()
-namespace = runpy.run_path(str(model_path), run_name="cadflow_model_source")
+imported_modules = {{"cadflow"}}
+real_import = builtins.__import__
+
+def tracking_import(name, globals=None, locals=None, fromlist=(), level=0):
+    imported_modules.add(name)
+    return real_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = tracking_import
+try:
+    namespace = runpy.run_path(str(model_path), run_name="cadflow_model_source")
+finally:
+    builtins.__import__ = real_import
 build_model = namespace.get("build_model")
 if not callable(build_model):
     raise RuntimeError("Model Source must define build_model(model) -> cad.Shape")
+
+print({_PREFLIGHT_PREFIX!r} + json.dumps(
+    {{"status": "passed", "imported_modules": sorted(imported_modules)[:256]}},
+    separators=(",", ":"),
+), flush=True)
 
 with cad.Model() as model:
     final_shape = build_model(model)

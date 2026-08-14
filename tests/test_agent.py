@@ -235,6 +235,10 @@ def test_agent_prompt_routes_through_applicable_skills_without_widening_contract
     assert "The Project contract below takes precedence for this run" in prompt
     assert "one returned final cad.Shape" in prompt
     assert "read the loaded CadFlow Skill" not in prompt
+    assert "locally installed CadFlow or Python API" in prompt
+    assert "including compatibility, private, and" in prompt
+    assert "non-passing entry-point" in prompt
+    assert "Do not use the network or install dependencies" in prompt
 
 
 def test_agent_prompt_requires_diagnostic_repairs_before_retry(tmp_path: Path) -> None:
@@ -245,7 +249,7 @@ def test_agent_prompt_requires_diagnostic_repairs_before_retry(tmp_path: Path) -
     )
 
     assert "On each failed validation:" in prompt
-    assert "Identify the failure category from the structured result." in prompt
+    assert "Identify the failure category from error_type and preflight_status." in prompt
     assert "Identify the likely geometric, API, or source-code cause." in prompt
     assert "Modify only what is necessary to address that specific failure" in prompt
     assert "Revalidate the repaired Model Source only if it has materially changed." in prompt

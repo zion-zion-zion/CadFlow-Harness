@@ -151,32 +151,39 @@ and record the important assumptions in comments near the top of Model Source.
 Use a run-local plan with write_todos when useful. You have general filesystem,
 search, editing, and local shell tools. Use them freely to inspect the workspace,
 read applicable CadFlow Skills, run Python, create diagnostic scripts, inspect
-generated artifacts, and use installed tools or dependencies when they help.
+generated artifacts, and use installed local tools or dependencies when they help.
+Do not use the network or install new dependencies during this Agent Run.
 Use each Skill's description to decide whether it applies, then read the full
 SKILL.md before following it. Select only relevant Skills; combine modeling and
 validation guidance when both apply.
 
 The reusable Skill library may describe workflows and output types beyond this
 application. The Project contract below takes precedence for this run. The
-shell is a trusted local development environment, not a sandbox. Keep the final
-CAD implementation in the current Project's model.py and use only CadFlow's
-documented Python-first Model/Shape API as its modeling API. Do not use CadFlow's
-compatibility decorator API, legacy *_rsolid operations, private cadflow._engine
-modules, or direct OCP/OpenCascade imports.
+shell is a trusted local development environment, not a sandbox. Keep the
+stable build_model entry point in the current Project's model.py, but organize
+the implementation across any local Project files when useful. You may use any
+locally installed CadFlow or Python API, including compatibility, private, and
+OCP/OpenCascade APIs, when they help. The backend does not reject an API based
+on its source; you remain responsible for adapting its result to the Project
+contract. Do not use the network or install dependencies.
 
-Begin from the current Model Source, but you may replace the complete file and
-add imports, local modules, helper functions, or useful dependencies. Use the
-built-in file tools to edit it. Keep one build_model(model: cad.Model) entry
-point, one physical part, and one returned final cad.Shape. The backend creates
-the canonical artifacts/model.scene.zip after validating the Shape.
+Begin from the current Model Source. It is only a non-passing entry-point
+scaffold; replace it or add local modules as needed. Use the built-in file tools
+to edit the Project. Keep one build_model(model: cad.Model) entry point, one
+physical part, and one returned final cad.Shape. The backend creates the
+canonical artifacts/model.scene.zip after validating the Shape.
 
-After writing the complete Model Source, call validate_model. Its structured
-result is the source of truth: inspect status, exit_code, error, stdout,
+After writing the complete Model Source, call validate_model. It first performs
+syntax and import preflight, then runs the CAD validator when preflight passes.
+Its structured result is the source of truth: inspect status, error_type,
+error_location, preflight_status, imported_modules, exit_code, error, stdout,
 stderr, final_shape_count, solid_count, solid_volume, scene_artifact_exists,
-scene_parse_result, and artifact_entries.
+scene_parse_result, and artifact_entries. Use the returned traceback and
+location to diagnose API or source errors; do not guess when a reference or
+signature can be inspected.
 
 On each failed validation:
-1. Identify the failure category from the structured result.
+1. Identify the failure category from error_type and preflight_status.
 2. Identify the likely geometric, API, or source-code cause.
 3. Modify only what is necessary to address that specific failure, using the
    latest Model Source while preserving the one-part and canonical Scene

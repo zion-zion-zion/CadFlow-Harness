@@ -17,6 +17,9 @@ def test_prompt_submission_is_persisted_and_one_shot(tmp_path: Path) -> None:
     store = ProjectStore(tmp_path)
     project = store.create_project("Flange")
 
+    assert (tmp_path / project.project_id / "model.py").is_file()
+    assert (tmp_path / project.project_id / "artifacts").is_dir()
+
     running = store.submit_prompt(project.project_id, "Create a round flange.")
 
     assert running.state is ProjectState.RUNNING
@@ -79,7 +82,6 @@ def test_success_requires_the_canonical_scene_artifact(tmp_path: Path) -> None:
         store.mark_succeeded(project.project_id)
 
     artifact_dir = tmp_path / project.project_id / "artifacts"
-    artifact_dir.mkdir()
     (artifact_dir / "model.scene.zip").write_bytes(b"validated elsewhere")
     succeeded = store.mark_succeeded(project.project_id)
 

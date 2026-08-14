@@ -35,21 +35,23 @@ Agent 自动发现 `skills/` 下的 `SKILL.md` 工作流，根据描述选择与
 skill，并仅在需要时读取完整说明。CadFlow 工作流和 API 引用以这些 skill 文件
 为准。
 
-当前应用仍采用更窄的执行契约：每个 Project 生成一个刚性单零件 `model.py`，
-入口如下：
+当前应用仍采用更窄的输出契约：每个 Project 先创建一个不会通过验证的
+`model.py` 初始骨架，并保留以下稳定入口：
 
 ```python
 import cadflow as cad
 
 
 def build_model(model: cad.Model) -> cad.Shape:
-    return model.box(width=20.0, depth=30.0, height=10.0)
+    # Agent 会将此骨架替换为用户请求的零件。
+    raise NotImplementedError
 ```
 
-生成代码只能使用 CadFlow 文档化的 `Model`/`Shape` API。后端验证 Shape 后，
-内部生成 `artifacts/model.scene.zip`，STEP 只用于 Scene 桥接，不作为项目产物。
-展示柔性网格、可重放图或装配体的 skills 与 examples 属于 SDK 参考，不会扩大
-当前 Project 契约。
+Agent 拥有 Project 工作区，可以创建本地模块，也可以使用环境中已安装的
+CadFlow/Python API。后端不会根据 API 来源直接拒绝代码，但最终返回值仍必须是
+一个有效的 `cad.Shape`，包含一个 solid 且体积为正。后端验证 Shape 后，内部生成
+`artifacts/model.scene.zip`，STEP 只用于 Scene 桥接，不作为项目产物。Skills 和
+examples 继续全部可读；其中不同的输入或输出类型不会改变当前 Project 契约。
 
 ## 检查
 

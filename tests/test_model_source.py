@@ -8,7 +8,7 @@ from backend.model_source import (
 )
 
 
-def test_create_model_source_writes_complete_single_part_scaffold(tmp_path: Path) -> None:
+def test_create_model_source_writes_minimal_non_passing_scaffold(tmp_path: Path) -> None:
     scaffold = create_model_source(tmp_path)
 
     assert scaffold.model_path == tmp_path / MODEL_SOURCE_NAME
@@ -20,6 +20,15 @@ def test_create_model_source_writes_complete_single_part_scaffold(tmp_path: Path
     source = scaffold.model_path.read_text(encoding="utf-8")
     assert "import cadflow as cad" in source
     assert "def build_model(model: cad.Model) -> cad.Shape" in source
-    assert "return final_shape" in source
-    assert "with cad.Model() as model" in source
-    assert "final_shape.export_step" in source
+    assert "raise NotImplementedError" in source
+    assert "model.box" not in source
+    assert "final_shape.export_step" not in source
+
+
+def test_create_model_source_does_not_overwrite_existing_source(tmp_path: Path) -> None:
+    scaffold = create_model_source(tmp_path)
+    scaffold.model_path.write_text("custom source\n", encoding="utf-8")
+
+    create_model_source(tmp_path)
+
+    assert scaffold.model_path.read_text(encoding="utf-8") == "custom source\n"

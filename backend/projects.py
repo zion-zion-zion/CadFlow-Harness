@@ -13,6 +13,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 
+from .model_source import create_model_source
+
 
 MAX_PROMPT_CHARS = 32_000
 PROJECT_METADATA_NAME = "project.json"
@@ -114,6 +116,7 @@ class ProjectStore:
                 created_at=now,
                 updated_at=now,
             )
+            create_model_source(project_dir)
             self._write_metadata(project_dir, project)
             return project
 

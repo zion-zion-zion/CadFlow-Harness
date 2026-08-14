@@ -37,22 +37,26 @@ whose descriptions match the request, and reads their full instructions only
 when needed. The skill files are the source of truth for CadFlow workflows and
 API references.
 
-The current application still has a deliberately narrower execution contract:
-each Project generates a single rigid-part `model.py` with this entry point:
+The current application still has a deliberately narrower output contract:
+each Project starts with a non-passing `model.py` scaffold and keeps this stable
+entry point:
 
 ```python
 import cadflow as cad
 
 
 def build_model(model: cad.Model) -> cad.Shape:
-    return model.box(width=20.0, depth=30.0, height=10.0)
+    # The Agent replaces this scaffold with the requested part.
+    raise NotImplementedError
 ```
 
-Generated code must use only CadFlow's documented `Model`/`Shape` API. The
-backend creates `artifacts/model.scene.zip` after validating the returned Shape
-and keeps STEP conversion internal to the Scene bridge. Skills and examples
-that demonstrate flexible meshes, replayable graphs, or assemblies are SDK
-references; they do not widen this Project contract.
+The Agent owns the Project workspace and may add local modules or use any
+already-installed local CadFlow/Python API. The backend does not reject an API
+based on its source. The returned value must still be one valid `cad.Shape` with
+one solid and positive volume. The backend creates `artifacts/model.scene.zip`
+after validating the returned Shape and keeps STEP conversion internal to the
+Scene bridge. Skills and examples remain freely readable references; their
+alternative inputs or output types do not change this Project contract.
 
 ## Checks
 

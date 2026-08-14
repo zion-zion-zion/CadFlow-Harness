@@ -93,6 +93,14 @@ class _DeterministicSuccessHarness:
         project_dir = self.projects_root / project_id
         progress_callback(ProgressUpdate(stage="reading_references", tool="reference"))
         scaffold = create_model_source(project_dir)
+        scaffold.model_path.write_text(
+            """import cadflow as cad
+
+def build_model(model: cad.Model):
+    return model.box(width=10.0, depth=10.0, height=10.0)
+""",
+            encoding="utf-8",
+        )
         progress_callback(ProgressUpdate(stage="writing_model", tool="model_source"))
         result = CADExecutor().execute(
             project_dir,

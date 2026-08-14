@@ -26,7 +26,15 @@ def test_cancellation_token_preserves_the_first_cancellation_reason() -> None:
 
 
 def test_cad_execution_returns_validated_scene_facts(tmp_path: Path) -> None:
-    create_model_source(tmp_path)
+    scaffold = create_model_source(tmp_path)
+    scaffold.model_path.write_text(
+        """import cadflow as cad
+
+def build_model(model: cad.Model):
+    return model.box(width=10.0, depth=10.0, height=10.0)
+""",
+        encoding="utf-8",
+    )
 
     result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
 
@@ -41,6 +49,9 @@ def test_cad_execution_returns_validated_scene_facts(tmp_path: Path) -> None:
     assert result.scene_parse_result.glb_asset_count == 2
     assert result.scene_parse_result.model_json_present is False
     assert result.artifact_entries == ("model.scene.zip",)
+    assert result.preflight_status == "passed"
+    assert result.error_type is None
+    assert "cadflow" in result.imported_modules
 
 
 def test_nonzero_model_exit_is_observable(tmp_path: Path) -> None:
@@ -55,6 +66,62 @@ def test_nonzero_model_exit_is_observable(tmp_path: Path) -> None:
     assert result.status == "failed"
     assert result.exit_code != 0
     assert "model failed" in (result.error or "")
+    assert result.error_type == "execution"
+
+
+def test_syntax_error_is_reported_by_preflight_without_starting_cad(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "artifacts").mkdir()
+    (tmp_path / "model.py").write_text(
+        "def build_model(model):\n    return (\n",
+        encoding="utf-8",
+    )
+
+    result = CADExecutor().execute(tmp_path, timeout_seconds=5.0)
+
+    assert result.status == "failed"
+    assert result.preflight_status == "failed"
+    assert result.error_type == "syntax"
+    assert result.process_id is None
+    assert result.error_location is not None
+    assert "model.py" in result.error_location
+
+
+def test_import_error_is_classified_after_source_preflight(tmp_path: Path) -> None:
+    (tmp_path / "artifacts").mkdir()
+    (tmp_path / "model.py").write_text(
+        "import package_that_does_not_exist\n\n"
+        "def build_model(model):\n    raise AssertionError('unreachable')\n",
+        encoding="utf-8",
+    )
+
+    result = CADExecutor().execute(tmp_path, timeout_seconds=5.0)
+
+    assert result.status == "failed"
+    assert result.preflight_status == "failed"
+    assert result.error_type == "import"
+    assert result.error_location is not None
+
+
+def test_api_error_in_model_source_is_classified_with_location(tmp_path: Path) -> None:
+    scaffold = create_model_source(tmp_path)
+    scaffold.model_path.write_text(
+        """import cadflow as cad
+
+def build_model(model: cad.Model):
+    return model.not_a_cadflow_method()
+""",
+        encoding="utf-8",
+    )
+
+    result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
+
+    assert result.status == "failed"
+    assert result.preflight_status == "passed"
+    assert result.error_type == "api"
+    assert result.error_location is not None
+    assert "model.py" in result.error_location
 
 
 def test_invalid_scene_artifact_is_not_promoted_to_success(tmp_path: Path) -> None:
@@ -115,11 +182,19 @@ def build_model(model: cad.Model):
 
 def test_unexpected_artifact_member_is_not_a_validated_result(tmp_path: Path) -> None:
     scaffold = create_model_source(tmp_path)
-    source = scaffold.model_path.read_text(encoding="utf-8")
-    source += (
-        "\n(ARTIFACT_DIR / 'unexpected.log').write_text('debug', encoding='utf-8')\n"
+    scaffold.model_path.write_text(
+        """from pathlib import Path
+import cadflow as cad
+
+PROJECT_DIR = Path(__file__).resolve().parent
+ARTIFACT_DIR = PROJECT_DIR / "artifacts"
+
+def build_model(model: cad.Model):
+    (ARTIFACT_DIR / "unexpected.log").write_text("debug", encoding="utf-8")
+    return model.box(width=10.0, depth=10.0, height=10.0)
+""",
+        encoding="utf-8",
     )
-    scaffold.model_path.write_text(source, encoding="utf-8")
 
     result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
 

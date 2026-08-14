@@ -154,7 +154,6 @@ def test_failed_project_retains_all_attempt_diagnostics_but_never_exposes_scene(
     project = store.create_project("Repair diagnostics")
     store.submit_prompt(project.project_id, "Make a part.")
     artifact = tmp_path / project.project_id / "artifacts" / "model.scene.zip"
-    artifact.parent.mkdir()
     artifact.write_bytes(b"partial scene")
 
     diagnostics = {

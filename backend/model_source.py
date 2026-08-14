@@ -11,51 +11,20 @@ ARTIFACT_DIRECTORY_NAME = "artifacts"
 SCENE_ARTIFACT_NAME = "model.scene.zip"
 
 
-_MODEL_SOURCE = '''"""Single-part CadFlow Model Source.
+_MODEL_SOURCE = '''"""Single-part CadFlow Model Source entry point.
 
-The Agent may replace ``build_model`` and add local helpers, but must keep the
-CadFlow Model/Shape boundary and return exactly one physical part. The runner
-creates the Model session and calls ``build_model(model)``.
+The Agent owns the Project implementation and may replace this file or add
+local modules. The runner creates the Model session and calls
+``build_model(model)``.
 """
-
-from pathlib import Path
 
 import cadflow as cad
 
 
-PROJECT_DIR = Path(__file__).resolve().parent
-ARTIFACT_DIR = PROJECT_DIR / "artifacts"
-OUTPUT_DIR = PROJECT_DIR / "outputs"
-
-
 def build_model(model: cad.Model) -> cad.Shape:
-    """Build exactly one physical part, using millimetres by default."""
+    """Build the requested part and return one final CadFlow Shape."""
 
-    # Replace this valid starter geometry with the requested part. Record
-    # important assumptions here when the Prompt leaves dimensions implicit.
-    final_shape = model.box(width=10.0, depth=10.0, height=10.0)
-    print("grounding: final shape volume", round(final_shape.volume, 3))
-    return final_shape
-
-
-def main() -> None:
-    """Run the source independently and write a diagnostic STEP export."""
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    with cad.Model() as model:
-        final_shape = build_model(model)
-        if not isinstance(final_shape, cad.Shape):
-            raise TypeError("Model Source must return one CadFlow Shape")
-        if final_shape.topology.get("solids") != 1:
-            raise ValueError("Model Source must return exactly one solid")
-        if not final_shape.volume > 0:
-            raise ValueError("Model Source must return a positive-volume Shape")
-        final_shape.export_step(str(OUTPUT_DIR / "model.step"))
-        print("final", final_shape.describe())
-
-
-if __name__ == "__main__":
-    main()
+    raise NotImplementedError("Implement the requested part")
 '''
 
 
@@ -72,9 +41,9 @@ class ModelSourceScaffold:
 def create_model_source(
     project_dir: str | Path,
     *,
-    overwrite: bool = True,
+    overwrite: bool = False,
 ) -> ModelSourceScaffold:
-    """Create the complete single-part Model Source scaffold for a Project."""
+    """Create the initial non-passing Model Source for a Project."""
 
     root = Path(project_dir).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
