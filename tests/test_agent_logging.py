@@ -83,6 +83,12 @@ def test_agent_run_log_persists_prompt_model_and_tool_lifecycle(tmp_path: Path) 
         status="succeeded",
     )
 
+    assert trace.token_usage == {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "total_tokens": 30,
+    }
+
     records = [
         json.loads(line)
         for line in (tmp_path / "agent-run.jsonl").read_text(encoding="utf-8").splitlines()
@@ -128,6 +134,74 @@ def test_agent_run_log_persists_prompt_model_and_tool_lifecycle(tmp_path: Path) 
     assert "sk-secret-value" not in serialized
     assert "sk-system-secret" not in serialized
     assert "sk-another-secret" not in serialized
+
+
+def test_agent_run_log_normalizes_and_accumulates_provider_token_usage(
+    tmp_path: Path,
+) -> None:
+    trace = AgentRunLog(tmp_path)
+    handler = trace.callback_handler()
+
+    handler.on_llm_end(
+        {
+            "generations": [
+                [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "first",
+                            "usage_metadata": {
+                                "input_tokens": 10,
+                                "output_tokens": 20,
+                                "total_tokens": 30,
+                            },
+                        }
+                    }
+                ]
+            ]
+        },
+        run_id="model-1",
+    )
+    handler.on_llm_end(
+        {
+            "generations": [
+                [{"message": {"role": "assistant", "content": "second"}}]
+            ],
+            "llm_output": {
+                "token_usage": {
+                    "prompt_tokens": 4,
+                    "completion_tokens": 6,
+                    "total_tokens": 10,
+                }
+            },
+        },
+        run_id="model-2",
+    )
+
+    assert trace.token_usage == {
+        "input_tokens": 14,
+        "output_tokens": 26,
+        "total_tokens": 40,
+    }
+
+    handler.on_llm_end(
+        {
+            "generations": [
+                [{"message": {"role": "assistant", "content": "third"}}]
+            ],
+            "llm_output": {"token_usage": {"total": 5}},
+        },
+        run_id="model-3",
+    )
+
+    assert trace.token_usage == {
+        "input_tokens": None,
+        "output_tokens": None,
+        "total_tokens": 45,
+    }
+    assert "token_usage" not in (tmp_path / "agent-run.jsonl").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_agent_run_log_survives_malformed_existing_file(tmp_path: Path) -> None:

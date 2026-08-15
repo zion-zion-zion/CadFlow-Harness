@@ -11,6 +11,7 @@ from backend.agent import (
     _build_agent_system_prompt,
     AgentConfigurationError,
     AgentRunError,
+    AgentRunOutcome,
     AgentSettings,
     AgentRunService,
     MAX_AGENT_RUN_SECONDS,
@@ -279,3 +280,60 @@ def test_missing_configuration_fails_a_project_without_calling_a_model(
     assert outcome.validated is False
     assert store.get_project(project.project_id).state is ProjectState.FAILED
     assert outcome.failure_reason == "OPENAI_API_KEY is required"
+
+
+def test_agent_run_service_persists_provider_token_usage(tmp_path: Path) -> None:
+    store = ProjectStore(tmp_path)
+
+    class UsageReportingAgent:
+        def __init__(self, *, run_log, **_kwargs: object) -> None:
+            self.run_log = run_log
+
+        def run(self, _prompt: str, **_kwargs: object) -> AgentRunOutcome:
+            self.run_log.callback_handler().on_llm_end(
+                {
+                    "generations": [
+                        [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "done",
+                                    "usage_metadata": {
+                                        "input_tokens": 80,
+                                        "output_tokens": 20,
+                                        "total_tokens": 100,
+                                    },
+                                }
+                            }
+                        ]
+                    ]
+                },
+                run_id="model-1",
+            )
+            return AgentRunOutcome(
+                validated=False,
+                failure_reason="expected failure",
+                duration_seconds=1.25,
+            )
+
+    service = AgentRunService(
+        store=store,
+        repo_root=Path(__file__).parents[1],
+        settings_factory=lambda: AgentSettings(
+            model_id="cad-model", api_key="test-key"
+        ),
+        agent_factory=UsageReportingAgent,
+    )
+    project = store.create_project("Measured run")
+
+    outcome = service.run(project.project_id, "Create a box.")
+
+    assert outcome.token_usage == {
+        "input_tokens": 80,
+        "output_tokens": 20,
+        "total_tokens": 100,
+    }
+    diagnostics = store.read_diagnostics(project.project_id)
+    assert diagnostics is not None
+    assert diagnostics["duration_seconds"] == 1.25
+    assert diagnostics["token_usage"] == outcome.token_usage

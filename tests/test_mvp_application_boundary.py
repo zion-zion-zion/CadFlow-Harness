@@ -13,7 +13,7 @@ from backend.app import create_app
 from backend.cad_executor import CADExecutor, CancellationToken
 from backend.events import ProgressUpdate
 from backend.model_source import create_model_source
-from backend.projects import ProjectState
+from backend.projects import ProjectState, ProjectStore
 from backend.scene_validation import validate_scene_artifact
 from tests.support import process_exists
 
@@ -189,6 +189,85 @@ def test_application_uses_cadflow_agent_product_name(tmp_path: Path) -> None:
     )
 
     assert app.title == "CadFlowAgent"
+
+
+def test_project_api_exposes_only_curated_terminal_run_metrics(
+    tmp_path: Path,
+) -> None:
+    store = ProjectStore(tmp_path)
+    measured = store.create_project("Measured failure")
+    store.submit_prompt(measured.project_id, "Create a measured part.")
+    store.mark_failed(
+        measured.project_id,
+        "expected failure",
+        {
+            "duration_seconds": 42.75,
+            "token_usage": {
+                "input_tokens": 1200,
+                "output_tokens": 345,
+                "total_tokens": 1545,
+                "provider_metadata": "must not be exposed",
+            },
+            "raw_provider_response": "must not be exposed",
+        },
+    )
+    invalid = store.create_project("Invalid legacy metrics")
+    store.submit_prompt(invalid.project_id, "Create another part.")
+    store.mark_failed(
+        invalid.project_id,
+        "legacy failure",
+        {
+            "duration_seconds": True,
+            "token_usage": {
+                "input_tokens": -1,
+                "output_tokens": "20",
+                "total_tokens": False,
+            },
+        },
+    )
+    draft = store.create_project("Draft")
+    (store.project_directory(draft.project_id) / "diagnostics.json").write_text(
+        json.dumps(
+            {
+                "duration_seconds": 999.0,
+                "token_usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 2,
+                    "total_tokens": 3,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    app = create_app(store=store, run_service=_DeterministicFailureHarness())
+    client = TestClient(app)
+
+    measured_payload = client.get(
+        f"/api/projects/{measured.project_id}"
+    ).json()
+    assert measured_payload["duration_seconds"] == 42.75
+    assert measured_payload["token_usage"] == {
+        "input_tokens": 1200,
+        "output_tokens": 345,
+        "total_tokens": 1545,
+    }
+    assert "raw_provider_response" not in measured_payload
+    assert "provider_metadata" not in json.dumps(measured_payload)
+
+    payloads = {
+        item["project_id"]: item for item in client.get("/api/projects").json()
+    }
+    assert payloads[measured.project_id]["token_usage"] == {
+        "input_tokens": 1200,
+        "output_tokens": 345,
+        "total_tokens": 1545,
+    }
+    assert payloads[invalid.project_id]["duration_seconds"] is None
+    assert payloads[invalid.project_id]["token_usage"] is None
+    assert payloads[draft.project_id]["diagnostics_available"] is True
+    assert payloads[draft.project_id]["duration_seconds"] is None
+    assert payloads[draft.project_id]["token_usage"] is None
 
 
 def test_http_boundary_persists_success_events_and_scene_artifact(

@@ -94,6 +94,7 @@ class AgentRunOutcome:
     execution_results: tuple[ExecutionResult, ...] = ()
     provider_retry_count: int = 0
     duration_seconds: float | None = None
+    token_usage: dict[str, int | None] | None = None
     cancelled: bool = False
 
     def __post_init__(self) -> None:
@@ -129,6 +130,7 @@ class AgentRunOutcome:
             ],
             "provider_retry_count": self.provider_retry_count,
             "duration_seconds": self.duration_seconds,
+            "token_usage": self.token_usage,
             "cancelled": self.cancelled,
             "tool_use_records": [
                 {
@@ -660,6 +662,8 @@ class AgentRunService:
         except Exception as exc:
             reason = _safe_failure_reason(exc)
             outcome = AgentRunOutcome(validated=False, failure_reason=reason)
+        if run_log.token_usage is not None:
+            outcome = replace(outcome, token_usage=run_log.token_usage)
         if (
             token.cancelled
             and token.cancellation_reason != "timeout"

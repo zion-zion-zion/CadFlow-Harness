@@ -5,6 +5,11 @@ import { ScenePackageError, SceneViewer } from './components/scene-viewer';
 const MAX_PROMPT_CHARS = 32_000;
 
 type ProjectState = 'Draft' | 'Running' | 'Succeeded' | 'Failed' | 'Stopped';
+type TokenUsage = {
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+};
 type Project = {
   project_id: string;
   name: string;
@@ -15,6 +20,8 @@ type Project = {
   failure_reason: string | null;
   scene_available: boolean;
   diagnostics_available: boolean;
+  duration_seconds: number | null;
+  token_usage: TokenUsage | null;
 };
 type ProgressRecord = {
   id: number;
@@ -73,6 +80,12 @@ app.innerHTML = `
             <div><span class="eyebrow">CURRENT PROJECT</span><h1 id="project-name"></h1><code id="project-id"></code></div>
             <span id="state-badge" class="state-badge"></span>
           </div>
+          <dl class="run-metrics" aria-label="Agent Run metrics">
+            <div><dt>Total Tokens</dt><dd id="total-tokens">--</dd></div>
+            <div><dt>Input Tokens</dt><dd id="input-tokens">--</dd></div>
+            <div><dt>Output Tokens</dt><dd id="output-tokens">--</dd></div>
+            <div><dt>Run Time</dt><dd id="run-time">--</dd></div>
+          </dl>
           <div class="project-controls">
             <label for="prompt-input">Prompt</label>
             <textarea id="prompt-input" rows="7" maxlength="32000" placeholder="Describe one complete CAD part..."></textarea>
@@ -113,6 +126,10 @@ const projectContent = document.querySelector<HTMLDivElement>('#project-content'
 const projectName = document.querySelector<HTMLHeadingElement>('#project-name')!;
 const projectId = document.querySelector<HTMLElement>('#project-id')!;
 const stateBadge = document.querySelector<HTMLSpanElement>('#state-badge')!;
+const totalTokens = document.querySelector<HTMLElement>('#total-tokens')!;
+const inputTokens = document.querySelector<HTMLElement>('#input-tokens')!;
+const outputTokens = document.querySelector<HTMLElement>('#output-tokens')!;
+const runTime = document.querySelector<HTMLElement>('#run-time')!;
 const promptInput = document.querySelector<HTMLTextAreaElement>('#prompt-input')!;
 const promptCounter = document.querySelector<HTMLSpanElement>('#prompt-counter')!;
 const runButton = document.querySelector<HTMLButtonElement>('#run-button')!;
@@ -197,8 +214,14 @@ function renderCatalog(): void {
     const title = document.createElement('strong');
     title.textContent = project.name;
     const meta = document.createElement('span');
-    meta.textContent = project.state;
-    meta.className = `project-state state-${project.state.toLowerCase()}`;
+    meta.className = 'project-row-meta';
+    const state = document.createElement('span');
+    state.textContent = project.state;
+    state.className = `project-state state-${project.state.toLowerCase()}`;
+    const usage = document.createElement('span');
+    usage.className = 'project-usage';
+    usage.textContent = `${formatCompactTokenCount(project.token_usage?.total_tokens ?? null)} tok · ${formatDuration(project.duration_seconds)}`;
+    meta.append(state, usage);
     row.append(title, meta);
     row.addEventListener('click', () => void selectProject(project.project_id));
     projectListElement.append(row);
@@ -217,6 +240,7 @@ function renderWorkspace(): void {
     stopButton.hidden = true;
     deleteButton.disabled = true;
     actionMessage.textContent = '';
+    renderRunMetrics(null);
     progressList.innerHTML = '<p class="panel-empty">No Project selected.</p>';
     return;
   }
@@ -225,6 +249,7 @@ function renderWorkspace(): void {
   projectId.textContent = project.project_id;
   stateBadge.textContent = project.state;
   stateBadge.className = `state-badge state-${project.state.toLowerCase()}`;
+  renderRunMetrics(project);
   if (document.activeElement !== promptInput || promptInput.readOnly) promptInput.value = project.prompt ?? '';
   promptInput.readOnly = project.state !== 'Draft';
   promptCounter.textContent = `${promptInput.value.length.toLocaleString()} / ${MAX_PROMPT_CHARS.toLocaleString()}`;
@@ -588,6 +613,50 @@ async function deleteProject(): Promise<void> {
 function formatTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? '' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function renderRunMetrics(project: Project | null): void {
+  const terminal = project !== null && ['Succeeded', 'Failed', 'Stopped'].includes(project.state);
+  const usage = terminal ? project.token_usage : null;
+  setMetric(totalTokens, formatTokenCount(usage?.total_tokens ?? null));
+  setMetric(inputTokens, formatTokenCount(usage?.input_tokens ?? null));
+  setMetric(outputTokens, formatTokenCount(usage?.output_tokens ?? null));
+  setMetric(runTime, formatDuration(terminal ? project.duration_seconds : null));
+}
+
+function setMetric(element: HTMLElement, value: string): void {
+  element.textContent = value;
+  element.title = value === '--' ? '' : value;
+}
+
+function formatTokenCount(value: number | null): string {
+  return isNonNegativeFinite(value) ? Math.trunc(value).toLocaleString() : '--';
+}
+
+function formatCompactTokenCount(value: number | null): string {
+  if (!isNonNegativeFinite(value)) return '--';
+  return new Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(Math.trunc(value));
+}
+
+function formatDuration(value: number | null): string {
+  if (!isNonNegativeFinite(value)) return '--';
+  if (value < 60) {
+    const seconds = value < 10 ? value.toFixed(1).replace(/\.0$/, '') : String(Math.round(value));
+    return `${seconds}s`;
+  }
+  const totalSeconds = Math.round(value);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
+
+function isNonNegativeFinite(value: number | null): value is number {
+  return value !== null && Number.isFinite(value) && value >= 0;
 }
 
 function errorMessage(error: unknown): string {

@@ -15,6 +15,12 @@ from langchain_core.callbacks import BaseCallbackHandler
 from .cad_executor import redact_credentials
 
 AGENT_RUN_LOG_NAME = "agent-run.jsonl"
+_TOKEN_FIELDS = ("input_tokens", "output_tokens", "total_tokens")
+_TOKEN_ALIASES = {
+    "input_tokens": ("input_tokens", "prompt_tokens"),
+    "output_tokens": ("output_tokens", "completion_tokens"),
+    "total_tokens": ("total_tokens", "total"),
+}
 
 
 class AgentRunLog:
@@ -35,6 +41,9 @@ class AgentRunLog:
         self._tool_names: dict[str, str] = {}
         self._sequence = 0
         self._disabled = False
+        self._token_usage_call_count = 0
+        self._token_usage_field_counts = dict.fromkeys(_TOKEN_FIELDS, 0)
+        self._token_usage_totals = dict.fromkeys(_TOKEN_FIELDS, 0)
         if self._load_existing_records():
             return
         self._append(
@@ -107,6 +116,47 @@ class AgentRunLog:
             tool_name=tool_name,
             target=target,
         )
+
+    @property
+    def token_usage(self) -> dict[str, int | None] | None:
+        """Return complete provider-reported token totals for this run."""
+
+        with self._lock:
+            if self._token_usage_call_count == 0:
+                return None
+            usage = {
+                field: (
+                    self._token_usage_totals[field]
+                    if self._token_usage_field_counts[field]
+                    == self._token_usage_call_count
+                    else None
+                )
+                for field in _TOKEN_FIELDS
+            }
+            if (
+                usage["total_tokens"] is None
+                and usage["input_tokens"] is not None
+                and usage["output_tokens"] is not None
+            ):
+                usage["total_tokens"] = (
+                    usage["input_tokens"] + usage["output_tokens"]
+                )
+            if all(value is None for value in usage.values()):
+                return None
+            return usage
+
+    def record_model_usage(self, response: Any) -> None:
+        """Accumulate only normalized numeric usage from one model response."""
+
+        usage = _response_token_usage(response)
+        with self._lock:
+            self._token_usage_call_count += 1
+            if usage is None:
+                return
+            for field, value in usage.items():
+                if value is not None:
+                    self._token_usage_field_counts[field] += 1
+                    self._token_usage_totals[field] += value
 
     def callback_handler(self) -> Any:
         return _AgentRunCallbackHandler(self)
@@ -208,6 +258,7 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         **_: Any,
     ) -> None:
         del run_id, parent_run_id
+        self.trace.record_model_usage(response)
         self.trace.record_event(
             "model_response",
             messages=_response_messages(response),
@@ -371,6 +422,96 @@ def _response_messages(response: Any) -> list[dict[str, Any]]:
                 _safe_value({"role": "assistant", "content": text or ""})
             )
     return messages
+
+
+def _response_token_usage(response: Any) -> dict[str, int | None] | None:
+    """Extract provider usage without retaining the original metadata object."""
+
+    generations = getattr(response, "generations", None)
+    if generations is None and isinstance(response, Mapping):
+        generations = response.get("generations")
+
+    message_usages: list[dict[str, int | None]] = []
+    if isinstance(generations, (list, tuple)):
+        for batch in generations:
+            items = batch if isinstance(batch, (list, tuple)) else (batch,)
+            for generation in items:
+                message = getattr(generation, "message", None)
+                if message is None and isinstance(generation, Mapping):
+                    message = generation.get("message")
+                if message is not None:
+                    usage = _message_token_usage(message)
+                    if usage is not None:
+                        message_usages.append(usage)
+    else:
+        usage = _message_token_usage(response)
+        if usage is not None:
+            message_usages.append(usage)
+
+    if message_usages:
+        return _combine_usage(message_usages)
+
+    llm_output = getattr(response, "llm_output", None)
+    if llm_output is None and isinstance(response, Mapping):
+        llm_output = response.get("llm_output")
+    if isinstance(llm_output, Mapping):
+        raw_usage = llm_output.get("token_usage") or llm_output.get("usage")
+        return _normalize_usage(raw_usage)
+    return None
+
+
+def _message_token_usage(message: Any) -> dict[str, int | None] | None:
+    metadata = getattr(message, "usage_metadata", None)
+    if metadata is None and isinstance(message, Mapping):
+        metadata = message.get("usage_metadata")
+    usage = _normalize_usage(metadata)
+    if usage is not None:
+        return usage
+
+    response_metadata = getattr(message, "response_metadata", None)
+    if response_metadata is None and isinstance(message, Mapping):
+        response_metadata = message.get("response_metadata")
+    if isinstance(response_metadata, Mapping):
+        return _normalize_usage(
+            response_metadata.get("token_usage") or response_metadata.get("usage")
+        )
+    return None
+
+
+def _combine_usage(usages: list[dict[str, int | None]]) -> dict[str, int | None]:
+    return {
+        field: (
+            sum(usage[field] for usage in usages if usage[field] is not None)
+            if all(usage[field] is not None for usage in usages)
+            else None
+        )
+        for field in _TOKEN_FIELDS
+    }
+
+
+def _normalize_usage(value: Any) -> dict[str, int | None] | None:
+    if not isinstance(value, Mapping):
+        return None
+    normalized: dict[str, int | None] = {}
+    for field, aliases in _TOKEN_ALIASES.items():
+        item = next((value.get(alias) for alias in aliases if alias in value), None)
+        if item is None:
+            normalized[field] = None
+        elif isinstance(item, int) and not isinstance(item, bool) and item >= 0:
+            normalized[field] = item
+        else:
+            normalized[field] = None
+    if all(item is None for item in normalized.values()):
+        return None
+    if (
+        normalized["total_tokens"] is None
+        and normalized["input_tokens"] is not None
+        and normalized["output_tokens"] is not None
+    ):
+        normalized["total_tokens"] = (
+            normalized["input_tokens"] + normalized["output_tokens"]
+        )
+    return normalized
 
 
 def _tool_result_payload(output: Any) -> Any:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable
 
@@ -240,6 +242,8 @@ def _project_payload(store: ProjectStore, project: Any) -> dict[str, object]:
             scene_available = store.scene_artifact(project.project_id).is_file()
         except ProjectStateError:
             scene_available = False
+    diagnostics = store.read_diagnostics(project.project_id)
+    metrics_available = project.state.value in {"Succeeded", "Failed", "Stopped"}
     return {
         "project_id": project.project_id,
         "name": project.name,
@@ -249,8 +253,53 @@ def _project_payload(store: ProjectStore, project: Any) -> dict[str, object]:
         "prompt": project.prompt,
         "failure_reason": project.failure_reason,
         "scene_available": scene_available,
-        "diagnostics_available": store.read_diagnostics(project.project_id) is not None,
+        "diagnostics_available": diagnostics is not None,
+        "duration_seconds": (
+            _duration_seconds(diagnostics) if metrics_available else None
+        ),
+        "token_usage": _token_usage(diagnostics) if metrics_available else None,
     }
+
+
+def _duration_seconds(diagnostics: Mapping[str, Any] | None) -> float | None:
+    if diagnostics is None:
+        return None
+    value = diagnostics.get("duration_seconds")
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    ):
+        return float(value)
+    return None
+
+
+def _token_usage(
+    diagnostics: Mapping[str, Any] | None,
+) -> dict[str, int | None] | None:
+    if diagnostics is None:
+        return None
+    raw_usage = diagnostics.get("token_usage")
+    if not isinstance(raw_usage, Mapping):
+        return None
+    usage = {
+        field: _non_negative_token_count(raw_usage.get(field))
+        for field in ("input_tokens", "output_tokens", "total_tokens")
+    }
+    if (
+        usage["total_tokens"] is None
+        and usage["input_tokens"] is not None
+        and usage["output_tokens"] is not None
+    ):
+        usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+    return usage if any(value is not None for value in usage.values()) else None
+
+
+def _non_negative_token_count(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
 
 
 def _parse_last_event_id(header: str | None, query: int | None) -> int:
