@@ -302,6 +302,9 @@ def test_agent_run_service_persists_provider_token_usage(tmp_path: Path) -> None
                                         "input_tokens": 80,
                                         "output_tokens": 20,
                                         "total_tokens": 100,
+                                        "input_token_details": {
+                                            "cache_read": 50,
+                                        },
                                     },
                                 }
                             }
@@ -329,9 +332,11 @@ def test_agent_run_service_persists_provider_token_usage(tmp_path: Path) -> None
     outcome = service.run(project.project_id, "Create a box.")
 
     assert outcome.token_usage == {
-        "input_tokens": 80,
-        "output_tokens": 20,
         "total_tokens": 100,
+        "input_tokens": 80,
+        "cached_input_tokens": 50,
+        "uncached_input_tokens": 30,
+        "output_tokens": 20,
     }
     diagnostics = store.read_diagnostics(project.project_id)
     assert diagnostics is not None

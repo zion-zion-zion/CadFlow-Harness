@@ -57,9 +57,10 @@ h1 { margin: 7px 0 0; color: #eef4fb; font-size: 17px; font-weight: 600; letter-
 #project-content { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: hidden; }
 .current-heading { flex: 0 0 auto; }
 .current-heading code { display: block; max-width: 220px; margin-top: 8px; overflow: hidden; color: #536475; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.run-metrics { display: grid; flex: 0 0 auto; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border-bottom: 1px solid #202832; background: #0d1217; }
+.run-metrics { display: grid; flex: 0 0 auto; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; border-bottom: 1px solid #202832; background: #0d1217; }
 .run-metrics > div { min-width: 0; padding: 11px 9px 10px; border-right: 1px solid #202832; }
-.run-metrics > div:last-child { border-right: 0; }
+.run-metrics > div:nth-child(3n) { border-right: 0; }
+.run-metrics > div:nth-child(n+4) { border-top: 1px solid #202832; }
 .run-metrics dt { overflow: hidden; color: #657386; font-size: 8px; letter-spacing: 0; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
 .run-metrics dd { margin: 6px 0 0; overflow: hidden; color: #dce5ee; font-size: 11px; font-variant-numeric: tabular-nums; letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; }
 .project-controls { padding: 18px 17px 16px; border-bottom: 1px solid #202832; }

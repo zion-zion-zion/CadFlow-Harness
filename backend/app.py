@@ -277,23 +277,27 @@ def _duration_seconds(diagnostics: Mapping[str, Any] | None) -> float | None:
 
 def _token_usage(
     diagnostics: Mapping[str, Any] | None,
-) -> dict[str, int | None] | None:
+) -> dict[str, int] | None:
     if diagnostics is None:
         return None
     raw_usage = diagnostics.get("token_usage")
     if not isinstance(raw_usage, Mapping):
         return None
-    usage = {
-        field: _non_negative_token_count(raw_usage.get(field))
-        for field in ("input_tokens", "output_tokens", "total_tokens")
+    input_tokens = _non_negative_token_count(raw_usage.get("input_tokens"))
+    output_tokens = _non_negative_token_count(raw_usage.get("output_tokens"))
+    if input_tokens is None or output_tokens is None:
+        return None
+    cached_input_tokens = _non_negative_token_count(
+        raw_usage.get("cached_input_tokens")
+    )
+    cached_input_tokens = min(cached_input_tokens or 0, input_tokens)
+    return {
+        "total_tokens": input_tokens + output_tokens,
+        "input_tokens": input_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "uncached_input_tokens": input_tokens - cached_input_tokens,
+        "output_tokens": output_tokens,
     }
-    if (
-        usage["total_tokens"] is None
-        and usage["input_tokens"] is not None
-        and usage["output_tokens"] is not None
-    ):
-        usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
-    return usage if any(value is not None for value in usage.values()) else None
 
 
 def _non_negative_token_count(value: Any) -> int | None:

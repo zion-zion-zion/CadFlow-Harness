@@ -204,6 +204,8 @@ def test_project_api_exposes_only_curated_terminal_run_metrics(
             "duration_seconds": 42.75,
             "token_usage": {
                 "input_tokens": 1200,
+                "cached_input_tokens": 800,
+                "uncached_input_tokens": 400,
                 "output_tokens": 345,
                 "total_tokens": 1545,
                 "provider_metadata": "must not be exposed",
@@ -248,9 +250,11 @@ def test_project_api_exposes_only_curated_terminal_run_metrics(
     ).json()
     assert measured_payload["duration_seconds"] == 42.75
     assert measured_payload["token_usage"] == {
-        "input_tokens": 1200,
-        "output_tokens": 345,
         "total_tokens": 1545,
+        "input_tokens": 1200,
+        "cached_input_tokens": 800,
+        "uncached_input_tokens": 400,
+        "output_tokens": 345,
     }
     assert "raw_provider_response" not in measured_payload
     assert "provider_metadata" not in json.dumps(measured_payload)
@@ -259,9 +263,11 @@ def test_project_api_exposes_only_curated_terminal_run_metrics(
         item["project_id"]: item for item in client.get("/api/projects").json()
     }
     assert payloads[measured.project_id]["token_usage"] == {
-        "input_tokens": 1200,
-        "output_tokens": 345,
         "total_tokens": 1545,
+        "input_tokens": 1200,
+        "cached_input_tokens": 800,
+        "uncached_input_tokens": 400,
+        "output_tokens": 345,
     }
     assert payloads[invalid.project_id]["duration_seconds"] is None
     assert payloads[invalid.project_id]["token_usage"] is None

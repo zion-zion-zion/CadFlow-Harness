@@ -69,6 +69,7 @@ def test_agent_run_log_persists_prompt_model_and_tool_lifecycle(tmp_path: Path) 
                                 "input_tokens": 10,
                                 "output_tokens": 20,
                                 "total_tokens": 30,
+                                "input_token_details": {"cache_read": 4},
                             },
                         )
                     )
@@ -84,9 +85,11 @@ def test_agent_run_log_persists_prompt_model_and_tool_lifecycle(tmp_path: Path) 
     )
 
     assert trace.token_usage == {
-        "input_tokens": 10,
-        "output_tokens": 20,
         "total_tokens": 30,
+        "input_tokens": 10,
+        "cached_input_tokens": 4,
+        "uncached_input_tokens": 6,
+        "output_tokens": 20,
     }
 
     records = [
@@ -136,7 +139,7 @@ def test_agent_run_log_persists_prompt_model_and_tool_lifecycle(tmp_path: Path) 
     assert "sk-another-secret" not in serialized
 
 
-def test_agent_run_log_normalizes_and_accumulates_provider_token_usage(
+def test_agent_run_log_accumulates_cached_and_uncached_token_usage(
     tmp_path: Path,
 ) -> None:
     trace = AgentRunLog(tmp_path)
@@ -154,6 +157,7 @@ def test_agent_run_log_normalizes_and_accumulates_provider_token_usage(
                                 "input_tokens": 10,
                                 "output_tokens": 20,
                                 "total_tokens": 30,
+                                "input_token_details": {"cache_read": 4},
                             },
                         }
                     }
@@ -172,6 +176,7 @@ def test_agent_run_log_normalizes_and_accumulates_provider_token_usage(
                     "prompt_tokens": 4,
                     "completion_tokens": 6,
                     "total_tokens": 10,
+                    "prompt_tokens_details": {"cached_tokens": 2},
                 }
             },
         },
@@ -179,9 +184,11 @@ def test_agent_run_log_normalizes_and_accumulates_provider_token_usage(
     )
 
     assert trace.token_usage == {
-        "input_tokens": 14,
-        "output_tokens": 26,
         "total_tokens": 40,
+        "input_tokens": 14,
+        "cached_input_tokens": 6,
+        "uncached_input_tokens": 8,
+        "output_tokens": 26,
     }
 
     handler.on_llm_end(
@@ -195,13 +202,65 @@ def test_agent_run_log_normalizes_and_accumulates_provider_token_usage(
     )
 
     assert trace.token_usage == {
-        "input_tokens": None,
-        "output_tokens": None,
-        "total_tokens": 45,
+        "total_tokens": 40,
+        "input_tokens": 14,
+        "cached_input_tokens": 6,
+        "uncached_input_tokens": 8,
+        "output_tokens": 26,
     }
     assert "token_usage" not in (tmp_path / "agent-run.jsonl").read_text(
         encoding="utf-8"
     )
+
+
+def test_agent_run_log_counts_missing_cache_details_as_uncached(
+    tmp_path: Path,
+) -> None:
+    trace = AgentRunLog(tmp_path)
+    handler = trace.callback_handler()
+
+    handler.on_llm_end(
+        {
+            "generations": [[{"message": {"role": "assistant", "content": "ok"}}]],
+            "llm_output": {
+                "token_usage": {
+                    "prompt_tokens": 25,
+                    "completion_tokens": 5,
+                }
+            },
+        },
+        run_id="model-1",
+    )
+
+    assert trace.token_usage == {
+        "total_tokens": 30,
+        "input_tokens": 25,
+        "cached_input_tokens": 0,
+        "uncached_input_tokens": 25,
+        "output_tokens": 5,
+    }
+
+
+def test_agent_run_log_caps_cached_tokens_at_input_tokens(tmp_path: Path) -> None:
+    trace = AgentRunLog(tmp_path)
+
+    trace.record_model_usage(
+        {
+            "usage_metadata": {
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "input_token_details": {"cache_read": 20},
+            }
+        }
+    )
+
+    assert trace.token_usage == {
+        "total_tokens": 12,
+        "input_tokens": 10,
+        "cached_input_tokens": 10,
+        "uncached_input_tokens": 0,
+        "output_tokens": 2,
+    }
 
 
 def test_agent_run_log_survives_malformed_existing_file(tmp_path: Path) -> None:

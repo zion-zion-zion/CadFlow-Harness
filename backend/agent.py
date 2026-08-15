@@ -94,7 +94,7 @@ class AgentRunOutcome:
     execution_results: tuple[ExecutionResult, ...] = ()
     provider_retry_count: int = 0
     duration_seconds: float | None = None
-    token_usage: dict[str, int | None] | None = None
+    token_usage: dict[str, int] | None = None
     cancelled: bool = False
 
     def __post_init__(self) -> None:

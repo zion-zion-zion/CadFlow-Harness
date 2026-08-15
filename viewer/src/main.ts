@@ -7,6 +7,8 @@ const MAX_PROMPT_CHARS = 32_000;
 type ProjectState = 'Draft' | 'Running' | 'Succeeded' | 'Failed' | 'Stopped';
 type TokenUsage = {
   input_tokens: number | null;
+  cached_input_tokens: number | null;
+  uncached_input_tokens: number | null;
   output_tokens: number | null;
   total_tokens: number | null;
 };
@@ -83,8 +85,10 @@ app.innerHTML = `
           <dl class="run-metrics" aria-label="Agent Run metrics">
             <div><dt>Total Tokens</dt><dd id="total-tokens">--</dd></div>
             <div><dt>Input Tokens</dt><dd id="input-tokens">--</dd></div>
+            <div><dt>Cached Tokens</dt><dd id="cached-tokens">--</dd></div>
+            <div><dt>Uncached Tokens</dt><dd id="uncached-tokens">--</dd></div>
             <div><dt>Output Tokens</dt><dd id="output-tokens">--</dd></div>
-            <div><dt>Run Time</dt><dd id="run-time">--</dd></div>
+            <div><dt>Total Time</dt><dd id="run-time">--</dd></div>
           </dl>
           <div class="project-controls">
             <label for="prompt-input">Prompt</label>
@@ -128,6 +132,8 @@ const projectId = document.querySelector<HTMLElement>('#project-id')!;
 const stateBadge = document.querySelector<HTMLSpanElement>('#state-badge')!;
 const totalTokens = document.querySelector<HTMLElement>('#total-tokens')!;
 const inputTokens = document.querySelector<HTMLElement>('#input-tokens')!;
+const cachedTokens = document.querySelector<HTMLElement>('#cached-tokens')!;
+const uncachedTokens = document.querySelector<HTMLElement>('#uncached-tokens')!;
 const outputTokens = document.querySelector<HTMLElement>('#output-tokens')!;
 const runTime = document.querySelector<HTMLElement>('#run-time')!;
 const promptInput = document.querySelector<HTMLTextAreaElement>('#prompt-input')!;
@@ -620,6 +626,8 @@ function renderRunMetrics(project: Project | null): void {
   const usage = terminal ? project.token_usage : null;
   setMetric(totalTokens, formatTokenCount(usage?.total_tokens ?? null));
   setMetric(inputTokens, formatTokenCount(usage?.input_tokens ?? null));
+  setMetric(cachedTokens, formatTokenCount(usage?.cached_input_tokens ?? null));
+  setMetric(uncachedTokens, formatTokenCount(usage?.uncached_input_tokens ?? null));
   setMetric(outputTokens, formatTokenCount(usage?.output_tokens ?? null));
   setMetric(runTime, formatDuration(terminal ? project.duration_seconds : null));
 }
