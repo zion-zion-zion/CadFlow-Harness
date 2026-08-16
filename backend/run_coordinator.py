@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -12,10 +12,16 @@ from .agent import (
     AgentRunError,
     AgentRunOutcome,
     AgentRunService,
+    DEEPAGENTS_IMPLEMENTATION_VERSION,
     ReferenceGroundedAgent,
 )
 from .cad_executor import CancellationToken, redact_credentials
 from .events import ProgressEventStore, ProgressUpdate
+from .harnesses import (
+    AgentHarness,
+    AgentRunAdapter,
+    AgentRunAdapterRegistry,
+)
 from .projects import (
     Project,
     ProjectState,
@@ -37,6 +43,7 @@ class _ActiveRun:
     prompt: str
     cancellation_token: CancellationToken
     finished: threading.Event
+    adapter: AgentRunAdapter
     thread: threading.Thread | None = None
     stopping: bool = False
 
@@ -51,6 +58,7 @@ class AgentRunCoordinator:
         repo_root: str | Path,
         event_store: ProgressEventStore | None = None,
         run_service: Any | None = None,
+        adapter_registry: AgentRunAdapterRegistry | None = None,
         settings_factory: Callable[[], Any] | None = None,
         agent_factory: Callable[..., Any] | None = None,
     ) -> None:
@@ -62,6 +70,20 @@ class AgentRunCoordinator:
             repo_root=self.repo_root,
             settings_factory=settings_factory,
             agent_factory=agent_factory or ReferenceGroundedAgent,
+        )
+        self.adapters = adapter_registry or AgentRunAdapterRegistry(
+            (
+                AgentRunAdapter(
+                    AgentHarness.DEEPAGENTS,
+                    self.run_service,
+                    DEEPAGENTS_IMPLEMENTATION_VERSION,
+                ),
+                AgentRunAdapter(
+                    AgentHarness.PI,
+                    _UnavailablePiService(),
+                    "0.84.2",
+                ),
+            )
         )
         self._lock = threading.RLock()
         self._active: _ActiveRun | None = None
@@ -93,24 +115,32 @@ class AgentRunCoordinator:
             )
         return recovered
 
-    def start(self, project_id: str, prompt: str) -> Project:
+    def start(
+        self,
+        project_id: str,
+        prompt: str,
+        harness: AgentHarness | str = AgentHarness.DEEPAGENTS,
+    ) -> Project:
+        adapter = self.adapters.get(harness)
+        adapter.require_available()
         with self._lock:
             if self._active is not None:
                 raise RunConflictError("another Agent Run is already active")
-            project = self.store.submit_prompt(project_id, prompt)
+            project = self.store.submit_prompt(project_id, prompt, adapter.harness)
             token = CancellationToken()
             active = _ActiveRun(
                 project_id=project.project_id,
                 prompt=project.prompt or prompt,
                 cancellation_token=token,
                 finished=threading.Event(),
+                adapter=adapter,
             )
             self._active = active
             self.events.append(
                 project.project_id,
                 stage="preparing",
                 tool="service",
-                result="Agent Run accepted",
+                result=f"{adapter.label} Agent Run accepted",
             )
             thread = threading.Thread(
                 target=self._run_worker,
@@ -139,7 +169,11 @@ class AgentRunCoordinator:
                     result="Stop requested by user",
                 )
                 active.cancellation_token.cancel()
-        active.finished.wait(RUN_STOP_WAIT_SECONDS)
+        if not active.finished.wait(RUN_STOP_WAIT_SECONDS):
+            force_stop = getattr(active.adapter.service, "force_stop", None)
+            if callable(force_stop):
+                force_stop(project_id)
+                active.finished.wait(1.0)
         return self.store.get_project(project_id)
 
     def delete(self, project_id: str) -> None:
@@ -163,6 +197,11 @@ class AgentRunCoordinator:
 
         if active is not None and active.project_id == project_id:
             if not active.finished.wait(RUN_STOP_WAIT_SECONDS):
+                force_stop = getattr(active.adapter.service, "force_stop", None)
+                if callable(force_stop):
+                    force_stop(project_id)
+                    active.finished.wait(1.0)
+            if not active.finished.is_set():
                 raise ProjectStateError(
                     "Agent Run did not stop before Project deletion"
                 )
@@ -197,7 +236,7 @@ class AgentRunCoordinator:
                     self._active = None
 
     def _invoke_service(self, active: _ActiveRun) -> AgentRunOutcome:
-        run: Any = self.run_service.run
+        run: Any = active.adapter.service.run
         kwargs: dict[str, object] = {}
         parameters: Mapping[str, inspect.Parameter]
         try:
@@ -213,10 +252,16 @@ class AgentRunCoordinator:
             kwargs["progress_callback"] = self._progress_callback(active.project_id)
         if accepts_kwargs or "prompt_submitted" in parameters:
             kwargs["prompt_submitted"] = True
+        if accepts_kwargs or "harness" in parameters:
+            kwargs["harness"] = active.adapter.harness
         result = run(active.project_id, active.prompt, **kwargs)
         if not isinstance(result, AgentRunOutcome):
             raise AgentRunError("Agent Run service returned an invalid outcome")
-        return result
+        return replace(
+            result,
+            harness=active.adapter.harness,
+            implementation_version=active.adapter.implementation_version,
+        )
 
     def _progress_callback(self, project_id: str) -> Callable[[ProgressUpdate], None]:
         def record(update: ProgressUpdate) -> None:
@@ -290,6 +335,14 @@ class AgentRunCoordinator:
 def _safe_reason(error: Exception) -> str:
     first = str(error).strip().splitlines()[0] if str(error).strip() else ""
     return redact_credentials(first)[:500] or type(error).__name__
+
+
+class _UnavailablePiService:
+    available = False
+    unavailable_reason = "Pi worker is unavailable"
+
+    def run(self, *_args: object, **_kwargs: object) -> AgentRunOutcome:
+        raise AgentRunError(self.unavailable_reason)
 
 
 __all__ = ["AgentRunCoordinator", "RUN_STOP_WAIT_SECONDS", "RunConflictError"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import importlib.metadata
 import math
 import os
 import time
@@ -23,6 +24,7 @@ from .cad_executor import (
 )
 from .contracts import ToolUseRecord
 from .events import ProgressUpdate
+from .harnesses import AgentHarness
 from .projects import ProjectStore
 from .projects import ProjectState
 from .restricted_tools import AgentModelValidator
@@ -44,6 +46,11 @@ class AgentRunCancelled(AgentRunError):
 MAX_AGENT_RUN_SECONDS = 10 * 60.0
 AGENT_RUN_TIMEOUT_SECONDS = MAX_AGENT_RUN_SECONDS
 MAX_PROVIDER_RETRIES = 2
+
+try:
+    DEEPAGENTS_IMPLEMENTATION_VERSION = importlib.metadata.version("deepagents")
+except importlib.metadata.PackageNotFoundError:
+    DEEPAGENTS_IMPLEMENTATION_VERSION = "unknown"
 
 _AGENT_RUN_TIMEOUT_MESSAGE = "Agent Run exceeded the ten-minute wall-clock limit"
 
@@ -96,8 +103,11 @@ class AgentRunOutcome:
     duration_seconds: float | None = None
     token_usage: dict[str, int] | None = None
     cancelled: bool = False
+    harness: AgentHarness = AgentHarness.DEEPAGENTS
+    implementation_version: str | None = DEEPAGENTS_IMPLEMENTATION_VERSION
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "harness", AgentHarness(self.harness))
         results = self.execution_results
         if not results and self.execution_result is not None:
             object.__setattr__(self, "execution_results", (self.execution_result,))
@@ -113,6 +123,8 @@ class AgentRunOutcome:
     def diagnostics(self) -> dict[str, Any]:
         results = self.execution_results
         return {
+            "harness": self.harness.value,
+            "implementation_version": self.implementation_version,
             "status": self.status,
             "failure_reason": self.failure_reason,
             "execution_result": (
@@ -586,6 +598,8 @@ class AgentRunService:
         token = cancellation_token or CancellationToken()
         run_log = AgentRunLog(
             self.store.project_directory(project.project_id),
+            harness=AgentHarness.DEEPAGENTS.value,
+            implementation_version=DEEPAGENTS_IMPLEMENTATION_VERSION,
         )
         if token.cancelled:
             outcome = AgentRunOutcome(

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from backend.projects import (
+    AgentHarness,
     MAX_PROMPT_CHARS,
     ProjectState,
     ProjectStateError,
@@ -34,6 +36,34 @@ def test_prompt_submission_is_persisted_and_one_shot(tmp_path: Path) -> None:
 
     with pytest.raises(ProjectStateError):
         store.submit_prompt(project.project_id, "A second Prompt.")
+
+
+def test_harness_round_trips_and_legacy_project_defaults_to_deepagents(tmp_path: Path) -> None:
+    store = ProjectStore(tmp_path)
+    project = store.create_project("Pi flange")
+    running = store.submit_prompt(project.project_id, "Create a flange.", "pi")
+
+    assert running.harness is AgentHarness.PI
+    metadata = (tmp_path / project.project_id / "project.json").read_text()
+    assert '"harness": "pi"' in metadata
+    assert ProjectStore(tmp_path).get_project(project.project_id).harness is AgentHarness.PI
+
+    legacy = store.create_project("Legacy")
+    store.submit_prompt(legacy.project_id, "Create a legacy part.")
+    legacy_metadata = tmp_path / legacy.project_id / "project.json"
+    legacy_data = json.loads(legacy_metadata.read_text(encoding="utf-8"))
+    del legacy_data["harness"]
+    legacy_metadata.write_text(
+        json.dumps(legacy_data, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    before_load = legacy_metadata.read_bytes()
+
+    loaded = ProjectStore(tmp_path).get_project(legacy.project_id)
+
+    assert loaded.state is ProjectState.RUNNING
+    assert loaded.harness is AgentHarness.DEEPAGENTS
+    assert legacy_metadata.read_bytes() == before_load
 
 
 def test_project_names_may_repeat_but_ids_are_opaque(tmp_path: Path) -> None:

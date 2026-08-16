@@ -32,6 +32,8 @@ class AgentRunLog:
         self,
         project_dir: str | Path,
         *,
+        harness: str | None = None,
+        implementation_version: str | None = None,
         provider: str | None = None,
         model_id: str | None = None,
         base_url: str | None = None,
@@ -51,6 +53,8 @@ class AgentRunLog:
             return
         self._append(
             "run_started",
+            harness=harness,
+            implementation_version=implementation_version,
             model={
                 "provider": provider,
                 "model_id": model_id,

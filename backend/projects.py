@@ -13,6 +13,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 
+from .harnesses import AgentHarness
 from .model_source import create_model_source
 from .previews import MAX_PREVIEW_BYTES, PreviewError, preview_path, validate_mesh_document
 
@@ -74,13 +75,19 @@ class Project:
     updated_at: str
     prompt: str | None = None
     failure_reason: str | None = None
+    harness: AgentHarness = AgentHarness.DEEPAGENTS
 
     def __post_init__(self) -> None:
         try:
             normalized_state = ProjectState(self.state)
         except ValueError as exc:
             raise ProjectError(f"unknown Project State: {self.state}") from exc
+        try:
+            normalized_harness = AgentHarness(self.harness)
+        except ValueError as exc:
+            raise ProjectError(f"unknown Agent harness: {self.harness}") from exc
         object.__setattr__(self, "state", normalized_state)
+        object.__setattr__(self, "harness", normalized_harness)
 
 
 class ProjectStore:
@@ -163,8 +170,17 @@ class ProjectStore:
             raise ProjectNotFoundError("Project is outside the catalog") from exc
         return candidate
 
-    def submit_prompt(self, project_id: str, prompt: str) -> Project:
+    def submit_prompt(
+        self,
+        project_id: str,
+        prompt: str,
+        harness: AgentHarness | str = AgentHarness.DEEPAGENTS,
+    ) -> Project:
         _validate_prompt(prompt)
+        try:
+            selected_harness = AgentHarness(harness)
+        except ValueError as exc:
+            raise PromptValidationError(f"unsupported Agent harness: {harness}") from exc
         project_dir = self.project_directory(project_id)
         with self._lock:
             project = self.get_project(project_id)
@@ -179,6 +195,7 @@ class ProjectStore:
                 updated_at=_timestamp(),
                 prompt=prompt,
                 failure_reason=None,
+                harness=selected_harness,
             )
             self._write_metadata(project_dir, updated)
             return updated
@@ -248,6 +265,7 @@ class ProjectStore:
                         "status": "failed",
                         "failure_reason": RESTART_RECOVERY_REASON,
                         "recovered_after_restart": True,
+                        "harness": project.harness.value,
                     }
                 )
                 recovered.append(
@@ -378,21 +396,22 @@ class ProjectStore:
             updated_at=updated_at,
             prompt=prompt,
             failure_reason=failure_reason,
+            harness=data.get("harness", AgentHarness.DEEPAGENTS.value),
         )
 
     @staticmethod
     def _write_metadata(project_dir: Path, project: Project) -> None:
-        _write_json(
-            project_dir / PROJECT_METADATA_NAME,
-            {
-                "project_id": project.project_id,
-                "name": project.name,
-                "state": project.state,
-                "created_at": project.created_at,
-                "updated_at": project.updated_at,
-                "failure_reason": project.failure_reason,
-            },
-        )
+        metadata: dict[str, object] = {
+            "project_id": project.project_id,
+            "name": project.name,
+            "state": project.state,
+            "created_at": project.created_at,
+            "updated_at": project.updated_at,
+            "failure_reason": project.failure_reason,
+        }
+        if project.state != ProjectState.DRAFT:
+            metadata["harness"] = project.harness.value
+        _write_json(project_dir / PROJECT_METADATA_NAME, metadata)
 
 
 def _validate_prompt(prompt: str) -> None:
@@ -430,6 +449,7 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> None:
 
 __all__ = [
     "DIAGNOSTICS_NAME",
+    "AgentHarness",
     "MAX_PROMPT_CHARS",
     "Project",
     "ProjectError",

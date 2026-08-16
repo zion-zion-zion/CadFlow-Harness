@@ -6,6 +6,7 @@ import asyncio
 import math
 import os
 from collections.abc import Mapping
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,8 +15,20 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .agent import AgentRunService, AgentSettings, ReferenceGroundedAgent
+from .agent import (
+    DEEPAGENTS_IMPLEMENTATION_VERSION,
+    AgentRunService,
+    AgentSettings,
+    ReferenceGroundedAgent,
+)
 from .events import ProgressEventStore
+from .harnesses import (
+    AgentHarness,
+    AgentRunAdapter,
+    AgentRunAdapterRegistry,
+    HarnessUnavailableError,
+)
+from .pi_sidecar import PI_IMPLEMENTATION_VERSION, PiAgentRunService, PiWorkerSupervisor
 from .projects import (
     ProjectError,
     ProjectNotFoundError,
@@ -38,6 +51,7 @@ class CreateProjectRequest(BaseModel):
 
 class RunProjectRequest(BaseModel):
     prompt: str
+    harness: AgentHarness = AgentHarness.DEEPAGENTS
 
 
 class DeleteProjectRequest(BaseModel):
@@ -58,9 +72,11 @@ def create_app(
     repo_root: str | Path | None = None,
     store: ProjectStore | None = None,
     run_service: Any | None = None,
+    adapter_registry: AgentRunAdapterRegistry | None = None,
     settings_factory: Callable[[], AgentSettings] | None = None,
     agent_factory: Callable[..., ReferenceGroundedAgent] = ReferenceGroundedAgent,
     frontend_dist: str | Path | None = None,
+    pi_supervisor: PiWorkerSupervisor | None = None,
 ) -> FastAPI:
     project_store = store or ProjectStore(projects_root)
     event_store = ProgressEventStore(project_store.root)
@@ -75,18 +91,53 @@ def create_app(
         settings_factory=settings_factory,
         agent_factory=agent_factory,
     )
+    worker = pi_supervisor or PiWorkerSupervisor(resolved_repo_root)
+    adapters = adapter_registry or AgentRunAdapterRegistry(
+        (
+            AgentRunAdapter(
+                AgentHarness.DEEPAGENTS,
+                service,
+                DEEPAGENTS_IMPLEMENTATION_VERSION,
+            ),
+            AgentRunAdapter(
+                AgentHarness.PI,
+                PiAgentRunService(
+                    store=project_store,
+                    repo_root=resolved_repo_root,
+                    supervisor=worker,
+                    settings_factory=settings_factory,
+                ),
+                PI_IMPLEMENTATION_VERSION,
+            ),
+        )
+    )
     coordinator = AgentRunCoordinator(
         store=project_store,
         repo_root=resolved_repo_root,
         event_store=event_store,
         run_service=service,
+        adapter_registry=adapters,
     )
     coordinator.recover_interrupted_runs()
 
-    app = FastAPI(title="CadFlowAgent")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        await asyncio.to_thread(worker.start)
+        try:
+            yield
+        finally:
+            await asyncio.to_thread(worker.shutdown)
+
+    app = FastAPI(title="CadFlowAgent", lifespan=lifespan)
     app.state.project_store = project_store
     app.state.event_store = event_store
     app.state.run_coordinator = coordinator
+    app.state.agent_run_adapters = coordinator.adapters
+    app.state.pi_worker = worker
+
+    @app.get("/api/harnesses")
+    def list_harnesses() -> tuple[dict[str, object], ...]:
+        return coordinator.adapters.statuses()
 
     @app.get("/api/projects")
     def list_projects() -> list[dict[str, object]]:
@@ -133,13 +184,15 @@ def create_app(
     @app.post("/api/projects/{project_id}/run", status_code=202)
     def start_run(project_id: str, request: RunProjectRequest) -> dict[str, object]:
         try:
-            project = coordinator.start(project_id, request.prompt)
+            project = coordinator.start(project_id, request.prompt, request.harness)
         except ProjectNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RunConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PromptValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except HarnessUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ProjectStateError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _project_payload(project_store, project)
@@ -252,6 +305,7 @@ def _project_payload(store: ProjectStore, project: Any) -> dict[str, object]:
         "updated_at": project.updated_at,
         "prompt": project.prompt,
         "failure_reason": project.failure_reason,
+        "harness": project.harness.value,
         "scene_available": scene_available,
         "diagnostics_available": diagnostics is not None,
         "duration_seconds": (

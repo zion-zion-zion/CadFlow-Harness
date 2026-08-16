@@ -9,7 +9,7 @@ canonical Scene Artifact.
 
 - Linux x86_64
 - Python 3.12
-- `uv` and Node.js/npm
+- `uv`, Node.js 22.19 or newer, npm, and bubblewrap (`bwrap`)
 - API settings copied from `.env.example` to `.env`
 
 The repository vendors `vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl` (SHA256
@@ -18,6 +18,7 @@ The repository vendors `vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl` (SHA2
 ```bash
 uv sync --group dev
 cd viewer && npm ci
+cd ../pi-sidecar && npm ci && npm run build
 ```
 
 ## Run
@@ -29,6 +30,13 @@ cd viewer && npm ci
 The backend listens on `127.0.0.1:8000` by default and the Vite viewer on
 `127.0.0.1:5173`. `TEXT_TO_CAD_HOST` may be set when the local viewer needs to
 reach the backend from another machine; this remains a trusted-demo boundary.
+
+The backend supervises a resident Pi SDK sidecar. The sidecar communicates only
+over its private JSONL standard input/output channel, uses the same
+OpenAI-compatible environment variables as Deep Agents, and receives provider
+credentials in memory only. Its `bash` tool runs with only the current Project
+writable; the repository Skills and examples are mounted read-only. Pi is an
+optional harness, so a sidecar startup failure leaves Deep Agents available.
 
 ## Skills and Model Source
 
@@ -63,6 +71,7 @@ alternative inputs or output types do not change this Project contract.
 ```bash
 uv run pytest
 cd viewer && npm run build
+cd ../pi-sidecar && npm test
 ```
 
 Live provider tests are opt-in with `-m live_agent`.

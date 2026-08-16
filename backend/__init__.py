@@ -10,6 +10,13 @@ from .cad_executor import (
     redact_credentials,
 )
 from .contracts import ToolUseRecord
+from .harnesses import (
+    AgentHarness,
+    AgentRunAdapter,
+    AgentRunAdapterRegistry,
+    HARNESS_LABELS,
+    HarnessUnavailableError,
+)
 from .events import (
     EVENTS_NAME,
     MAX_EVENT_RESULT_CHARS,
@@ -52,6 +59,14 @@ from .projects import (
     PromptValidationError,
     RESTART_RECOVERY_REASON,
 )
+from .pi_sidecar import (
+    PI_ABORT_GRACE_SECONDS,
+    PI_IMPLEMENTATION_VERSION,
+    PI_PROTOCOL_VERSION,
+    PiAgentRunService,
+    PiProtocolError,
+    PiWorkerSupervisor,
+)
 from .run_coordinator import (
     AgentRunCoordinator,
     RUN_STOP_WAIT_SECONDS,
@@ -63,6 +78,9 @@ __all__ = [
     "ARTIFACT_DIRECTORY_NAME",
     "AGENT_RUN_TIMEOUT_SECONDS",
     "AgentConfigurationError",
+    "AgentHarness",
+    "AgentRunAdapter",
+    "AgentRunAdapterRegistry",
     "AgentRunCancelled",
     "AgentRunError",
     "AgentRunOutcome",
@@ -81,6 +99,8 @@ __all__ = [
     "MAX_AGENT_RUN_SECONDS",
     "MAX_PROVIDER_RETRIES",
     "MAX_EVENT_RESULT_CHARS",
+    "HARNESS_LABELS",
+    "HarnessUnavailableError",
     "Project",
     "ProjectError",
     "ProjectNotFoundError",
@@ -93,6 +113,12 @@ __all__ = [
     "ProgressEventStore",
     "ProgressUpdate",
     "RESTART_RECOVERY_REASON",
+    "PI_ABORT_GRACE_SECONDS",
+    "PI_IMPLEMENTATION_VERSION",
+    "PI_PROTOCOL_VERSION",
+    "PiAgentRunService",
+    "PiProtocolError",
+    "PiWorkerSupervisor",
     "ReferenceGroundedAgent",
     "RestrictedAgentTools",
     "SCENE_ARTIFACT_NAME",

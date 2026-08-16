@@ -31,6 +31,7 @@ examples.py
 viewer/node_modules/
 viewer/dist/
 viewer/pnpm-lock.yaml
+pi-sidecar/node_modules/
 
 design-docs/
 
