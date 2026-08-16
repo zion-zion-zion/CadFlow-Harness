@@ -4,7 +4,9 @@ import asyncio
 import threading
 import time
 from pathlib import Path
+from typing import ClassVar
 
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 import pytest
 
 from backend.agent import (
@@ -189,11 +191,76 @@ def test_deep_agent_can_be_compiled_without_network_call(tmp_path: Path) -> None
         "edit_file",
         "glob",
         "grep",
-        "execute",
     }.issubset(graph_tools)
     # This remains one primary Text-to-CAD agent; general tools do not require
     # delegating the CAD task to another agent.
     assert "task" not in graph_tools
+
+
+def test_deep_agent_model_sees_only_the_confirmed_tool_surface(
+    tmp_path: Path,
+) -> None:
+    class ToolRecordingModel(GenericFakeChatModel):
+        bound_tool_names: ClassVar[list[str]] = []
+        bound_tool_descriptions: ClassVar[dict[str, str]] = {}
+        model_request_text: ClassVar[str] = ""
+
+        def _generate(
+            self, messages: list[object], **kwargs: object
+        ) -> object:
+            type(self).model_request_text = "\n".join(
+                str(message.content) for message in messages  # type: ignore[attr-defined]
+            )
+            return super()._generate(messages, **kwargs)  # type: ignore[arg-type,return-value]
+
+        def bind_tools(
+            self, tools: object, **_kwargs: object
+        ) -> "ToolRecordingModel":
+            type(self).bound_tool_names = [
+                item.name for item in tools  # type: ignore[union-attr]
+            ]
+            type(self).bound_tool_descriptions = {
+                item.name: item.description  # type: ignore[union-attr]
+                for item in tools  # type: ignore[union-attr]
+            }
+            return self
+
+    model = ToolRecordingModel(messages=iter(["done"]))
+    settings = AgentSettings(
+        model_id="cad-model",
+        api_key="unit-test-key",
+        provider="toolrecordingmodel",
+    )
+    restricted = RestrictedAgentTools(
+        repo_root=Path(__file__).parents[1], project_dir=tmp_path
+    )
+    restricted.begin_run()
+
+    agent = build_deep_agent(
+        settings,
+        create_agent_tools(restricted),
+        model=model,
+        workspace_root=tmp_path,
+    )
+    agent.invoke(
+        {"messages": [{"role": "user", "content": "Inspect the workspace."}]}
+    )
+
+    assert set(model.bound_tool_names) == {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "ls",
+        "glob",
+        "grep",
+        "write_todos",
+        "validate_model",
+    }
+    assert {"execute", "delete", "task"}.isdisjoint(model.bound_tool_names)
+    assert "execute" not in model.bound_tool_descriptions["grep"].lower()
+    assert "Shell paths vs. virtual paths" not in model.model_request_text
+    assert "Host path mappings" not in model.model_request_text
+    assert "execute tool runs commands" not in model.model_request_text
 
 
 def test_agent_prompt_confines_writes_and_exposes_read_only_references(
@@ -214,10 +281,9 @@ def test_agent_prompt_confines_writes_and_exposes_read_only_references(
     assert f"- `{repo_root / 'examples'}`" in prompt
     assert "read-only reference exceptions" in prompt
     assert "must never create, edit, rename, or delete anything there" in prompt
-    assert (
-        "Do not search parent\ndirectories, sibling directories, or other Projects"
-        in prompt
-    )
+    assert "create or edit only model.py and local\nPython helper modules" in prompt
+    assert "Do not search parent directories, sibling" in prompt
+    assert "directories, or other Projects" in prompt
 
 
 def test_agent_prompt_routes_through_applicable_skills_without_widening_contract(
@@ -240,6 +306,10 @@ def test_agent_prompt_routes_through_applicable_skills_without_widening_contract
     assert "including compatibility, private, and" in prompt
     assert "non-passing entry-point" in prompt
     assert "Do not use the network or install dependencies" in prompt
+    assert "read_file, write_file, edit_file, ls, glob, grep, write_todos" in prompt
+    assert "There is no shell tool in this run" in prompt
+    assert "do not execute commands" in prompt
+    assert "trusted local development environment" not in prompt
 
 
 def test_agent_prompt_requires_diagnostic_repairs_before_retry(tmp_path: Path) -> None:

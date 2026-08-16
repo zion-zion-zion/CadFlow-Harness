@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 from langchain_core.tools import BaseTool, tool
 
 from .agent_logging import AgentRunLog
+from .agent_backend import create_agent_backend
 from .cad_executor import (
     CAD_EXECUTION_TIMEOUT_SECONDS,
     CancellationToken,
@@ -53,6 +54,23 @@ except importlib.metadata.PackageNotFoundError:
     DEEPAGENTS_IMPLEMENTATION_VERSION = "unknown"
 
 _AGENT_RUN_TIMEOUT_MESSAGE = "Agent Run exceeded the ten-minute wall-clock limit"
+AGENT_EXCLUDED_TOOLS = frozenset({"execute", "delete", "task"})
+AGENT_FILESYSTEM_TOOLS = (
+    "read_file",
+    "write_file",
+    "edit_file",
+    "ls",
+    "glob",
+    "grep",
+)
+
+_AGENT_TOOL_DESCRIPTION_OVERRIDES = {
+    "grep": (
+        "Search for a literal text pattern in the current Project or the "
+        "read-only Skill/example references. Shell commands and regular "
+        "expressions are unavailable; run separate literal searches instead."
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -163,18 +181,20 @@ for another turn. If a length unit is omitted, use millimetres. If dimensions or
 construction details are underspecified, choose reasonable engineering values
 and record the important assumptions in comments near the top of Model Source.
 
-Use a run-local plan with write_todos when useful. You have general filesystem,
-search, editing, and local shell tools. Use them freely to inspect the workspace,
-read applicable CadFlow Skills, run Python, create diagnostic scripts, inspect
-generated artifacts, and use installed local tools or dependencies when they help.
+Use a run-local plan with write_todos when useful. The only tools available in
+this run are read_file, write_file, edit_file, ls, glob, grep, write_todos, and
+validate_model. Use them to inspect the workspace, edit Model Source, inspect
+structured validation results, and read applicable CadFlow Skills before modeling.
+There is no shell tool in this run: do not execute commands, create diagnostic
+scripts, install dependencies, access the network, delete files, or create
+subagents.
 Do not use the network or install new dependencies during this Agent Run.
 Use each Skill's description to decide whether it applies, then read the full
 SKILL.md before following it. Select only relevant Skills; combine modeling and
 validation guidance when both apply.
 
 The reusable Skill library may describe workflows and output types beyond this
-application. The Project contract below takes precedence for this run. The
-shell is a trusted local development environment, not a sandbox. Keep the
+application. The Project contract below takes precedence for this run. Keep the
 stable build_model entry point in the current Project's model.py, but organize
 the implementation across any local Project files when useful. You may use any
 locally installed CadFlow or Python API, including compatibility, private, and
@@ -241,9 +261,11 @@ The current Project workspace is exactly:
 `{project_dir}`
 
 Treat that directory as the working directory and the base for every relative
-path. Read, create, edit, and delete Project files only inside that directory.
-The required Model Source is `{project_dir / "model.py"}`. Do not search parent
-directories, sibling directories, or other Projects to locate it.
+path. You may read Project files, but create or edit only model.py and local
+Python helper modules inside that directory.
+The required Model Source is `{project_dir / "model.py"}`.
+Do not search parent directories, sibling directories, or other Projects to
+locate it.
 
 The following directories are read-only reference exceptions outside the
 Project workspace:
@@ -251,10 +273,10 @@ Project workspace:
 
 You may list, search, and read files under those reference directories, but
 must never create, edit, rename, or delete anything there. Do not inspect or
-modify files elsewhere. Shell commands must follow the same workspace and
-reference boundaries: they may execute installed tools and the Python
-interpreter, but command outputs and generated files must stay inside the
-Project workspace.
+modify files elsewhere. File tools are the only workspace mutation interface;
+use them only with the Project or the read-only reference roots above. Never
+attempt shell commands, package installation, network access, deletion, or
+subagent creation.
 """
     )
 
@@ -380,37 +402,51 @@ def build_deep_agent(
         create_deep_agent,
         register_harness_profile,
     )
-    from deepagents.backends import LocalShellBackend
+    from deepagents.middleware import FilesystemMiddleware
     from langchain.agents.middleware import TodoListMiddleware
 
     def planning_middleware() -> list[Any]:
         return [TodoListMiddleware()]
 
-    register_harness_profile(
-        settings.deep_agent_model_spec,
-        HarnessProfile(
-            general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
-            extra_middleware=planning_middleware,
-        ),
+    profile = HarnessProfile(
+        excluded_tools=AGENT_EXCLUDED_TOOLS,
+        tool_description_overrides=_AGENT_TOOL_DESCRIPTION_OVERRIDES,
+        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+        extra_middleware=planning_middleware,
     )
+    register_harness_profile(settings.deep_agent_model_spec, profile)
+    register_harness_profile(settings.provider, profile)
     resolved_model = build_chat_model(settings) if model is None else model
     resolved_workspace_root = Path(workspace_root or Path.cwd()).expanduser().resolve()
-    backend = LocalShellBackend(
-        root_dir=resolved_workspace_root,
-        virtual_mode=False,
-        timeout=int(CAD_EXECUTION_TIMEOUT_SECONDS),
-        inherit_env=True,
+    resolved_skill_root = (
+        Path(skill_root).expanduser().resolve() if skill_root is not None else None
+    )
+    resolved_example_root = (
+        Path(example_root).expanduser().resolve() if example_root is not None else None
+    )
+    backend = create_agent_backend(
+        resolved_workspace_root,
+        skill_root=resolved_skill_root,
+        example_root=resolved_example_root,
+        shell_timeout=int(CAD_EXECUTION_TIMEOUT_SECONDS),
     )
     return create_deep_agent(
         model=resolved_model,
         tools=tuple(tools),
         system_prompt=_build_agent_system_prompt(
             workspace_root=resolved_workspace_root,
-            skill_root=skill_root,
-            example_root=example_root,
+            skill_root=resolved_skill_root,
+            example_root=resolved_example_root,
+        ),
+        middleware=(
+            FilesystemMiddleware(
+                backend=backend,
+                custom_tool_descriptions=_AGENT_TOOL_DESCRIPTION_OVERRIDES,
+                tools=list(AGENT_FILESYSTEM_TOOLS),
+            ),
         ),
         subagents=(),
-        skills=[str(skill_root)] if skill_root is not None else None,
+        skills=[str(resolved_skill_root)] if resolved_skill_root is not None else None,
         backend=backend,
         memory=None,
         checkpointer=None,
