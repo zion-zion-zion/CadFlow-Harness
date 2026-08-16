@@ -48,3 +48,17 @@ uv run python examples/20_integrated_bldc_joint_actuator/main.py
 
 These examples cover CadFlow SDK capabilities beyond the Agent application's
 single-part Model/Shape boundary.
+
+## Text2CAD workpieces
+
+The synchronized Text2CAD examples build and export progressively more complex
+mechanical workpieces:
+
+- `text2cad_workpiece.py`
+- `text2cad_complex_workpiece.py`
+- `text2cad_connector_workpiece.py`
+- `text2cad_boiler.py`
+
+Their default output paths point to CadFlow's repository-level `artifacts/`
+layout. Override those paths before running them from another checkout when
+the generated artifacts should stay inside this repository.

@@ -13,7 +13,7 @@ canonical Scene Artifact.
 - API settings copied from `.env.example` to `.env`
 
 The repository vendors `vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl` (SHA256
-`d48acda48f29f5c022695c377f7e0f6089c188923091fd45c3fd2c0e3234886a`).
+`753c513fee879258a561efa9d3edf7e73ebe904ed160264caf5851c20b99854f`).
 
 ```bash
 uv sync --group dev
