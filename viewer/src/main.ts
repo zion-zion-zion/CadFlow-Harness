@@ -388,13 +388,21 @@ function closeProgressStream(): void {
   eventSource = null;
 }
 
+function isCurrentPreview(projectId: string, version: number, attempt: number, revision: number): boolean {
+  return version === selectedVersion
+    && selectedProjectId === projectId
+    && currentProject()?.state === 'Running'
+    && latestPreviewAttempt === attempt
+    && latestPreviewRevision === revision;
+}
+
 async function handlePreviewEvent(event: MessageEvent, projectId: string, version: number): Promise<void> {
   if (version !== selectedVersion || selectedProjectId !== projectId || currentProject()?.state !== 'Running') return;
   let controller: AbortController | null = null;
   try {
     const record = JSON.parse(event.data) as ProgressRecord;
     const preview = record.preview;
-    if (!preview || !Number.isSafeInteger(preview.attempt) || preview.attempt < 1 || !Number.isSafeInteger(preview.revision) || preview.revision < 1 || typeof preview.operation !== 'string') return;
+    if (!preview || !Number.isSafeInteger(preview.attempt) || preview.attempt < 1 || !Number.isSafeInteger(preview.revision) || preview.revision < 1 || typeof preview.operation !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(preview.operation)) return;
     if (preview.attempt !== latestPreviewAttempt) {
       if (preview.attempt < latestPreviewAttempt) return;
       latestPreviewAttempt = preview.attempt;
@@ -407,18 +415,25 @@ async function handlePreviewEvent(event: MessageEvent, projectId: string, versio
     previewRequest = controller;
     const response = await fetch(
       `/api/projects/${encodeURIComponent(projectId)}/previews/${preview.attempt}/${preview.revision}`,
-      { signal: controller.signal },
+      {
+        signal: controller.signal,
+        headers: { Accept: 'model/gltf-binary' },
+      },
     );
     if (!response.ok) throw new Error(`Preview request failed (${response.status})`);
-    const payload = await response.json() as unknown;
-    if (version !== selectedVersion || selectedProjectId !== projectId || latestPreviewAttempt !== preview.attempt || latestPreviewRevision !== preview.revision) return;
-    await sceneViewer.loadPreview(payload, `${preview.operation} preview`);
-    if (version === selectedVersion && selectedProjectId === projectId && latestPreviewAttempt === preview.attempt && latestPreviewRevision === preview.revision) {
+    const payload = await response.arrayBuffer();
+    if (!isCurrentPreview(projectId, version, preview.attempt, preview.revision)) return;
+    const displayed = await sceneViewer.loadPreview(
+      payload,
+      `${preview.operation} preview`,
+      () => isCurrentPreview(projectId, version, preview.attempt, preview.revision),
+    );
+    if (displayed && isCurrentPreview(projectId, version, preview.attempt, preview.revision)) {
       previewProjectId = projectId;
       renderViewerEmpty();
     }
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') return;
+    if (controller?.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return;
     if (version === selectedVersion && selectedProjectId === projectId) setMessage('Live preview could not be displayed.');
   } finally {
     if (controller !== null && previewRequest === controller) previewRequest = null;

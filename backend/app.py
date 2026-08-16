@@ -273,7 +273,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return FileResponse(
             preview,
-            media_type="application/json",
+            media_type="model/gltf-binary",
             headers={"Cache-Control": "no-store"},
         )
 

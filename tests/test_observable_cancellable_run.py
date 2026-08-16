@@ -5,6 +5,7 @@ import threading
 import time
 from pathlib import Path
 
+import cadflow as cad
 import pytest
 from fastapi.testclient import TestClient
 
@@ -77,24 +78,17 @@ def test_scene_preview_event_and_artifact_are_available_during_a_run(
     assert running.state is ProjectState.RUNNING
     preview_dir = tmp_path / project["project_id"] / "previews" / "1"
     preview_dir.mkdir(parents=True)
-    (preview_dir / "1.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "operation": "union",
-                "vertices": [0, 0, 0, 1, 0, 0, 0, 1, 0],
-                "triangles": [0, 1, 2],
-            }
-        ),
-        encoding="utf-8",
-    )
+    with cad.Model() as model:
+        (preview_dir / "1.glb").write_bytes(model.box(width=1, depth=1, height=1).preview_glb())
 
     response = client.get(
         f"/api/projects/{project['project_id']}/previews/1/1"
     )
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
-    assert response.json()["operation"] == "union"
+    assert response.headers["content-type"].startswith("model/gltf-binary")
+    assert response.content[:4] == b"glTF"
+    (preview_dir / "2.glb").write_bytes(b"legacy JSON or a partial frame")
     assert client.get(
         f"/api/projects/{project['project_id']}/previews/1/2"
     ).status_code == 404

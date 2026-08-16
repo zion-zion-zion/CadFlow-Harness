@@ -15,7 +15,11 @@ from typing import Any, Mapping
 
 from .harnesses import AgentHarness
 from .model_source import create_model_source
-from .previews import MAX_PREVIEW_BYTES, PreviewError, preview_path, validate_mesh_document
+from .previews import (
+    PreviewError,
+    preview_path,
+    validate_preview_glb,
+)
 
 
 MAX_PROMPT_CHARS = 32_000
@@ -291,23 +295,17 @@ class ProjectStore:
         return artifact
 
     def preview_artifact(self, project_id: str, attempt: int, revision: int) -> Path:
-        """Return one validated live mesh frame for a non-Draft Project."""
+        """Return one validated live GLB frame for a non-Draft Project."""
 
         project = self.get_project(project_id)
         if project.state == ProjectState.DRAFT:
             raise ProjectStateError("Preview is available only after an Agent Run starts")
         try:
             path = preview_path(self.project_directory(project_id), attempt, revision)
-        except PreviewError as exc:
-            raise ProjectStateError(str(exc)) from exc
-        if path.is_symlink() or not path.is_file():
-            raise ProjectStateError("Preview frame does not exist")
-        try:
-            if path.stat().st_size > MAX_PREVIEW_BYTES:
-                raise ProjectStateError("Preview frame exceeds the size limit")
-            document = json.loads(path.read_text(encoding="utf-8"))
-            validate_mesh_document(document)
-        except (OSError, UnicodeError, json.JSONDecodeError, PreviewError) as exc:
+            if path.is_symlink() or not path.is_file():
+                raise PreviewError("preview frame is missing")
+            validate_preview_glb(path.read_bytes())
+        except (OSError, PreviewError) as exc:
             raise ProjectStateError("Preview frame is invalid") from exc
         return path
 

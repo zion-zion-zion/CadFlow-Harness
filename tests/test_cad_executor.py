@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import threading
 import time
 from pathlib import Path
+
+import cadflow as cad
 
 from backend.cad_executor import (
     CADExecutor,
@@ -12,6 +15,7 @@ from backend.cad_executor import (
     build_cad_environment,
 )
 from backend.model_source import create_model_source
+from backend.previews import PreviewFrame
 
 
 def test_cancellation_token_preserves_the_first_cancellation_reason() -> None:
@@ -291,7 +295,7 @@ def test_cad_environment_removes_provider_credentials_but_keeps_runtime_values()
     assert environment["SAFE_RUNTIME_VALUE"] == "kept"
 
 
-def test_major_cad_operations_emit_mesh_preview_frames(tmp_path: Path) -> None:
+def test_major_cad_operations_emit_glb_preview_frames(tmp_path: Path) -> None:
     scaffold = create_model_source(tmp_path)
     scaffold.model_path.write_text(
         """import cadflow as cad
@@ -305,23 +309,32 @@ def build_model(model: cad.Model):
 """,
         encoding="utf-8",
     )
-    frames = []
+    frames: list[PreviewFrame] = []
+    published_payloads: dict[int, bytes] = {}
+
+    def capture_frame(frame: PreviewFrame) -> None:
+        frames.append(frame)
+        published_payloads[frame.revision] = frame.path.read_bytes()
 
     result = CADExecutor().execute(
         tmp_path,
         timeout_seconds=30.0,
         attempt=2,
-        preview_callback=frames.append,
+        preview_callback=capture_frame,
     )
 
     assert result.status == "succeeded"
     assert [frame.operation for frame in frames] == ["union", "cut"]
     assert [frame.revision for frame in frames] == [1, 2]
     for frame in frames:
-        document = json.loads(frame.path.read_text(encoding="utf-8"))
-        assert document["operation"] == frame.operation
-        assert document["vertices"]
-        assert document["triangles"]
+        payload = frame.path.read_bytes()
+        assert frame.path.name == f"{frame.revision}.glb"
+        assert payload == published_payloads[frame.revision]
+        assert frame.content_hash == "sha256:" + hashlib.sha256(payload).hexdigest()
+        assert payload[:4] == b"glTF"
+        info = cad.scene.preflight_glb(payload, expected_kind="triangle")
+        assert info.vertex_count > 0
+        assert info.index_count > 0
     assert result.artifact_entries == ("model.scene.zip",)
 
 

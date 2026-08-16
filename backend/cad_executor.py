@@ -261,8 +261,10 @@ class CADExecutor:
         preflight_status = "not_run"
         imported_modules: tuple[str, ...] = ()
         live_preview_callback = preview_callback
+        last_preview_revision = 0
 
         def handle_preview_line(line: str) -> None:
+            nonlocal last_preview_revision
             if not line.startswith(_PREVIEW_PREFIX) or live_preview_callback is None:
                 return
             try:
@@ -272,7 +274,14 @@ class CADExecutor:
                 marker_attempt = payload.get("attempt")
                 revision = payload.get("revision")
                 operation = payload.get("operation")
-                if marker_attempt != attempt or not isinstance(revision, int) or not isinstance(operation, str):
+                if (
+                    marker_attempt != attempt
+                    or not isinstance(revision, int)
+                    or isinstance(revision, bool)
+                    or revision < 1
+                    or revision <= last_preview_revision
+                    or not isinstance(operation, str)
+                ):
                     return
                 frame = read_preview_frame(
                     root,
@@ -280,8 +289,9 @@ class CADExecutor:
                     revision=revision,
                     operation=operation,
                 )
+                last_preview_revision = revision
                 live_preview_callback(frame)
-            except (PreviewError, TypeError, ValueError, json.JSONDecodeError):
+            except (OSError, PreviewError, TypeError, ValueError, json.JSONDecodeError):
                 return
 
         stdout_collector = _OutputCollector(
@@ -754,7 +764,7 @@ print({_PREFLIGHT_PREFIX!r} + json.dumps(
 ), flush=True)
 
 class PreviewModel(cad.Model):
-    '''CadFlow model that publishes bounded, best-effort mesh checkpoints.'''
+    '''CadFlow model that publishes bounded, best-effort GLB checkpoints.'''
 
     _preview_limit = 24
 
@@ -773,27 +783,17 @@ class PreviewModel(cad.Model):
                 return
             if int(shape.topology.get("solids", 0)) < 1:
                 return
-            mesh = shape.mesh(deflection=0.5)
-            vertices = mesh.get("vertices")
-            triangles = mesh.get("triangles")
-            if not isinstance(vertices, list) or not isinstance(triangles, list):
+            payload = shape.preview_glb(deflection=0.35)
+            if not isinstance(payload, bytes) or not payload:
                 return
-            document = {{
-                "schema_version": 1,
-                "operation": operation,
-                "vertices": vertices,
-                "triangles": triangles,
-            }}
-            self._preview_revision += 1
-            revision = self._preview_revision
+            cad.scene.preflight_glb(payload, expected_kind="triangle")
+            revision = self._preview_revision + 1
             self._preview_root.mkdir(parents=True, exist_ok=True)
-            path = self._preview_root / (str(revision) + ".json")
+            path = self._preview_root / (str(revision) + ".glb")
             temporary = self._preview_root / ("." + str(revision) + ".tmp")
-            temporary.write_text(
-                json.dumps(document, separators=(",", ":"), allow_nan=False),
-                encoding="utf-8",
-            )
+            temporary.write_bytes(payload)
             os.replace(temporary, path)
+            self._preview_revision = revision
             print(
                 {_PREVIEW_PREFIX!r}
                 + json.dumps(

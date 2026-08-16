@@ -82,8 +82,7 @@ const MAX_UNPACKED_BYTES = 512 * 1024 * 1024;
 const MAX_MEMBER_BYTES = 256 * 1024 * 1024;
 const MAX_SCENE_JSON_BYTES = 8 * 1024 * 1024;
 const MAX_COMPRESSION_RATIO = 100;
-const MAX_PREVIEW_COORDINATES = 3_000_000;
-const MAX_PREVIEW_INDICES = 3_000_000;
+const MAX_PREVIEW_BYTES = 16 * 1024 * 1024;
 const CAD_EDGE_LIGHTNESS_OFFSET = 0.5;
 const CAD_EDGE_LINE_WIDTH = 1.6;
 
@@ -143,7 +142,9 @@ export class SceneViewer {
 
     this.modelRoot.name = 'validated-scene';
     this.previewRoot.name = 'live-preview';
-    this.previewRoot.scale.setScalar(0.001);
+    // Native preview GLBs use glTF's Y-up basis: (x, z, -y) / 1000.
+    // The application scene is Z-up, so rotate the preview into that basis.
+    this.previewRoot.rotation.x = Math.PI / 2;
     this.scene.add(this.modelRoot, this.previewRoot);
     this.resizeObserver = new ResizeObserver(() => this.resize(container));
     this.resizeObserver.observe(container);
@@ -187,27 +188,42 @@ export class SceneViewer {
     }
   }
 
-  async loadPreview(document: unknown, label: string): Promise<void> {
-    const meshDocument = validatePreviewDocument(document);
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshDocument.vertices, 3));
-    geometry.setIndex(meshDocument.triangles);
-    geometry.computeVertexNormals();
-    geometry.computeBoundingSphere();
-    const material = new THREE.MeshStandardMaterial({
-      color: '#b5e87d',
-      metalness: 0.18,
-      roughness: 0.42,
-      side: THREE.DoubleSide,
+  async loadPreview(
+    payload: ArrayBuffer,
+    label: string,
+    isCurrent: () => boolean = () => true,
+  ): Promise<boolean> {
+    if (payload.byteLength > MAX_PREVIEW_BYTES) {
+      throw new ScenePackageError('Preview frame exceeds the browser size limit');
+    }
+    let next: THREE.Object3D;
+    try {
+      const gltf = await this.loader.parseAsync(payload, '');
+      next = gltf.scene;
+    } catch (error) {
+      throw new ScenePackageError(
+        `Preview frame is not a valid CadFlow GLB: ${error instanceof Error ? error.message : 'parse failed'}`,
+      );
+    }
+    next.name = 'preview-model';
+    next.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (material instanceof THREE.MeshStandardMaterial) {
+          material.color.set('#b5e87d');
+          material.metalness = 0.18;
+          material.roughness = 0.42;
+          material.side = THREE.DoubleSide;
+        }
+      }
     });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = `preview-${meshDocument.operation}`;
-    const edgeGeometry = new THREE.EdgesGeometry(geometry, 28);
-    const edgeMaterial = new THREE.LineBasicMaterial({ color: '#273a25', transparent: true, opacity: 0.9 });
-    const edges = new THREE.LineSegments(edgeGeometry, edgeMaterial);
-    edges.name = 'preview-edges';
-    const next = new THREE.Group();
-    next.add(mesh, edges);
+    if (!isCurrent()) {
+      this.disposePreviewObject(next);
+      return false;
+    }
+    // Parsing completes before this swap, so a failed or stale frame leaves the
+    // last usable preview visible and its GPU resources intact.
     this.clearPreview();
     this.previewRoot.add(next);
     if (!this.previewHasFramed) {
@@ -215,6 +231,7 @@ export class SceneViewer {
       this.previewHasFramed = true;
     }
     this.onStatus(`${label} · unvalidated`, false);
+    return true;
   }
 
   markPreviewUnvalidated(): void {
@@ -434,52 +451,29 @@ export class SceneViewer {
   private clearPreview(): void {
     while (this.previewRoot.children.length) {
       const child = this.previewRoot.children[0];
-      child.traverse((object) => {
-        if (!(object instanceof THREE.Mesh || object instanceof THREE.LineSegments || object instanceof THREE.Points)) return;
-        object.geometry.dispose();
-        const materials = Array.isArray(object.material) ? object.material : [object.material];
-        for (const material of materials) material.dispose();
-      });
+      this.disposePreviewObject(child);
       this.previewRoot.remove(child);
     }
   }
-}
 
-type PreviewMeshDocument = {
-  operation: string;
-  vertices: number[];
-  triangles: number[];
-};
-
-function validatePreviewDocument(document: unknown): PreviewMeshDocument {
-  if (typeof document !== 'object' || document === null || Array.isArray(document)) {
-    throw new ScenePackageError('Preview frame must be an object');
+  private disposePreviewObject(root: THREE.Object3D): void {
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    root.traverse((object) => {
+      if (!(object instanceof THREE.Mesh || object instanceof THREE.LineSegments || object instanceof THREE.Points)) return;
+      if (!geometries.has(object.geometry)) {
+        object.geometry.dispose();
+        geometries.add(object.geometry);
+      }
+      const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of objectMaterials) {
+        if (!materials.has(material)) {
+          material.dispose();
+          materials.add(material);
+        }
+      }
+    });
   }
-  const payload = document as Record<string, unknown>;
-  if (payload.schema_version !== 1) throw new ScenePackageError('Unsupported preview schema');
-  const operation = payload.operation;
-  if (typeof operation !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(operation)) {
-    throw new ScenePackageError('Preview operation is invalid');
-  }
-  const vertices = payload.vertices;
-  const triangles = payload.triangles;
-  if (!Array.isArray(vertices) || !Array.isArray(triangles)) {
-    throw new ScenePackageError('Preview mesh must contain vertices and triangles');
-  }
-  if (vertices.length === 0 || vertices.length % 3 !== 0 || vertices.length > MAX_PREVIEW_COORDINATES) {
-    throw new ScenePackageError('Preview vertices are invalid');
-  }
-  if (triangles.length === 0 || triangles.length % 3 !== 0 || triangles.length > MAX_PREVIEW_INDICES) {
-    throw new ScenePackageError('Preview triangles are invalid');
-  }
-  for (const value of vertices) {
-    if (typeof value !== 'number' || !Number.isFinite(value)) throw new ScenePackageError('Preview vertices must be finite numbers');
-  }
-  const vertexCount = vertices.length / 3;
-  for (const value of triangles) {
-    if (!Number.isSafeInteger(value) || value < 0 || value >= vertexCount) throw new ScenePackageError('Preview triangle index is invalid');
-  }
-  return { operation, vertices, triangles };
 }
 
 function bytesFor(files: PackageFiles, uri: string): Uint8Array {
