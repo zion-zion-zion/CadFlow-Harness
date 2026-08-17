@@ -293,20 +293,20 @@ def test_agent_prompt_routes_through_applicable_skills_without_widening_contract
         skill_root=Path(__file__).parents[1] / "skills",
     )
 
-    assert "read applicable CadFlow Skills" in prompt
-    assert "Use each Skill's description to decide whether it applies" in prompt
-    assert "read the full\nSKILL.md before following it" in prompt
-    assert "combine modeling and\nvalidation guidance when both apply" in prompt
-    assert "The Project contract below takes precedence for this run" in prompt
-    assert "one returned final cad.Shape" in prompt
-    assert "read the loaded CadFlow Skill" not in prompt
-    assert "locally installed CadFlow or Python API" in prompt
-    assert "including compatibility, private, and" in prompt
-    assert "non-passing entry-point" in prompt
-    assert "Do not use the network or install dependencies" in prompt
-    assert "read_file, write_file, edit_file, ls, glob, grep, write_todos" in prompt
-    assert "There is no shell tool in this run" in prompt
-    assert "do not execute commands" in prompt
+    assert "The current executor accepts one final `cad.Shape`" in prompt
+    assert "not a general limitation of CadFlow" in prompt
+    assert "Read any relevant CadFlow Skills" in prompt
+    assert "You may choose more than one Skill" in prompt
+    assert "If Skills disagree, preserve the" in prompt
+    assert "current run contract" in prompt
+    assert "Use only public CadFlow and Python APIs" in prompt
+    assert "Do not import private CadFlow engine" in prompt
+    assert "It may be empty or may contain an" in prompt
+    assert "non-passing entry-point" not in prompt
+    assert "including compatibility, private, and" not in prompt
+    assert "There is no shell tool in this run" not in prompt
+    assert "do not execute commands" not in prompt
+    assert "Do not use the network or install dependencies" not in prompt
     assert "trusted local development environment" not in prompt
 
 
@@ -316,15 +316,26 @@ def test_agent_prompt_requires_diagnostic_repairs_before_retry(tmp_path: Path) -
         skill_root=None,
     )
 
-    assert "On each failed validation:" in prompt
-    assert "Identify the failure category from error_type and preflight_status." in prompt
-    assert "Identify the likely geometric, API, or source-code cause." in prompt
-    assert "Modify only what is necessary to address that specific failure" in prompt
-    assert "Revalidate the repaired Model Source only if it has materially changed." in prompt
-    assert "Never retry an unchanged or semantically equivalent model" in prompt
-    assert "Each retry must address a specific reported failure." in prompt
-    assert "There is no CAD\nexecution-count limit." in prompt
-    assert "time\nremains within the ten-minute Agent Run deadline" in prompt
+    assert "When validation fails:" in prompt
+    assert "Identify the reported failure and its likely cause." in prompt
+    assert "Make a concrete, material source change" in prompt
+    assert "Call `validate_model` again only after the source has materially changed." in prompt
+    assert "Never retry an unchanged or semantically equivalent Model Source." in prompt
+    assert "unrelated changes merely to continue the run." in prompt
+    assert "When validation succeeds, stop all further tool calls immediately." in prompt
+
+
+def test_agent_prompt_requires_todo_plan_before_source_edits(tmp_path: Path) -> None:
+    prompt = _build_agent_system_prompt(
+        workspace_root=tmp_path,
+        skill_root=None,
+    )
+
+    assert "Before making any change to `model.py`" in prompt
+    assert "you\nmust call `write_todos`" in prompt
+    assert "required even when the request appears simple" in prompt
+    assert "Do not write or edit Project\nsource before the initial todo plan exists." in prompt
+    assert "Keep the plan current as the\nwork progresses" in prompt
 
 
 def test_missing_configuration_fails_a_project_without_calling_a_model(

@@ -11,23 +11,6 @@ ARTIFACT_DIRECTORY_NAME = "artifacts"
 SCENE_ARTIFACT_NAME = "model.scene.zip"
 
 
-_MODEL_SOURCE = '''"""Single-part CadFlow Model Source entry point.
-
-The Agent owns the Project implementation and may replace this file or add
-local modules. The runner creates the Model session and calls
-``build_model(model)``.
-"""
-
-import cadflow as cad
-
-
-def build_model(model: cad.Model) -> cad.Shape:
-    """Build the requested part and return one final CadFlow Shape."""
-
-    raise NotImplementedError("Implement the requested part")
-'''
-
-
 @dataclass(frozen=True)
 class ModelSourceScaffold:
     """Fixed paths and source contract for one Project's Model Source."""
@@ -43,7 +26,7 @@ def create_model_source(
     *,
     overwrite: bool = False,
 ) -> ModelSourceScaffold:
-    """Create the initial non-passing Model Source for a Project."""
+    """Create the initial empty Model Source for a Project."""
 
     root = Path(project_dir).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -55,7 +38,7 @@ def create_model_source(
         raise ValueError("Project artifact directory must not be a symlink")
     artifact_dir.mkdir(parents=True, exist_ok=True)
     if overwrite or not model_path.exists():
-        model_path.write_text(_MODEL_SOURCE, encoding="utf-8")
+        model_path.write_text("", encoding="utf-8")
     return ModelSourceScaffold(
         project_dir=root,
         model_path=model_path,
