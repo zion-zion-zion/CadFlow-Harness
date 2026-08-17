@@ -67,7 +67,7 @@ AGENT_FILESYSTEM_TOOLS = (
 _AGENT_TOOL_DESCRIPTION_OVERRIDES = {
     "grep": (
         "Search for a literal text pattern in the current Project or the "
-        "read-only Skill/example references. Shell commands and regular "
+        "read-only Skill reference. Shell commands and regular "
         "expressions are unavailable; run separate literal searches instead."
     ),
 }
@@ -238,16 +238,13 @@ def _build_agent_system_prompt(
     *,
     workspace_root: str | Path,
     skill_root: str | Path | None,
-    example_root: str | Path | None,
 ) -> str:
     """Add the concrete run-local filesystem boundaries to the Agent prompt."""
 
     project_dir = Path(workspace_root).expanduser().resolve()
-    read_only_roots = [
-        Path(root).expanduser().resolve()
-        for root in (skill_root, example_root)
-        if root is not None
-    ]
+    read_only_roots = (
+        [Path(skill_root).expanduser().resolve()] if skill_root is not None else []
+    )
     read_only_lines = "\n".join(f"- `{root}`" for root in read_only_roots)
     if not read_only_lines:
         read_only_lines = "- None"
@@ -267,16 +264,15 @@ The required Model Source is `{project_dir / "model.py"}`.
 Do not search parent directories, sibling directories, or other Projects to
 locate it.
 
-The following directories are read-only reference exceptions outside the
-Project workspace:
+The following directory is a read-only Skill reference outside the Project
+workspace:
 {read_only_lines}
 
-You may list, search, and read files under those reference directories, but
-must never create, edit, rename, or delete anything there. Do not inspect or
-modify files elsewhere. File tools are the only workspace mutation interface;
-use them only with the Project or the read-only reference roots above. Never
-attempt shell commands, package installation, network access, deletion, or
-subagent creation.
+You may list, search, and read files under that Skill reference, but must never
+create, edit, rename, or delete anything there. Do not inspect or modify files
+elsewhere. File tools are the only workspace mutation interface; use them only
+with the Project or the read-only Skill reference above. Never attempt shell
+commands, package installation, network access, deletion, or subagent creation.
 """
     )
 
@@ -392,7 +388,6 @@ def build_deep_agent(
     model: Any | None = None,
     workspace_root: str | Path | None = None,
     skill_root: str | Path | None = None,
-    example_root: str | Path | None = None,
 ) -> Any:
     """Build one Deep Agent with general local tools and CAD-specific tools."""
 
@@ -421,13 +416,9 @@ def build_deep_agent(
     resolved_skill_root = (
         Path(skill_root).expanduser().resolve() if skill_root is not None else None
     )
-    resolved_example_root = (
-        Path(example_root).expanduser().resolve() if example_root is not None else None
-    )
     backend = create_agent_backend(
         resolved_workspace_root,
         skill_root=resolved_skill_root,
-        example_root=resolved_example_root,
         shell_timeout=int(CAD_EXECUTION_TIMEOUT_SECONDS),
     )
     return create_deep_agent(
@@ -436,7 +427,6 @@ def build_deep_agent(
         system_prompt=_build_agent_system_prompt(
             workspace_root=resolved_workspace_root,
             skill_root=resolved_skill_root,
-            example_root=resolved_example_root,
         ),
         middleware=(
             FilesystemMiddleware(
@@ -542,7 +532,6 @@ class ReferenceGroundedAgent:
                 model=self.model,
                 workspace_root=self.project_dir,
                 skill_root=Path(self.repo_root) / "skills",
-                example_root=Path(self.repo_root) / "examples",
             )
             agent_error, timed_out = _invoke_agent_with_deadline(
                 agent,

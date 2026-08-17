@@ -462,11 +462,10 @@ class PiAgentRunService:
             "prompt": project.prompt or prompt,
             "project_dir": str(project_dir),
             "skill_root": str(self.repo_root / "skills"),
-            "example_root": str(self.repo_root / "examples"),
+            "blocked_root": str(self.repo_root / "examples"),
             "system_prompt": _build_agent_system_prompt(
                 workspace_root=project_dir,
                 skill_root=self.repo_root / "skills",
-                example_root=self.repo_root / "examples",
             ),
             "provider": {
                 "api_key": settings.api_key,

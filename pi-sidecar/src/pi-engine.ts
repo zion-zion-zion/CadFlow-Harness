@@ -28,7 +28,7 @@ export type StartRunPayload = {
   prompt: string;
   project_dir: string;
   skill_root: string;
-  example_root: string;
+  blocked_root: string;
   system_prompt: string;
   provider: {
     api_key: string;
@@ -69,10 +69,10 @@ export class PiRunEngine implements RunEngine {
   async run(payload: StartRunPayload, callbacks: EngineCallbacks, signal: AbortSignal): Promise<EngineResult> {
     const projectDir = resolve(payload.project_dir);
     const skillRoot = resolve(payload.skill_root);
-    const exampleRoot = resolve(payload.example_root);
+    const blockedRoot = resolve(payload.blocked_root);
     await assertDirectory(projectDir, 'Project');
     await assertDirectory(skillRoot, 'Skill');
-    await assertDirectory(exampleRoot, 'example');
+    await assertDirectory(blockedRoot, 'blocked reference');
 
     const resourceLoader = explicitResourceLoader(skillRoot, payload.system_prompt);
     const modelRuntime = await ModelRuntime.create({
@@ -100,7 +100,7 @@ export class PiRunEngine implements RunEngine {
     const model = modelRuntime.getModel(providerId, payload.provider.model_id);
     if (!model) throw new Error('configured Pi model could not be constructed');
 
-    const customTools = await createRestrictedTools(projectDir, skillRoot, exampleRoot, callbacks);
+    const customTools = await createRestrictedTools(projectDir, skillRoot, blockedRoot, callbacks);
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
       retry: { enabled: true, maxRetries: 2 },
@@ -193,17 +193,19 @@ function explicitResourceLoader(skillRoot: string, systemPrompt: string): Resour
 async function createRestrictedTools(
   projectDir: string,
   skillRoot: string,
-  exampleRoot: string,
+  blockedRoot: string,
   callbacks: EngineCallbacks,
 ): Promise<ToolDefinition<any, any, any>[]> {
   const projectReal = await realpath(projectDir);
-  const readableRoots = [projectReal, await realpath(skillRoot), await realpath(exampleRoot)];
+  const skillReal = await realpath(skillRoot);
+  const blockedReal = await realpath(blockedRoot);
+  const readableRoots = [projectReal, skillReal];
   let todos: Todo[] = [];
 
   const assertReadable = async (path: string): Promise<string> => {
     const resolved = await realpath(path);
     if (!readableRoots.some((root) => isWithin(root, resolved))) {
-      throw new Error('read path is outside the Project and configured references');
+      throw new Error('read path is outside the Project and configured Skill reference');
     }
     return resolved;
   };
@@ -253,7 +255,7 @@ async function createRestrictedTools(
     exposeSessionEnvironment: false,
     operations: localBash,
     spawnHook: ({ command }) => ({
-      command: sandboxedCommand(command, projectReal),
+      command: sandboxedCommand(command, projectReal, blockedReal),
       cwd: projectReal,
       env: sanitizeEnvironment(process.env),
     }),
@@ -312,11 +314,12 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-function sandboxedCommand(command: string, projectDir: string): string {
+function sandboxedCommand(command: string, projectDir: string, blockedRoot: string): string {
   const args = [
     '--die-with-parent',
     '--unshare-net',
     '--ro-bind', '/', '/',
+    '--tmpfs', blockedRoot,
     '--bind', projectDir, projectDir,
     '--chdir', projectDir,
     '/bin/bash', '-lc', command,

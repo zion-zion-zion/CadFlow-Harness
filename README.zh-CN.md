@@ -50,8 +50,9 @@ def build_model(model: cad.Model) -> cad.Shape:
 Agent 拥有 Project 工作区，可以创建本地模块，也可以使用环境中已安装的
 CadFlow/Python API。后端不会根据 API 来源直接拒绝代码，但最终返回值仍必须是
 一个有效的 `cad.Shape`，包含一个 solid 且体积为正。后端验证 Shape 后，内部生成
-`artifacts/model.scene.zip`，STEP 只用于 Scene 桥接，不作为项目产物。Skills 和
-examples 继续全部可读；其中不同的输入或输出类型不会改变当前 Project 契约。
+`artifacts/model.scene.zip`，STEP 只用于 Scene 桥接，不作为项目产物。Deep Agent
+运行可以只读访问 repository Skills，但 repository examples 不会暴露给 Agent；其中
+不同的输入或输出类型不会改变当前 Project 契约。
 
 ## 检查
 

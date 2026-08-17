@@ -84,10 +84,9 @@ def create_agent_backend(
     project_root: str | Path,
     *,
     skill_root: str | Path | None = None,
-    example_root: str | Path | None = None,
     shell_timeout: int = 120,
 ) -> CompositeBackend:
-    """Mount the Project and read-only references behind virtual path routes."""
+    """Mount the Project and read-only Skill references behind virtual routes."""
 
     project_path = Path(project_root).expanduser().resolve()
     project_backend = ScopedLocalShellBackend(project_path, timeout=shell_timeout)
@@ -96,16 +95,13 @@ def create_agent_backend(
     ] = {
         f"{project_path.as_posix().rstrip('/')}/": project_backend,
     }
-    for root in (skill_root, example_root):
-        if root is None:
-            continue
-        root_path = Path(root).expanduser().resolve()
-        if root_path == project_path:
-            continue
-        routes[f"{root_path.as_posix().rstrip('/')}/"] = ScopedFilesystemBackend(
-            root_path,
-            read_only=True,
-        )
+    if skill_root is not None:
+        skill_path = Path(skill_root).expanduser().resolve()
+        if skill_path != project_path:
+            routes[f"{skill_path.as_posix().rstrip('/')}/"] = ScopedFilesystemBackend(
+                skill_path,
+                read_only=True,
+            )
     return CompositeBackend(default=project_backend, routes=routes)
 
 

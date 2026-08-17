@@ -163,7 +163,7 @@ function validateStartPayload(payload: JsonObject): StartRunPayload {
     typeof payload.prompt !== 'string' ||
     typeof payload.project_dir !== 'string' ||
     typeof payload.skill_root !== 'string' ||
-    typeof payload.example_root !== 'string' ||
+    typeof payload.blocked_root !== 'string' ||
     typeof payload.system_prompt !== 'string' ||
     !isObject(provider) ||
     typeof provider.api_key !== 'string' ||

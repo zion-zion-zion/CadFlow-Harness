@@ -34,9 +34,10 @@ reach the backend from another machine; this remains a trusted-demo boundary.
 The backend supervises a resident Pi SDK sidecar. The sidecar communicates only
 over its private JSONL standard input/output channel, uses the same
 OpenAI-compatible environment variables as Deep Agents, and receives provider
-credentials in memory only. Its `bash` tool runs with only the current Project
-writable; the repository Skills and examples are mounted read-only. Pi is an
-optional harness, so a sidecar startup failure leaves Deep Agents available.
+credentials in memory only. Its tools can read the current Project and
+repository Skills, while repository examples are hidden from both custom file
+tools and the sandboxed `bash` mount namespace. Pi is an optional harness, so a
+sidecar startup failure leaves Deep Agents available.
 
 ## Skills and Model Source
 
@@ -63,7 +64,8 @@ already-installed local CadFlow/Python API. The backend does not reject an API
 based on its source. The returned value must still be one valid `cad.Shape` with
 one solid and positive volume. The backend creates `artifacts/model.scene.zip`
 after validating the returned Shape and keeps STEP conversion internal to the
-Scene bridge. Skills and examples remain freely readable references; their
+Scene bridge. Agent runs may read repository Skills as a read-only reference,
+but repository examples are not mounted into the Agent workspace. Their
 alternative inputs or output types do not change this Project contract.
 
 ## Checks

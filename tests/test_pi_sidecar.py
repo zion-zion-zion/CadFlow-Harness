@@ -119,6 +119,11 @@ def test_pi_run_bridges_authoritative_validator_and_records_usage(tmp_path: Path
         "model_id": "test-model",
         "base_url": None,
     }
+    assert supervisor.started_payload["blocked_root"] == str(
+        Path(__file__).parents[1] / "examples"
+    )
+    assert "example_root" not in supervisor.started_payload
+    assert "examples" not in supervisor.started_payload["system_prompt"]
     assert outcome.diagnostics()["harness"] == "pi"
 
 

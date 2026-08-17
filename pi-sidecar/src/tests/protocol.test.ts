@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { testing } from '../pi-engine.js';
 import { ProtocolWorker } from '../worker.js';
 import type { EngineCallbacks, EngineResult, RunEngine, StartRunPayload } from '../pi-engine.js';
 import type { JsonObject, ProtocolEnvelope } from '../protocol.js';
@@ -9,10 +10,19 @@ const startPayload: StartRunPayload = {
   prompt: 'make a part',
   project_dir: '/tmp/project',
   skill_root: '/tmp/skills',
-  example_root: '/tmp/examples',
+  blocked_root: '/tmp/examples',
   system_prompt: 'system',
   provider: { api_key: 'secret', model_id: 'model', base_url: null },
 };
+
+test('Pi bash masks the blocked repository reference', () => {
+  const command = testing.sandboxedCommand(
+    'cat /repo/examples/model.py',
+    '/tmp/project',
+    '/repo/examples',
+  );
+  assert.match(command, /'--tmpfs' '\/repo\/examples'/);
+});
 
 class FakeEngine implements RunEngine {
   async run(_payload: StartRunPayload, callbacks: EngineCallbacks, _signal: AbortSignal): Promise<EngineResult> {

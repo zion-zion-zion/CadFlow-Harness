@@ -178,7 +178,6 @@ def test_deep_agent_can_be_compiled_without_network_call(tmp_path: Path) -> None
         model=model,
         workspace_root=tmp_path,
         skill_root=Path(__file__).parents[1] / "skills",
-        example_root=Path(__file__).parents[1] / "examples",
     )
 
     assert agent.get_graph().nodes
@@ -272,15 +271,15 @@ def test_agent_prompt_confines_writes_and_exposes_read_only_references(
     prompt = _build_agent_system_prompt(
         workspace_root=project_dir,
         skill_root=repo_root / "skills",
-        example_root=repo_root / "examples",
     )
 
     assert f"The current Project workspace is exactly:\n`{project_dir}`" in prompt
     assert f"The required Model Source is `{project_dir / 'model.py'}`" in prompt
     assert f"- `{repo_root / 'skills'}`" in prompt
-    assert f"- `{repo_root / 'examples'}`" in prompt
-    assert "read-only reference exceptions" in prompt
-    assert "must never create, edit, rename, or delete anything there" in prompt
+    assert "read-only Skill reference" in prompt
+    assert "examples" not in prompt
+    assert "must never" in prompt
+    assert "create, edit, rename, or delete anything there" in prompt
     assert "create or edit only model.py and local\nPython helper modules" in prompt
     assert "Do not search parent directories, sibling" in prompt
     assert "directories, or other Projects" in prompt
@@ -292,7 +291,6 @@ def test_agent_prompt_routes_through_applicable_skills_without_widening_contract
     prompt = _build_agent_system_prompt(
         workspace_root=tmp_path,
         skill_root=Path(__file__).parents[1] / "skills",
-        example_root=Path(__file__).parents[1] / "examples",
     )
 
     assert "read applicable CadFlow Skills" in prompt
@@ -316,7 +314,6 @@ def test_agent_prompt_requires_diagnostic_repairs_before_retry(tmp_path: Path) -
     prompt = _build_agent_system_prompt(
         workspace_root=tmp_path,
         skill_root=None,
-        example_root=None,
     )
 
     assert "On each failed validation:" in prompt
