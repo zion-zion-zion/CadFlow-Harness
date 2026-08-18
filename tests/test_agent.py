@@ -295,8 +295,8 @@ def test_agent_prompt_routes_through_applicable_skills_without_widening_contract
 
     assert "The current executor accepts one final `cad.Shape`" in prompt
     assert "not a general limitation of CadFlow" in prompt
-    assert "Read any relevant CadFlow Skills" in prompt
-    assert "You may choose more than one Skill" in prompt
+    assert "Select the Skills whose descriptions match the request." in prompt
+    assert "Read each selected" in prompt
     assert "If Skills disagree, preserve the" in prompt
     assert "current run contract" in prompt
     assert "Use only public CadFlow and Python APIs" in prompt
@@ -332,10 +332,40 @@ def test_agent_prompt_requires_todo_plan_before_source_edits(tmp_path: Path) -> 
     )
 
     assert "Before making any change to `model.py`" in prompt
-    assert "you\nmust call `write_todos`" in prompt
     assert "required even when the request appears simple" in prompt
-    assert "Do not write or edit Project\nsource before the initial todo plan exists." in prompt
-    assert "Keep the plan current as the\nwork progresses" in prompt
+    assert "Do not write or edit Project source before the initial\ntodo plan exists." in prompt
+    assert "Immediately after the SPEC, call `write_todos`" in prompt
+    assert "Keep the todo list current as work moves\nforward." in prompt
+
+
+def test_agent_prompt_defines_request_spec_planning_sequence(tmp_path: Path) -> None:
+    prompt = _build_agent_system_prompt(
+        workspace_root=tmp_path,
+        skill_root=Path(__file__).parents[1] / "skills",
+    )
+
+    assert "## Planning phase" in prompt
+    assert "two separate planning artifacts" in prompt
+    assert "Inspect the current `model.py` and the available Skill metadata." in prompt
+    assert "Read each selected\n   full `SKILL.md`" in prompt
+    assert "Skill metadata is an index, not a substitute for the full instructions." in prompt
+    assert "SPEC\n   Intent:" in prompt
+    assert "Hard requirements:" in prompt
+    assert "Constraints:" in prompt
+    assert "Assumptions:" in prompt
+    assert "Skill guidance:" in prompt
+    assert "Do not add an acceptance-criteria section" in prompt
+    assert "Immediately after the SPEC, call `write_todos` with 3-6 high-level execution" in prompt
+    assert "Todo items track actions and status only; do not copy the full SPEC into" in prompt
+    assert "emit a normal assistant text block beginning with `SPEC UPDATE`" in prompt
+    assert "the current run contract" in prompt
+    assert "Do not rewrite the SPEC for an ordinary implementation or API error." in prompt
+
+    discovery = prompt.index("Read each selected")
+    spec = prompt.index("SPEC\n   Intent:")
+    todos = prompt.index("Immediately after the SPEC")
+    source_gate = prompt.index("Do not write or edit Project source before the initial")
+    assert discovery < spec < todos < source_gate
 
 
 def test_missing_configuration_fails_a_project_without_calling_a_model(

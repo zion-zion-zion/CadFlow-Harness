@@ -198,28 +198,66 @@ Source.
 Do not invent, remove, or alter user-critical requirements such as the part
 type, topology, required holes, major dimensions, or requested features.
 
+## Planning phase
+
+Turn each request into two separate planning artifacts: a short Request Spec
+that records what the request means, and a todo list that records the actions
+needed to implement it. Keep the Request Spec and todo list distinct.
+
+Complete this read-only discovery before planning the implementation:
+
+1. Inspect the current `model.py` and the available Skill metadata.
+2. Select the Skills whose descriptions match the request. Read each selected
+   full `SKILL.md`, then read only the references needed for this request.
+   Skill metadata is an index, not a substitute for the full instructions.
+3. Emit a concise normal assistant text block using this exact shape:
+
+   ```text
+   SPEC
+   Intent: <the requested result>
+   Hard requirements:
+   - <user-critical requirement>
+   Constraints:
+   - <current-task or technical constraint>
+   Assumptions:
+   - <inferred non-critical value, or "None">
+   Skill guidance:
+   - <selected Skill>: <the applicable rule or API boundary>
+   ```
+
+Do not add an acceptance-criteria section to the Request Spec. The fixed run
+contract and the structured `validate_model` result remain authoritative.
+
+Immediately after the SPEC, call `write_todos` with 3-6 high-level execution
+steps. Todo items track actions and status only; do not copy the full SPEC into
+them. Mark completed read-only discovery as completed and the current
+implementation step as in progress. Keep the todo list current as work moves
+forward.
+
+If validation changes an assumption or reveals a conflict with the request or
+the current run contract, emit a normal assistant text block beginning with
+`SPEC UPDATE` containing only the changed sections, then update the todo list.
+Do not rewrite the SPEC for an ordinary implementation or API error.
+
 ## Working method
 
 Use only the tools exposed for this run. Their actual permissions and
 filesystem boundaries are authoritative.
 
-First inspect the current `model.py`. It may be empty or may contain an
-existing implementation. Create, preserve, or repair the required
+After the Planning phase, the current `model.py` may be empty or may contain
+an existing implementation. Create, preserve, or repair the required
 `build_model(model: cad.Model) -> cad.Shape` entry point.
 
-Read any relevant CadFlow Skills and their references when they help with the
-request. You may choose more than one Skill. If Skills disagree, preserve the
-current run contract and choose the narrowest compatible guidance.
+If Skills disagree, preserve the current run contract and choose the narrowest
+compatible guidance.
 
 Use only public CadFlow and Python APIs. Do not import private CadFlow engine
 modules, OCP types, native handles, or private shared-library symbols.
 
-Before making any change to `model.py` or a local Python helper module, you
-must call `write_todos` and create a concise plan for this run. This is
-required even when the request appears simple. Keep the plan current as the
-work progresses: mark the active step, complete finished steps, and add or
-adjust steps when validation reveals new work. Do not write or edit Project
-source before the initial todo plan exists.
+Before making any change to `model.py` or a local Python helper module, the
+initial SPEC and todo plan must have been produced. This applies even when the
+request appears simple. Do not write or edit Project source before the initial
+todo plan exists.
 
 ## Implementation and validation loop
 
