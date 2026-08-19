@@ -426,6 +426,7 @@ function renderTimelineWindow(): void {
 async function selectEvent(item: DisplayEvent): Promise<void> {
   selectedDisplay = item;
   selectedCursor = item.event.cursor;
+  detailTab = preferredDetailTab(item);
   detail = null;
   resultDetail = null;
   renderTimelineWindow();
@@ -463,7 +464,7 @@ function renderDetail(): void {
   inspectorTitle.textContent = event.title;
   inspectorHierarchy.textContent = `Sequence ${event.sequence ?? '--'}  /  ${event.type}`;
   const availableTabs: DetailTab[] = ['summary', 'payload'];
-  if (selectedDisplay.result || event.type === 'model_response') availableTabs.push('result');
+  if (hasResultTab(selectedDisplay)) availableTabs.push('result');
   availableTabs.push('raw', 'timing');
   if (!availableTabs.includes(detailTab)) detailTab = 'summary';
   detailTabs.replaceChildren();
@@ -504,6 +505,23 @@ function detailValue(tab: DetailTab): unknown {
   }
   if (tab === 'raw') return resultDetail ? { event: detail.event, result: resultDetail.event } : detail.event;
   return value;
+}
+
+function preferredDetailTab(item: DisplayEvent): DetailTab {
+  const type = item.event.type;
+  if (type === 'model_request' || type === 'tool_call' || type === 'backend_tool') return 'payload';
+  if (hasResultTab(item)) return 'result';
+  return 'raw';
+}
+
+function hasResultTab(item: DisplayEvent): boolean {
+  return item.result !== undefined || [
+    'model_response',
+    'model_error',
+    'provider_retry',
+    'tool_result',
+    'tool_error',
+  ].includes(item.event.type);
 }
 
 function summaryPanel(tab: DetailTab): HTMLElement {
