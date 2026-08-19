@@ -23,14 +23,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .brand strong { color: #eef4fb; font-size: 14px; }
 .brand span:not(.brand-mark) { margin-top: 2px; color: #758397; font: 9px "DM Mono", monospace; letter-spacing: .08em; text-transform: uppercase; }
 .topbar-actions { gap: 12px; }
-.harness-selector { display: inline-grid; grid-template-columns: repeat(2, auto); overflow: hidden; border: 1px solid #303b48; border-radius: 3px; background: #0b0e12; }
-.harness-option { min-width: 78px; height: 29px; padding: 0 9px; border: 0; border-right: 1px solid #303b48; color: #8fa0b1; background: transparent; cursor: pointer; font: 9px "DM Mono", monospace; letter-spacing: 0; }
-.harness-option:last-child { border-right: 0; }
-.harness-option:hover:not(:disabled) { color: #e7eff5; background: #1a222b; }
-.harness-option.selected { color: #0b0e12; background: #b3e36b; }
-.harness-option.unavailable { color: #b77771; }
-.harness-option.unavailable.selected { color: #311b19; background: #dd8b80; }
-.harness-option:disabled { cursor: default; opacity: .68; }
 .local-badge, .eyebrow, code, .project-state, .project-usage, .state-badge, .count, .prompt-footer, .run-metrics, .viewer-hint, .viewer-status, .footer, .progress-heading time, .progress-item > span { font-family: "DM Mono", ui-monospace, monospace; }
 .local-badge { color: #8fa57b; font-size: 9px; letter-spacing: .12em; }
 .quiet-button, .primary-button, .warning-button, .danger-button, .primary-icon-button { border: 1px solid #303b48; border-radius: 3px; cursor: pointer; }
@@ -123,7 +115,6 @@ h1 { margin: 7px 0 0; color: #eef4fb; font-size: 17px; font-weight: 600; letter-
   .shell { min-height: 100vh; height: auto; grid-template-rows: 62px auto 30px; }
   .workspace { grid-template-columns: 220px minmax(300px, 360px) minmax(420px, 1fr); min-height: 760px; overflow: visible; }
   .topbar-leading { gap: 12px; }
-  .harness-option { min-width: 70px; padding: 0 7px; }
 }
 
 @media (max-width: 520px) {

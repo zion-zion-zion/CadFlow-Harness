@@ -11,12 +11,10 @@ class AgentHarness(str, Enum):
     """Stable machine identifiers accepted by the public Run API."""
 
     DEEPAGENTS = "deepagents"
-    PI = "pi"
 
 
 HARNESS_LABELS = {
     AgentHarness.DEEPAGENTS: "Deep Agents",
-    AgentHarness.PI: "Pi",
 }
 
 

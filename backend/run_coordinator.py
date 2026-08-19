@@ -78,11 +78,6 @@ class AgentRunCoordinator:
                     self.run_service,
                     DEEPAGENTS_IMPLEMENTATION_VERSION,
                 ),
-                AgentRunAdapter(
-                    AgentHarness.PI,
-                    _UnavailablePiService(),
-                    "0.84.2",
-                ),
             )
         )
         self._lock = threading.RLock()
@@ -335,14 +330,6 @@ class AgentRunCoordinator:
 def _safe_reason(error: Exception) -> str:
     first = str(error).strip().splitlines()[0] if str(error).strip() else ""
     return redact_credentials(first)[:500] or type(error).__name__
-
-
-class _UnavailablePiService:
-    available = False
-    unavailable_reason = "Pi worker is unavailable"
-
-    def run(self, *_args: object, **_kwargs: object) -> AgentRunOutcome:
-        raise AgentRunError(self.unavailable_reason)
 
 
 __all__ = ["AgentRunCoordinator", "RUN_STOP_WAIT_SECONDS", "RunConflictError"]

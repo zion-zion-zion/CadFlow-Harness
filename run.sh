@@ -3,7 +3,6 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PI_SIDECAR_DIR="$SCRIPT_DIR/pi-sidecar"
 BACKEND_HOST="${TEXT_TO_CAD_HOST:-0.0.0.0}"
 BACKEND_PORT="${TEXT_TO_CAD_PORT:-8000}"
 FRONTEND_HOST="${TEXT_TO_CAD_FRONTEND_HOST:-0.0.0.0}"
@@ -25,18 +24,6 @@ if ! command -v npm >/dev/null 2>&1; then
   printf 'error: npm is required but was not found in PATH\n' >&2
   exit 1
 fi
-if ! node -e '
-const [major, minor] = process.versions.node.split(".").map(Number);
-process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1);
-'; then
-  printf 'error: Node.js 22.19 or newer is required for Pi (found %s)\n' "$(node --version)" >&2
-  exit 1
-fi
-if [[ ! -x /usr/bin/bwrap ]]; then
-  printf 'error: /usr/bin/bwrap is required for the Pi shell sandbox\n' >&2
-  exit 1
-fi
-
 port_in_use() {
   local host="$1" port="$2"
   if [[ "$host" == "0.0.0.0" || "$host" == "::" ]]; then
@@ -72,16 +59,6 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$SCRIPT_DIR"
-
-sidecar_install_marker="$PI_SIDECAR_DIR/node_modules/.package-lock.json"
-if [[ ! -f "$sidecar_install_marker" \
-  || "$PI_SIDECAR_DIR/package.json" -nt "$sidecar_install_marker" \
-  || "$PI_SIDECAR_DIR/package-lock.json" -nt "$sidecar_install_marker" ]]; then
-  printf 'Installing locked Pi sidecar dependencies\n'
-  npm --prefix "$PI_SIDECAR_DIR" ci
-fi
-printf 'Building Pi sidecar\n'
-npm --prefix "$PI_SIDECAR_DIR" run build
 
 printf 'Starting backend at http://%s:%s\n' "$BACKEND_HOST" "$BACKEND_PORT"
 TEXT_TO_CAD_HOST="$BACKEND_HOST" \

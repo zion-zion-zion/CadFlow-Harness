@@ -38,32 +38,29 @@ def test_prompt_submission_is_persisted_and_one_shot(tmp_path: Path) -> None:
         store.submit_prompt(project.project_id, "A second Prompt.")
 
 
-def test_harness_round_trips_and_legacy_project_defaults_to_deepagents(tmp_path: Path) -> None:
+def test_run_uses_deepagents_harness(tmp_path: Path) -> None:
     store = ProjectStore(tmp_path)
-    project = store.create_project("Pi flange")
-    running = store.submit_prompt(project.project_id, "Create a flange.", "pi")
+    project = store.create_project("Flange")
+    running = store.submit_prompt(project.project_id, "Create a flange.")
 
-    assert running.harness is AgentHarness.PI
+    assert running.harness is AgentHarness.DEEPAGENTS
     metadata = (tmp_path / project.project_id / "project.json").read_text()
-    assert '"harness": "pi"' in metadata
-    assert ProjectStore(tmp_path).get_project(project.project_id).harness is AgentHarness.PI
+    assert '"harness": "deepagents"' in metadata
+    reloaded = ProjectStore(tmp_path).get_project(project.project_id)
+    assert reloaded.harness is AgentHarness.DEEPAGENTS
 
-    legacy = store.create_project("Legacy")
-    store.submit_prompt(legacy.project_id, "Create a legacy part.")
-    legacy_metadata = tmp_path / legacy.project_id / "project.json"
-    legacy_data = json.loads(legacy_metadata.read_text(encoding="utf-8"))
-    del legacy_data["harness"]
-    legacy_metadata.write_text(
-        json.dumps(legacy_data, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    before_load = legacy_metadata.read_bytes()
 
-    loaded = ProjectStore(tmp_path).get_project(legacy.project_id)
+def test_retired_harness_metadata_loads_as_deepagents(tmp_path: Path) -> None:
+    store = ProjectStore(tmp_path)
+    project = store.create_project("Legacy")
+    metadata_path = tmp_path / project.project_id / "project.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["harness"] = "retired"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
 
-    assert loaded.state is ProjectState.RUNNING
+    loaded = store.get_project(project.project_id)
+
     assert loaded.harness is AgentHarness.DEEPAGENTS
-    assert legacy_metadata.read_bytes() == before_load
 
 
 def test_project_names_may_repeat_but_ids_are_opaque(tmp_path: Path) -> None:
