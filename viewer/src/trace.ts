@@ -486,6 +486,8 @@ function renderDetail(): void {
   const content = detailValue(detailTab);
   if (detailTab === 'summary' || detailTab === 'timing') {
     detailContent.replaceChildren(summaryPanel(detailTab));
+  } else if (isMessageList(content)) {
+    detailContent.replaceChildren(renderMessages(content));
   } else {
     detailContent.innerHTML = `<pre class="json-view">${highlightJson(content)}</pre>`;
   }
@@ -522,6 +524,111 @@ function hasResultTab(item: DisplayEvent): boolean {
     'tool_result',
     'tool_error',
   ].includes(item.event.type);
+}
+
+function isMessageList(value: unknown): value is Array<Record<string, unknown>> {
+  return Array.isArray(value) && value.every((item) => (
+    typeof item === 'object' && item !== null && 'role' in item && 'content' in item
+  ));
+}
+
+function renderMessages(messages: Array<Record<string, unknown>>): HTMLElement {
+  const stream = document.createElement('div');
+  stream.className = 'message-stream';
+  for (const message of messages) {
+    const section = document.createElement('section');
+    section.className = 'message-block';
+    const heading = document.createElement('header');
+    const role = String(message.role ?? 'message').toUpperCase();
+    heading.innerHTML = `<span class="message-role role-${escapeHtml(role.toLowerCase())}">${escapeHtml(role)}</span>`;
+    if (typeof message.name === 'string' && message.name) {
+      const name = document.createElement('code');
+      name.textContent = message.name;
+      heading.append(name);
+    }
+    section.append(heading, renderMessageText(messageText(message.content)));
+    stream.append(section);
+  }
+  return stream;
+}
+
+function messageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (typeof part === 'string') return part;
+      if (typeof part === 'object' && part !== null && 'text' in part && typeof part.text === 'string') return part.text;
+      return JSON.stringify(part, null, 2);
+    }).filter(Boolean).join('\n\n');
+  }
+  return content == null ? '' : JSON.stringify(content, null, 2);
+}
+
+function renderMessageText(text: string): HTMLElement {
+  const body = document.createElement('div');
+  body.className = 'message-body';
+  let codeLines: string[] | null = null;
+  for (const line of text.split('\n')) {
+    if (line.trimStart().startsWith('```')) {
+      if (codeLines === null) {
+        codeLines = [];
+      } else {
+        body.append(messageCode(codeLines));
+        codeLines = null;
+      }
+      continue;
+    }
+    if (codeLines !== null) {
+      codeLines.push(line);
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+    const numbered = line.match(/^\s*(\d+\.)\s+(.+)$/);
+    const element = document.createElement(heading ? 'h4' : 'p');
+    if (heading) {
+      element.className = 'message-heading';
+      appendInlineText(element, heading[2]);
+    } else if (bullet) {
+      element.className = 'message-list-item';
+      appendInlineText(element, bullet[1]);
+    } else if (numbered) {
+      element.className = 'message-list-item message-numbered';
+      element.dataset.marker = numbered[1];
+      appendInlineText(element, numbered[2]);
+    } else if (!line.trim()) {
+      element.className = 'message-spacer';
+    } else {
+      appendInlineText(element, line);
+    }
+    body.append(element);
+  }
+  if (codeLines !== null) body.append(messageCode(codeLines));
+  return body;
+}
+
+function appendInlineText(parent: HTMLElement, text: string): void {
+  const token = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let cursor = 0;
+  for (const match of text.matchAll(token)) {
+    const index = match.index ?? 0;
+    parent.append(document.createTextNode(text.slice(cursor, index)));
+    const value = match[0];
+    const element = document.createElement(value.startsWith('`') ? 'code' : 'strong');
+    element.textContent = value.startsWith('`') ? value.slice(1, -1) : value.slice(2, -2);
+    parent.append(element);
+    cursor = index + value.length;
+  }
+  parent.append(document.createTextNode(text.slice(cursor)));
+}
+
+function messageCode(lines: string[]): HTMLElement {
+  const pre = document.createElement('pre');
+  pre.className = 'message-code';
+  const code = document.createElement('code');
+  code.textContent = lines.join('\n');
+  pre.append(code);
+  return pre;
 }
 
 function summaryPanel(tab: DetailTab): HTMLElement {

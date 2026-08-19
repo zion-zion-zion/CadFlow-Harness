@@ -166,6 +166,26 @@ code, pre, time, .trace-eyebrow, .trace-count, .event-kind, .project-row-meta, .
 .json-string { color: #e59170; }
 .json-number { color: #c3a3e1; }
 .json-literal { color: #80c59a; }
+.message-stream { min-width: 0; }
+.message-block { min-width: 0; border-bottom: 1px solid #30343a; }
+.message-block > header { display: flex; min-height: 40px; align-items: center; gap: 9px; padding: 0 14px; background: #181b1e; }
+.message-block > header code { min-width: 0; overflow: hidden; color: #858c94; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.message-role { display: inline-flex; min-width: 50px; height: 20px; align-items: center; justify-content: center; padding: 0 6px; border-radius: 2px; color: #a8cceb; background: #23384b; font: 600 9px "SFMono-Regular", Consolas, monospace; }
+.message-role.role-user { color: #8dd7ad; background: #1e3e2d; }
+.message-role.role-assistant { color: #c7a5e8; background: #382b46; }
+.message-role.role-tool { color: #efad61; background: #412e1b; }
+.message-body { min-width: 0; padding: 12px 14px 17px; color: #d3d7da; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; word-break: break-word; }
+.message-body p { min-width: 0; margin: 0 0 7px; white-space: pre-wrap; }
+.message-body p:last-child { margin-bottom: 0; }
+.message-heading { margin: 17px 0 8px; color: #f0f2f4; font-size: 13px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.message-heading:first-child { margin-top: 0; }
+.message-list-item { position: relative; padding-left: 17px; }
+.message-list-item::before { position: absolute; top: 0; left: 2px; color: #8fa4b7; content: '\2022'; }
+.message-numbered::before { content: attr(data-marker); }
+.message-spacer { min-height: 7px; }
+.message-body code { padding: 1px 4px; border-radius: 2px; color: #efb57a; background: #29251f; font: 11px/1.5 "SFMono-Regular", Consolas, monospace; overflow-wrap: anywhere; }
+.message-code { min-width: 0; margin: 9px 0 12px; padding: 10px 11px; border: 1px solid #353a40; border-radius: 3px; color: #cbd0d5; background: #121416; font: 10px/1.6 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-code code { padding: 0; color: inherit; background: transparent; }
 .summary-grid { margin: 0; }
 .summary-grid > div { display: grid; min-height: 48px; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; padding: 13px 14px; border-bottom: 1px solid #2b2f34; }
 .summary-grid dt { color: #858c94; font-size: 10px; }
