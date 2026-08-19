@@ -161,7 +161,7 @@ code, pre, time, .trace-eyebrow, .trace-count, .event-kind, .project-row-meta, .
 .detail-tabs button.selected { color: #9dccf6; }
 .detail-tabs button.selected::after { position: absolute; right: 10px; bottom: 0; left: 10px; height: 2px; background: var(--accent); content: ''; }
 .detail-content { min-width: 0; min-height: 0; overflow: auto; }
-.json-view { min-width: max-content; margin: 0; padding: 15px; color: #c5c9cd; font-size: 10px; line-height: 1.65; tab-size: 2; white-space: pre; }
+.json-view { min-width: 0; margin: 0; padding: 15px; color: #c5c9cd; font-size: 10px; line-height: 1.65; tab-size: 2; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .json-key { color: #7db7e8; }
 .json-string { color: #e59170; }
 .json-number { color: #c3a3e1; }
@@ -175,6 +175,7 @@ code, pre, time, .trace-eyebrow, .trace-count, .event-kind, .project-row-meta, .
 .message-role.role-assistant { color: #c7a5e8; background: #382b46; }
 .message-role.role-tool { color: #efad61; background: #412e1b; }
 .message-body { min-width: 0; padding: 12px 14px 17px; color: #d3d7da; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; word-break: break-word; }
+.detail-document { padding-top: 15px; }
 .message-body p { min-width: 0; margin: 0 0 7px; white-space: pre-wrap; }
 .message-body p:last-child { margin-bottom: 0; }
 .message-heading { margin: 17px 0 8px; color: #f0f2f4; font-size: 13px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
