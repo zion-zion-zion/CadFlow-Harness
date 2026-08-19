@@ -321,6 +321,7 @@ def create_agent_tools(
     request_text: str | None = None,
     review_settings: Any | None = None,
     reviewer_factory: Callable[[Any], Any] | None = None,
+    reviewer_callbacks: Sequence[Any] | None = None,
     on_execution: Callable[[ExecutionResult], None] | None = None,
     on_execution_error: Callable[[ExecutionResult], None] | None = None,
     on_review: Callable[[ReviewResult], None] | None = None,
@@ -441,6 +442,7 @@ def create_agent_tools(
                     execution_result=latest_execution,
                     settings=review_settings,
                     reviewer_factory=reviewer_factory,
+                    reviewer_callbacks=reviewer_callbacks,
                 )
         if on_review is not None:
             on_review(result)
@@ -598,6 +600,9 @@ class ReferenceGroundedAgent:
             validator,
             request_text=prompt,
             review_settings=self.settings,
+            reviewer_callbacks=(
+                [self.run_log.callback_handler()] if self.run_log is not None else None
+            ),
             on_execution=record_execution,
             on_execution_error=record_execution,
             on_review=record_review,

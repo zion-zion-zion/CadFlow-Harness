@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, LLMResult
+
+from backend.agent_logging import AgentRunLog
 from backend.cad_executor import CADExecutor, ExecutionResult
 from backend.cad_review import review_cad
 from backend.agent import create_agent_tools
@@ -15,7 +19,8 @@ class _FakeReviewer:
     def __init__(self, payload: object) -> None:
         self.payload = payload
 
-    def invoke(self, _messages: object) -> object:
+    def invoke(self, _messages: object, config: object = None) -> object:
+        del config
         return self.payload
 
 
@@ -126,3 +131,71 @@ def test_cad_review_tool_reviews_the_latest_validation(tmp_path: Path) -> None:
 
     assert result["status"] == "pass"
     assert any(record.tool_name == "cad_review" for record in validator.tool_use_records)
+
+
+def test_reviewer_usage_is_added_to_the_project_run_log(tmp_path: Path) -> None:
+    execution = _build_project(tmp_path)
+    run_log = AgentRunLog(tmp_path)
+
+    class _UsageReviewer:
+        def invoke(self, messages: object, config: object = None) -> object:
+            assert isinstance(config, dict)
+            callbacks = config["callbacks"]
+            callback = callbacks[0]
+            callback.on_chat_model_start(
+                {"name": "reviewer"},
+                [messages],
+                run_id="review-model-1",
+                metadata=config["metadata"],
+                tags=config["tags"],
+            )
+            callback.on_llm_end(
+                LLMResult(
+                    generations=[
+                        [
+                            ChatGeneration(
+                                message=AIMessage(
+                                    content='{"status":"pass"}',
+                                    usage_metadata={
+                                        "input_tokens": 120,
+                                        "output_tokens": 30,
+                                        "total_tokens": 150,
+                                        "input_token_details": {"cache_read": 20},
+                                    },
+                                )
+                            )
+                        ]
+                    ]
+                ),
+                run_id="review-model-1",
+            )
+            return {
+                "status": "pass",
+                "summary": "ok",
+                "findings": [],
+                "checked_requirements": [],
+            }
+
+    result = review_cad(
+        project_dir=tmp_path,
+        request_text="A rectangular block.",
+        model_source=(tmp_path / "model.py").read_text(encoding="utf-8"),
+        execution_result=execution,
+        settings=object(),
+        reviewer_factory=lambda _settings: _UsageReviewer(),
+        reviewer_callbacks=[run_log.callback_handler()],
+    )
+
+    assert result.status == "pass"
+    assert run_log.token_usage == {
+        "total_tokens": 150,
+        "input_tokens": 120,
+        "cached_input_tokens": 20,
+        "uncached_input_tokens": 100,
+        "output_tokens": 30,
+    }
+    assert any(
+        record.get("agent_role") == "reviewer"
+        for record in run_log.data["records"]
+        if record["type"] in {"model_request", "model_response"}
+    )

@@ -12,7 +12,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from .cad_executor import ExecutionResult
 
@@ -396,6 +396,7 @@ def _model_findings(
     manifest: Mapping[str, Any],
     review_root: Path,
     reviewer_factory: Callable[[Any], Any] | None,
+    reviewer_callbacks: Sequence[Any] | None,
 ) -> tuple[str, str, list[ReviewFinding], tuple[str, ...]]:
     if settings is None:
         raise RuntimeError("reviewer model settings are not configured")
@@ -420,10 +421,23 @@ def _model_findings(
             ],
         },
     ]
-    if hasattr(reviewer, "with_structured_output"):
-        response = reviewer.with_structured_output(REVIEW_JSON_SCHEMA).invoke(messages)
-    else:
-        response = reviewer.invoke(messages)
+    invoke_config: dict[str, Any] | None = None
+    if reviewer_callbacks:
+        invoke_config = {
+            "callbacks": list(reviewer_callbacks),
+            "metadata": {"agent_role": "reviewer"},
+            "tags": ["cad-reviewer"],
+        }
+    runnable = (
+        reviewer.with_structured_output(REVIEW_JSON_SCHEMA)
+        if hasattr(reviewer, "with_structured_output")
+        else reviewer
+    )
+    response = (
+        runnable.invoke(messages, config=invoke_config)
+        if invoke_config is not None
+        else runnable.invoke(messages)
+    )
     return _coerce_model_result(response)
 
 
@@ -435,6 +449,7 @@ def review_cad(
     execution_result: ExecutionResult,
     settings: Any = None,
     reviewer_factory: Callable[[Any], Any] | None = None,
+    reviewer_callbacks: Sequence[Any] | None = None,
 ) -> ReviewResult:
     """Review one validated model and persist only the review result."""
 
@@ -471,6 +486,7 @@ def review_cad(
                 manifest=manifest,
                 review_root=review_root,
                 reviewer_factory=reviewer_factory,
+                reviewer_callbacks=reviewer_callbacks,
             )
             findings.extend(model_findings)
             checked = model_checked or checked

@@ -227,6 +227,7 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
 
     def __init__(self, trace: AgentRunLog) -> None:
         self.trace = trace
+        self._model_roles: dict[str, str] = {}
 
     def on_chat_model_start(
         self,
@@ -235,14 +236,23 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         *,
         run_id: Any,
         parent_run_id: Any = None,
-        **_: Any,
+        **kwargs: Any,
     ) -> None:
-        del run_id, parent_run_id
+        run_key = str(run_id)
+        metadata = kwargs.get("metadata")
+        role = metadata.get("agent_role") if isinstance(metadata, Mapping) else None
+        if not isinstance(role, str):
+            tags = kwargs.get("tags")
+            role = "reviewer" if isinstance(tags, list) and "cad-reviewer" in tags else None
+        if role is not None:
+            self._model_roles[run_key] = role
         for conversation in messages:
             self.trace.record_event(
                 "model_request",
                 messages=[_message_payload(message) for message in conversation],
+                agent_role=role,
             )
+        del parent_run_id
 
     def on_llm_end(
         self,
@@ -252,12 +262,14 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         parent_run_id: Any = None,
         **_: Any,
     ) -> None:
-        del run_id, parent_run_id
+        role = self._model_roles.pop(str(run_id), None)
         self.trace.record_model_usage(response)
         self.trace.record_event(
             "model_response",
             messages=_response_messages(response),
+            agent_role=role,
         )
+        del parent_run_id
 
     def on_llm_error(
         self,
@@ -267,11 +279,13 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         parent_run_id: Any = None,
         **_: Any,
     ) -> None:
-        del run_id, parent_run_id
+        role = self._model_roles.pop(str(run_id), None)
         self.trace.record_event(
             "model_error",
             error=str(error),
+            agent_role=role,
         )
+        del parent_run_id
 
     def on_retry(self, retry_state: Any, *, run_id: Any, **_: Any) -> None:
         del run_id
