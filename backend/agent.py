@@ -23,6 +23,7 @@ from .cad_executor import (
     PreviewFrame,
     redact_credentials,
 )
+from .cad_review import ReviewResult, review_cad
 from .contracts import ToolUseRecord
 from .events import ProgressUpdate
 from .harnesses import AgentHarness
@@ -123,6 +124,7 @@ class AgentRunOutcome:
     cancelled: bool = False
     harness: AgentHarness = AgentHarness.DEEPAGENTS
     implementation_version: str | None = DEEPAGENTS_IMPLEMENTATION_VERSION
+    review_result: ReviewResult | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "harness", AgentHarness(self.harness))
@@ -171,6 +173,9 @@ class AgentRunOutcome:
                 }
                 for record in self.tool_use_records
             ],
+            "review_result": (
+                self.review_result.to_dict() if self.review_result is not None else None
+            ),
         }
 
 
@@ -244,8 +249,11 @@ unrelated changes merely to continue the run.
 If the requested result cannot satisfy the current run contract, stop with a
 failure rather than silently changing the requested geometry or output type.
 
-When validation succeeds, stop all further tool calls immediately. Do not edit
-the Model Source, revalidate, or perform cleanup after a Validated Result.
+When validation succeeds, call `cad_review` immediately. The review tool is a
+read-only quality gate and must be called before you claim completion. If it
+returns `fail`, use its structured findings to make a material Model Source
+change, then call `validate_model` and `cad_review` again. Stop only after
+`cad_review` returns `pass` or the request cannot be satisfied.
 """
 
 
@@ -310,16 +318,21 @@ def build_chat_model(settings: AgentSettings) -> Any:
 def create_agent_tools(
     validator: AgentModelValidator,
     *,
+    request_text: str | None = None,
+    review_settings: Any | None = None,
+    reviewer_factory: Callable[[Any], Any] | None = None,
     on_execution: Callable[[ExecutionResult], None] | None = None,
     on_execution_error: Callable[[ExecutionResult], None] | None = None,
+    on_review: Callable[[ReviewResult], None] | None = None,
     run_deadline: float | None = None,
     clock: Callable[[], float] = time.monotonic,
     cancellation_token: object | None = None,
     on_progress: Callable[[ProgressUpdate], None] | None = None,
 ) -> tuple[BaseTool, ...]:
-    """Expose one zero-argument structured CAD validation tool."""
+    """Expose zero-argument CAD validation and review tools."""
 
     execution_attempts = 0
+    latest_execution: ExecutionResult | None = None
 
     def require_time_remaining() -> float | None:
         if _is_cancellation_requested(cancellation_token):
@@ -335,7 +348,7 @@ def create_agent_tools(
     def validate_model() -> dict[str, Any]:
         """Run and structurally validate the current model.py and Scene Artifact."""
 
-        nonlocal execution_attempts
+        nonlocal execution_attempts, latest_execution
         remaining = require_time_remaining()
         execution_attempts += 1
         execution_recorded = False
@@ -381,6 +394,7 @@ def create_agent_tools(
             execution_recorded = True
         if on_execution is not None and not execution_recorded:
             on_execution(result)
+        latest_execution = result
         if on_progress is not None:
             on_progress(
                 ProgressUpdate(
@@ -392,7 +406,47 @@ def create_agent_tools(
             )
         return result.to_dict()
 
-    return (validate_model,)
+    @tool("cad_review")
+    def cad_review() -> dict[str, Any]:
+        """Review the latest validated CAD model against the user's request.
+
+        This tool is mandatory after a successful validate_model call. It
+        returns a bounded pass/fail result with structured findings; it never
+        edits model.py or runs a repair loop.
+        """
+
+        remaining = require_time_remaining()
+        del remaining  # The reviewer client owns its own bounded timeout.
+        if latest_execution is None:
+            result = ReviewResult(
+                status="fail",
+                summary="cad_review requires a prior validate_model call.",
+                findings=(),
+            )
+        else:
+            validator.record_tool_use("cad_review", "model.py and .cad-review")
+            try:
+                source = (validator.project_dir / "model.py").read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as error:
+                result = ReviewResult(
+                    status="fail",
+                    summary="CAD review could not read model.py.",
+                    findings=(),
+                )
+            else:
+                result = review_cad(
+                    project_dir=validator.project_dir,
+                    request_text=request_text or "",
+                    model_source=source,
+                    execution_result=latest_execution,
+                    settings=review_settings,
+                    reviewer_factory=reviewer_factory,
+                )
+        if on_review is not None:
+            on_review(result)
+        return result.to_dict()
+
+    return (validate_model, cad_review)
 
 
 def build_deep_agent(
@@ -525,14 +579,28 @@ class ReferenceGroundedAgent:
                 duration=time.monotonic() - started,
             )
         executions: list[ExecutionResult] = []
+        review_results: list[ReviewResult] = []
 
         def record_execution(result: ExecutionResult) -> None:
             executions.append(result)
 
+        def record_review(result: ReviewResult) -> None:
+            review_results.append(result)
+            emit(
+                ProgressUpdate(
+                    stage="reviewed",
+                    tool="cad_review",
+                    result=result.summary,
+                )
+            )
+
         agent_tools = create_agent_tools(
             validator,
+            request_text=prompt,
+            review_settings=self.settings,
             on_execution=record_execution,
             on_execution_error=record_execution,
+            on_review=record_review,
             run_deadline=deadline,
             cancellation_token=token,
             on_progress=emit,
@@ -559,6 +627,7 @@ class ReferenceGroundedAgent:
 
         duration = time.monotonic() - started
         execution = executions[-1] if executions else None
+        review_result = review_results[-1] if review_results else None
         if timed_out or token.cancellation_reason == "timeout" or duration > MAX_AGENT_RUN_SECONDS:
             return AgentRunOutcome(
                 validated=False,
@@ -567,6 +636,7 @@ class ReferenceGroundedAgent:
                 execution_results=tuple(executions),
                 tool_use_records=validator.tool_use_records,
                 duration_seconds=duration,
+                review_result=review_result,
             )
         if token.cancelled:
             return _cancelled_outcome(
@@ -581,6 +651,7 @@ class ReferenceGroundedAgent:
                 or "Agent finished without executing the Model Source",
                 tool_use_records=validator.tool_use_records,
                 duration_seconds=duration,
+                review_result=review_result,
             )
         if not _is_validated_result(execution):
             return AgentRunOutcome(
@@ -592,6 +663,26 @@ class ReferenceGroundedAgent:
                 execution_results=tuple(executions),
                 tool_use_records=validator.tool_use_records,
                 duration_seconds=duration,
+                review_result=review_result,
+            )
+        if review_result is None:
+            return AgentRunOutcome(
+                validated=False,
+                failure_reason=agent_error or "Agent finished without calling cad_review",
+                execution_result=execution,
+                execution_results=tuple(executions),
+                tool_use_records=validator.tool_use_records,
+                duration_seconds=duration,
+            )
+        if review_result.status != "pass":
+            return AgentRunOutcome(
+                validated=False,
+                failure_reason=review_result.summary or "CAD review failed",
+                execution_result=execution,
+                execution_results=tuple(executions),
+                tool_use_records=validator.tool_use_records,
+                duration_seconds=duration,
+                review_result=review_result,
             )
         return AgentRunOutcome(
             validated=True,
@@ -599,6 +690,7 @@ class ReferenceGroundedAgent:
             execution_results=tuple(executions),
             tool_use_records=validator.tool_use_records,
             duration_seconds=duration,
+            review_result=review_result,
         )
 
 

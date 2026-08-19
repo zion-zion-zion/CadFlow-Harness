@@ -112,7 +112,7 @@ def test_agent_tools_include_the_cad_specific_surface(
 
     tools = create_agent_tools(restricted)
 
-    assert {tool.name for tool in tools} == {"validate_model"}
+    assert {tool.name for tool in tools} == {"validate_model", "cad_review"}
 
 
 def test_validator_has_no_reference_or_source_write_gate(tmp_path: Path) -> None:
@@ -254,6 +254,7 @@ def test_deep_agent_model_sees_only_the_confirmed_tool_surface(
         "grep",
         "write_todos",
         "validate_model",
+        "cad_review",
     }
     assert {"execute", "delete", "task"}.isdisjoint(model.bound_tool_names)
     assert "execute" not in model.bound_tool_descriptions["grep"].lower()
@@ -322,7 +323,7 @@ def test_agent_prompt_requires_diagnostic_repairs_before_retry(tmp_path: Path) -
     assert "Call `validate_model` again only after the source has materially changed." in prompt
     assert "Never retry an unchanged or semantically equivalent Model Source." in prompt
     assert "unrelated changes merely to continue the run." in prompt
-    assert "When validation succeeds, stop all further tool calls immediately." in prompt
+    assert "When validation succeeds, call `cad_review` immediately." in prompt
 
 
 def test_agent_prompt_requires_todo_plan_before_source_edits(tmp_path: Path) -> None:

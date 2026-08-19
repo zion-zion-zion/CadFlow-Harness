@@ -76,6 +76,10 @@ class ExecutionResult:
     error_location: str | None = None
     preflight_status: str = "not_run"
     imported_modules: tuple[str, ...] = ()
+    review_artifact_dir: str | None = None
+    review_manifest_path: str | None = None
+    review_model_sha256: str | None = None
+    review_evidence_error: str | None = None
 
     @property
     def output_truncated(self) -> bool:
@@ -102,6 +106,10 @@ class ExecutionResult:
             "error_location": self.error_location,
             "preflight_status": self.preflight_status,
             "imported_modules": list(self.imported_modules),
+            "review_artifact_dir": self.review_artifact_dir,
+            "review_manifest_path": self.review_manifest_path,
+            "review_model_sha256": self.review_model_sha256,
+            "review_evidence_error": self.review_evidence_error,
         }
 
 
@@ -409,6 +417,12 @@ class CADExecutor:
         ):
             preflight_status = "failed"
         shape_count, solid_count, solid_volume = _shape_facts(payload)
+        (
+            review_artifact_dir,
+            review_manifest_path,
+            review_model_sha256,
+            review_evidence_error,
+        ) = _review_facts(payload)
 
         status = "succeeded"
         error: str | None = None
@@ -468,6 +482,14 @@ class CADExecutor:
             status = "failed"
             error = scene_parse.error or "canonical Scene Artifact could not be parsed"
             error_type = "scene"
+        elif review_evidence_error is not None:
+            status = "failed"
+            error = f"CAD review evidence could not be generated: {review_evidence_error}"
+            error_type = "review_evidence"
+        elif not review_manifest_path or not review_artifact_dir:
+            status = "failed"
+            error = "CAD review evidence was not generated"
+            error_type = "review_evidence"
         if error_location is None and error_type in {"syntax", "import", "api"}:
             error_location = _traceback_location(stderr, stdout)
 
@@ -491,6 +513,10 @@ class CADExecutor:
             error_location=error_location,
             preflight_status=preflight_status,
             imported_modules=imported_modules,
+            review_artifact_dir=review_artifact_dir,
+            review_manifest_path=review_manifest_path,
+            review_model_sha256=review_model_sha256,
+            review_evidence_error=review_evidence_error,
         )
 
     @staticmethod
@@ -651,6 +677,27 @@ def _shape_facts(
     return count, solid_count, float(volume) if volume is not None else None
 
 
+def _review_facts(
+    payload: dict[str, object] | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Read bounded review evidence metadata emitted by the CAD child."""
+
+    if payload is None:
+        return None, None, None, None
+    values = tuple(
+        payload.get(name)
+        for name in (
+            "review_artifact_dir",
+            "review_manifest_path",
+            "review_model_sha256",
+            "review_evidence_error",
+        )
+    )
+    return tuple(
+        value if isinstance(value, str) else None for value in values
+    )  # type: ignore[return-value]
+
+
 def _first_error(stderr: str, stdout: str, fallback: str) -> str:
     for candidate in (stderr.strip(), stdout.strip()):
         if candidate:
@@ -714,6 +761,13 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
             process.terminate()
     except ProcessLookupError:
         return
+    except PermissionError:
+        # A short-lived macOS process-group race can make killpg unavailable;
+        # still terminate the child itself so callers receive a result.
+        try:
+            process.terminate()
+        except (OSError, ProcessLookupError):
+            return
     try:
         process.wait(timeout=0.75)
     except subprocess.TimeoutExpired:
@@ -724,12 +778,18 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
                 process.kill()
         except ProcessLookupError:
             return
+        except PermissionError:
+            try:
+                process.kill()
+            except (OSError, ProcessLookupError):
+                return
         process.wait()
 
 
 _RUNNER_SOURCE = f"""\
 import json
 import builtins
+import hashlib
 import os
 import runpy
 import sys
@@ -858,10 +918,95 @@ with model_type(preview_root, attempt) if preview_enabled else model_type() as m
             path=artifact_dir / "model.scene.zip",
         )
 
+        review_artifact_dir = None
+        review_manifest_path = None
+        review_model_sha256 = hashlib.sha256(model_path.read_bytes()).hexdigest()
+        review_evidence_error = None
+        try:
+            from cadflow.inspect import brep
+
+            review_root = model_path.parent / ".cad-review" / review_model_sha256
+            review_root.mkdir(parents=True, exist_ok=True)
+            single_render_path = review_root / "isometric.png"
+            contact_sheet_path = review_root / "contact-sheet.png"
+            common_render_options = {{
+                "image_size": (8.0, 8.0),
+                "dpi": 64,
+                "background_color": (0.965, 0.972, 0.980),
+                "show_brep_edges": True,
+            }}
+            brep.render_step_views_rpath(
+                step_path,
+                single_render_path,
+                views=((35.0, -45.0, "isometric"),),
+                title="CAD Review - Isometric",
+                **common_render_options,
+            )
+            canonical_views = (
+                (0.0, 0.0, "front"),
+                (0.0, 180.0, "back"),
+                (0.0, 90.0, "right"),
+                (0.0, -90.0, "left"),
+                (90.0, 0.0, "top"),
+                (-90.0, 0.0, "bottom"),
+                (35.0, -45.0, "isometric"),
+                (35.0, 135.0, "isometric-rear"),
+            )
+            brep.render_step_views_rpath(
+                step_path,
+                contact_sheet_path,
+                views=canonical_views,
+                title="CAD Review - Eight Views",
+                **common_render_options,
+            )
+
+            def image_sha256(path):
+                return hashlib.sha256(path.read_bytes()).hexdigest()
+
+            bbox = [float(value) for value in getattr(final_shape, "bbox", ())]
+            manifest = {{
+                "schema_version": "cad-review/v1",
+                "model_sha256": review_model_sha256,
+                "views": [
+                    {{"view_id": view[2], "elevation": view[0], "azimuth": view[1]}}
+                    for view in canonical_views
+                ],
+                "single_render": {{
+                    "path": single_render_path.name,
+                    "image_sha256": image_sha256(single_render_path),
+                }},
+                "contact_sheet": {{
+                    "path": contact_sheet_path.name,
+                    "image_sha256": image_sha256(contact_sheet_path),
+                }},
+                "metrics": {{
+                    "solid_count": solid_count,
+                    "volume_mm3": solid_volume,
+                    "bbox_mm": bbox,
+                    "topology": dict(topology),
+                    "is_valid": solid_count == 1 and solid_volume > 0.0,
+                }},
+            }}
+            manifest_path = review_root / "manifest.json"
+            temporary_manifest = review_root / ".manifest.json.tmp"
+            temporary_manifest.write_text(
+                json.dumps(manifest, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            os.replace(temporary_manifest, manifest_path)
+            review_artifact_dir = str(review_root.relative_to(model_path.parent))
+            review_manifest_path = str(manifest_path.relative_to(model_path.parent))
+        except Exception as error:
+            review_evidence_error = type(error).__name__ + ": " + str(error)
+
 payload = {{
     "final_shape_count": 1,
     "solid_count": solid_count,
     "solid_volume": solid_volume,
+    "review_artifact_dir": review_artifact_dir,
+    "review_manifest_path": review_manifest_path,
+    "review_model_sha256": review_model_sha256,
+    "review_evidence_error": review_evidence_error,
 }}
 print({_RESULT_PREFIX!r} + json.dumps(payload, separators=(",", ":")), flush=True)
 """

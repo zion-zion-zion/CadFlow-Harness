@@ -10,6 +10,7 @@ from .cad_executor import (
     redact_credentials,
 )
 from .contracts import ToolUseRecord
+from .cad_review import ReviewFinding, ReviewResult, review_cad
 from .harnesses import (
     AgentHarness,
     AgentRunAdapter,
@@ -106,6 +107,8 @@ __all__ = [
     "ProgressUpdate",
     "RESTART_RECOVERY_REASON",
     "ReferenceGroundedAgent",
+    "ReviewFinding",
+    "ReviewResult",
     "RestrictedAgentTools",
     "SCENE_ARTIFACT_NAME",
     "SceneParseResult",
@@ -119,5 +122,6 @@ __all__ = [
     "create_model_source",
     "create_agent_tools",
     "redact_credentials",
+    "review_cad",
     "validate_scene_artifact",
 ]

@@ -31,6 +31,15 @@ class AgentModelValidator:
     def tool_use_records(self) -> tuple[ToolUseRecord, ...]:
         return tuple(self._records)
 
+    @property
+    def project_dir(self) -> Path:
+        return self._project_dir
+
+    def record_tool_use(self, tool_name: str, target: str) -> None:
+        """Record a host-side CAD tool invocation for the run audit."""
+
+        self._record(tool_name, target)
+
     def begin_run(self) -> ModelSourceScaffold:
         scaffold = create_model_source(self._project_dir, overwrite=False)
         self._record("prepare_model_source", "model.py")
