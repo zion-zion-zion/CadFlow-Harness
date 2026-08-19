@@ -6,16 +6,26 @@ CadFlowAgent 是一个可信的本机 Text-to-CAD 工作区。用户创建一个
 
 ## 环境要求
 
-- Linux x86_64
-- Python 3.12
+- Linux x86_64（glibc 2.31 或更高版本）+ Python 3.12，或 macOS 26
+  arm64 + Python 3.13
 - `uv` 和 Node.js/npm
 - 将 `.env.example` 复制为 `.env` 并填写模型配置
 
-仓库内置 `vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl`，SHA256 为
-`753c513fee879258a561efa9d3edf7e73ebe904ed160264caf5851c20b99854f`。
+仓库为两个受支持的平台分别内置了 CadFlow wheel。`uv` 会通过同一份
+`pyproject.toml` 和 `uv.lock` 自动选择匹配的文件：
+
+- Linux：`cadflow-0.1.0-cp312-cp312-linux_x86_64.whl`（SHA256
+  `753c513fee879258a561efa9d3edf7e73ebe904ed160264caf5851c20b99854f`）
+- macOS：`cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl`（SHA256
+  `738bcccab01a8152831a871f3103790feb4d975c1e98357b887fc4ebe56391fa`）
 
 ```bash
-uv sync --group dev
+# Linux
+uv sync --group dev --python 3.12
+
+# macOS
+uv sync --group dev --python 3.13
+
 cd viewer && npm ci
 ```
 
@@ -24,6 +34,8 @@ cd viewer && npm ci
 ```bash
 ./run.sh
 ```
+
+`run.sh` 会自动检测操作系统和架构，并选择对应的 Python 解释器。
 
 默认后端地址是 `127.0.0.1:8765`，Viewer 地址是 `127.0.0.1:5678`。
 如需让其他机器访问本机 Viewer，可设置 `TEXT_TO_CAD_HOST`；该服务仍只适合
@@ -57,7 +69,12 @@ CadFlow/Python API。后端不会根据 API 来源直接拒绝代码，但最终
 ## 检查
 
 ```bash
-uv run pytest
+# Linux
+uv run --python 3.12 pytest
+
+# macOS
+uv run --python 3.13 pytest
+
 cd viewer && npm run build
 ```
 

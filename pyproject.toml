@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "CadFlowAgent, a text-to-CAD agent built on CadFlow"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "cadflow==0.1.0",
     "deepagents==0.7.5",
@@ -16,9 +16,16 @@ dependencies = [
 
 [tool.uv]
 package = false
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64' and python_version == '3.12'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64' and python_version == '3.13'",
+]
 
 [tool.uv.sources]
-cadflow = { path = "vendor/cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl" }
+cadflow = [
+    { path = "vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64' and python_version == '3.12'" },
+    { path = "vendor/cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl", marker = "sys_platform == 'darwin' and platform_machine == 'arm64' and python_version == '3.13'" },
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -35,6 +42,7 @@ dev = [
     "ipykernel>=6.29.5",
     "matplotlib>=3.10.8",
     "numpy-stl>=3.2.0",
+    "packaging",
     "trimesh>=4.11.3",
     "datamodel-code-generator==0.32.0",
 ]

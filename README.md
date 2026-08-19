@@ -7,16 +7,26 @@ canonical Scene Artifact.
 
 ## Requirements
 
-- Linux x86_64
-- Python 3.12
+- Linux x86_64 with glibc 2.31 or newer and Python 3.12, or macOS 26 arm64
+  with Python 3.13
 - `uv`, Node.js, and npm
 - API settings copied from `.env.example` to `.env`
 
-The repository vendors `vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl` (SHA256
-`753c513fee879258a561efa9d3edf7e73ebe904ed160264caf5851c20b99854f`).
+The repository vendors one CadFlow wheel for each supported platform. `uv`
+selects the matching wheel from the shared `pyproject.toml` and `uv.lock`:
+
+- Linux: `cadflow-0.1.0-cp312-cp312-linux_x86_64.whl` (SHA256
+  `753c513fee879258a561efa9d3edf7e73ebe904ed160264caf5851c20b99854f`)
+- macOS: `cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl` (SHA256
+  `738bcccab01a8152831a871f3103790feb4d975c1e98357b887fc4ebe56391fa`)
 
 ```bash
-uv sync --group dev
+# Linux
+uv sync --group dev --python 3.12
+
+# macOS
+uv sync --group dev --python 3.13
+
 cd viewer && npm ci
 ```
 
@@ -25,6 +35,9 @@ cd viewer && npm ci
 ```bash
 ./run.sh
 ```
+
+`run.sh` detects the operating system and architecture and selects the matching
+Python interpreter automatically.
 
 The backend listens on `127.0.0.1:8765` by default and the Vite viewer on
 `127.0.0.1:5678`. `TEXT_TO_CAD_HOST` may be set when the local viewer needs to
@@ -62,7 +75,12 @@ alternative inputs or output types do not change this Project contract.
 ## Checks
 
 ```bash
-uv run pytest
+# Linux
+uv run --python 3.12 pytest
+
+# macOS
+uv run --python 3.13 pytest
+
 cd viewer && npm run build
 ```
 

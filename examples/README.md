@@ -1,7 +1,8 @@
 # CadFlow Examples
 
-Run examples from the repository root with Python 3.12. Generated files are
-written under `examples/out/` and ignored by Git.
+Run examples from the repository root with the platform Python selected in the
+main README (3.12 on Linux or 3.13 on macOS). Generated files are written under
+`examples/out/` and ignored by Git.
 
 ## Python-first Model/Shape examples
 

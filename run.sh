@@ -3,6 +3,21 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM="$(uname -s)"
+ARCHITECTURE="$(uname -m)"
+case "$PLATFORM:$ARCHITECTURE" in
+  Linux:x86_64)
+    PROJECT_PYTHON="3.12"
+    ;;
+  Darwin:arm64)
+    PROJECT_PYTHON="3.13"
+    ;;
+  *)
+    printf 'error: unsupported platform %s/%s; expected Linux/x86_64 or macOS/arm64\n' \
+      "$PLATFORM" "$ARCHITECTURE" >&2
+    exit 1
+    ;;
+esac
 BACKEND_HOST="${TEXT_TO_CAD_HOST:-0.0.0.0}"
 BACKEND_PORT="${TEXT_TO_CAD_PORT:-8765}"
 FRONTEND_HOST="${TEXT_TO_CAD_FRONTEND_HOST:-0.0.0.0}"
@@ -29,7 +44,16 @@ port_in_use() {
   if [[ "$host" == "0.0.0.0" || "$host" == "::" ]]; then
     host="127.0.0.1"
   fi
-  (exec 9<>"/dev/tcp/${host}/${port}") >/dev/null 2>&1
+  uv run --no-project --python "$PROJECT_PYTHON" python - "$host" "$port" <<'PY'
+import socket
+import sys
+
+try:
+    with socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=0.2):
+        pass
+except OSError:
+    raise SystemExit(1)
+PY
 }
 
 if port_in_use "$BACKEND_HOST" "$BACKEND_PORT"; then
@@ -60,10 +84,12 @@ trap cleanup EXIT INT TERM
 
 cd "$SCRIPT_DIR"
 
+printf 'Using %s/%s with Python %s\n' "$PLATFORM" "$ARCHITECTURE" "$PROJECT_PYTHON"
 printf 'Starting backend at http://%s:%s\n' "$BACKEND_HOST" "$BACKEND_PORT"
 TEXT_TO_CAD_HOST="$BACKEND_HOST" \
 TEXT_TO_CAD_PORT="$BACKEND_PORT" \
-  uv run --no-sync python -m backend >"$LOG_DIR/backend.log" 2>&1 &
+  uv run --locked --python "$PROJECT_PYTHON" python -m backend \
+  >"$LOG_DIR/backend.log" 2>&1 &
 backend_pid=$!
 
 printf 'Starting frontend at http://%s:%s\n' "$FRONTEND_HOST" "$FRONTEND_PORT"
