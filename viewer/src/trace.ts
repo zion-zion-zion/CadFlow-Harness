@@ -489,7 +489,7 @@ function renderDetail(): void {
   } else if (isMessageList(content)) {
     detailContent.replaceChildren(renderMessages(content));
   } else {
-    detailContent.innerHTML = `<pre class="json-view">${highlightJson(content)}</pre>`;
+    detailContent.replaceChildren(renderDataValue(content));
   }
 }
 
@@ -527,9 +527,33 @@ function hasResultTab(item: DisplayEvent): boolean {
 }
 
 function isMessageList(value: unknown): value is Array<Record<string, unknown>> {
-  return Array.isArray(value) && value.every((item) => (
+  return Array.isArray(value) && value.length > 0 && value.every((item) => (
     typeof item === 'object' && item !== null && 'role' in item && 'content' in item
   ));
+}
+
+function renderDataValue(value: unknown): HTMLElement {
+  const normalized = parseStructuredString(value);
+  if (typeof normalized === 'string') {
+    const document = renderMessageText(normalized);
+    document.classList.add('detail-document');
+    return document;
+  }
+  const pre = document.createElement('pre');
+  pre.className = 'json-view';
+  pre.innerHTML = highlightJson(normalized);
+  return pre;
+}
+
+function parseStructuredString(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return value;
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return value;
+  }
 }
 
 function renderMessages(messages: Array<Record<string, unknown>>): HTMLElement {
