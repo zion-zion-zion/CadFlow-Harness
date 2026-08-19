@@ -8,7 +8,7 @@ CadFlowAgent 是一个可信的本机 Text-to-CAD 工作区。用户创建一个
 
 - Linux x86_64（glibc 2.31 或更高版本）+ Python 3.12，或 macOS 26
   arm64 + Python 3.13
-- `uv` 和 Node.js/npm
+- 用于安装缺失工具的 `curl` 或 `wget`
 - 将 `.env.example` 复制为 `.env` 并填写模型配置
 
 仓库为两个受支持的平台分别内置了 CadFlow wheel。`uv` 会通过同一份
@@ -19,15 +19,15 @@ CadFlowAgent 是一个可信的本机 Text-to-CAD 工作区。用户创建一个
 - macOS：`cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl`（SHA256
   `738bcccab01a8152831a871f3103790feb4d975c1e98357b887fc4ebe56391fa`）
 
+克隆仓库后运行一次安装脚本。脚本会检测当前平台，在缺失时安装 `uv` 和兼容的
+Node.js，按锁文件同步 Python 与 Viewer 依赖，并在不覆盖已有文件的前提下从示例
+创建 `.env`。
+
 ```bash
-# Linux
-uv sync --group dev --python 3.12
-
-# macOS
-uv sync --group dev --python 3.13
-
-cd viewer && npm ci
+./setup.sh
 ```
+
+使用 `./setup.sh --check` 可以只检查现有环境，不进行任何修改。
 
 ## 启动
 

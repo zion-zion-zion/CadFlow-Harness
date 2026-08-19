@@ -9,7 +9,7 @@ canonical Scene Artifact.
 
 - Linux x86_64 with glibc 2.31 or newer and Python 3.12, or macOS 26 arm64
   with Python 3.13
-- `uv`, Node.js, and npm
+- `curl` or `wget` for installing missing tools
 - API settings copied from `.env.example` to `.env`
 
 The repository vendors one CadFlow wheel for each supported platform. `uv`
@@ -20,15 +20,17 @@ selects the matching wheel from the shared `pyproject.toml` and `uv.lock`:
 - macOS: `cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl` (SHA256
   `738bcccab01a8152831a871f3103790feb4d975c1e98357b887fc4ebe56391fa`)
 
+Run the setup script once after cloning. It detects the platform, installs
+`uv` and a compatible Node.js version when needed, syncs the locked Python and
+Viewer dependencies, and creates `.env` from the example without overwriting an
+existing file.
+
 ```bash
-# Linux
-uv sync --group dev --python 3.12
-
-# macOS
-uv sync --group dev --python 3.13
-
-cd viewer && npm ci
+./setup.sh
 ```
+
+Use `./setup.sh --check` to validate an existing environment without changing
+it.
 
 ## Run
 

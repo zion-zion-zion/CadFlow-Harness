@@ -1,3 +1,5 @@
+import os
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -80,3 +82,113 @@ def test_run_script_uses_portable_port_detection() -> None:
 
     assert "/dev/tcp" not in script
     assert "socket.create_connection" in script
+
+
+def _write_executable(path: Path, contents: str) -> None:
+    path.write_text(contents)
+    path.chmod(0o755)
+
+
+def _run_setup_check(
+    tmp_path: Path,
+    *,
+    platform: str,
+    architecture: str,
+    node_version: str = "22.12.0",
+    glibc_version: str = "2.31",
+    macos_version: str = "26.0",
+) -> subprocess.CompletedProcess[str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True)
+    _write_executable(
+        bin_dir / "uname",
+        "#!/bin/sh\ncase \"$1\" in\n"
+        f"  -s) echo {platform} ;;\n"
+        f"  -m) echo {architecture} ;;\n"
+        "esac\n",
+    )
+    _write_executable(
+        bin_dir / "getconf",
+        f"#!/bin/sh\necho 'glibc {glibc_version}'\n",
+    )
+    _write_executable(
+        bin_dir / "sw_vers",
+        f"#!/bin/sh\necho '{macos_version}'\n",
+    )
+    _write_executable(
+        bin_dir / "node",
+        f"#!/bin/sh\n[ \"$1\" = \"-p\" ] && echo '{node_version}' || echo 'v{node_version}'\n",
+    )
+    _write_executable(bin_dir / "npm", "#!/bin/sh\necho '11.0.0'\n")
+    _write_executable(bin_dir / "uv", "#!/bin/sh\necho 'uv 0.8.0'\n")
+
+    environment = os.environ.copy()
+    environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+    return subprocess.run(
+        ["bash", str(ROOT / "setup.sh"), "--check"],
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+
+
+def test_setup_script_selects_supported_platform_environment(tmp_path: Path) -> None:
+    linux = _run_setup_check(
+        tmp_path / "linux",
+        platform="Linux",
+        architecture="x86_64",
+    )
+    macos = _run_setup_check(
+        tmp_path / "macos",
+        platform="Darwin",
+        architecture="arm64",
+    )
+
+    assert linux.returncode == 0, linux.stderr
+    assert "using Python 3.12" in linux.stdout
+    assert macos.returncode == 0, macos.stderr
+    assert "using Python 3.13" in macos.stdout
+
+
+def test_setup_script_rejects_unsupported_platform(tmp_path: Path) -> None:
+    result = _run_setup_check(
+        tmp_path,
+        platform="Linux",
+        architecture="aarch64",
+    )
+
+    assert result.returncode == 1
+    assert "unsupported platform Linux/aarch64" in result.stderr
+
+
+def test_setup_script_rejects_unsupported_system_versions(tmp_path: Path) -> None:
+    linux = _run_setup_check(
+        tmp_path / "linux",
+        platform="Linux",
+        architecture="x86_64",
+        glibc_version="2.30",
+    )
+    macos = _run_setup_check(
+        tmp_path / "macos",
+        platform="Darwin",
+        architecture="arm64",
+        macos_version="25.9",
+    )
+
+    assert linux.returncode == 1
+    assert "glibc 2.30 is unsupported" in linux.stderr
+    assert macos.returncode == 1
+    assert "macOS 25.9 is unsupported" in macos.stderr
+
+
+def test_setup_script_rejects_incompatible_node_version(tmp_path: Path) -> None:
+    result = _run_setup_check(
+        tmp_path,
+        platform="Linux",
+        architecture="x86_64",
+        node_version="20.18.0",
+    )
+
+    assert result.returncode == 1
+    assert "Node.js ^20.19 or >=22.12 is required" in result.stderr
