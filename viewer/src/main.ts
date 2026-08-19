@@ -66,6 +66,7 @@ app.innerHTML = `
       </div>
       <div class="topbar-actions">
         <span class="local-badge">LOCAL DEMO</span>
+        <a id="trace-link" class="quiet-button topbar-link" href="/trace">Trace</a>
         <button id="refresh-projects" class="quiet-button" type="button">Refresh</button>
       </div>
     </header>
@@ -138,6 +139,7 @@ app.innerHTML = `
   </main>`;
 
 const projectListElement = document.querySelector<HTMLDivElement>('#project-list')!;
+const traceLink = document.querySelector<HTMLAnchorElement>('#trace-link')!;
 const projectCount = document.querySelector<HTMLSpanElement>('#project-count')!;
 const catalogEmpty = document.querySelector<HTMLParagraphElement>('#catalog-empty')!;
 const projectEmpty = document.querySelector<HTMLDivElement>('#project-empty')!;
@@ -284,6 +286,7 @@ function renderCatalog(): void {
 
 function renderWorkspace(): void {
   const project = currentProject();
+  traceLink.href = project ? `/trace/${encodeURIComponent(project.project_id)}` : '/trace';
   const hasProject = project !== null;
   projectEmpty.hidden = hasProject;
   projectContent.hidden = !hasProject;
