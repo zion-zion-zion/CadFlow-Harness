@@ -123,6 +123,9 @@ def test_fastapi_serves_built_frontend_from_same_origin_when_dist_is_present(
     (frontend_dist / "index.html").write_text(
         "<main>workspace</main>", encoding="utf-8"
     )
+    (frontend_dist / "trace.html").write_text(
+        "<main>trace dashboard</main>", encoding="utf-8"
+    )
     (assets / "app.js").write_text("console.log('workspace')", encoding="utf-8")
 
     app = create_app(
@@ -133,5 +136,11 @@ def test_fastapi_serves_built_frontend_from_same_origin_when_dist_is_present(
     client = TestClient(app)
 
     assert client.get("/").text == "<main>workspace</main>"
+    assert client.get("/trace").text == "<main>trace dashboard</main>"
+    assert (
+        client.get("/trace/0123456789abcdef0123456789abcdef").text
+        == "<main>trace dashboard</main>"
+    )
+    assert client.get("/unrelated-client-route").text == "<main>workspace</main>"
     assert client.get("/assets/app.js").text == "console.log('workspace')"
     assert "access-control-allow-origin" not in client.options("/").headers
