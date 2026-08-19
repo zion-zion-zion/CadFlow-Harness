@@ -123,7 +123,9 @@ def test_agent_run_log_persists_prompt_model_and_tool_lifecycle(tmp_path: Path) 
         {"role": "user", "content": f"request API_KEY=[REDACTED] {long_text}"},
     ]
     assert records[2]["arguments"]["content"] == long_text
+    assert records[2]["call_id"] == "tool-1"
     assert records[3]["result"] == f"result OPENAI_API_KEY=[REDACTED] {long_text}"
+    assert records[3]["call_id"] == "tool-1"
     response = records[4]["messages"][0]
     assert response["role"] == "assistant"
     assert response["content"] == f"done {long_text}"

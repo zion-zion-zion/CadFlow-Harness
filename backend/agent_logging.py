@@ -302,6 +302,7 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         self.trace.record_event(
             "tool_call",
             tool_name=tool_name,
+            call_id=run_key,
             arguments=arguments,
         )
         del parent_run_id
@@ -317,6 +318,7 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         run_key = str(run_id)
         self.trace.record_event(
             "tool_result",
+            call_id=run_key,
             tool_name=(
                 _tool_name({}, kwargs)
                 or self.trace._tool_names.pop(run_key, None)
@@ -337,6 +339,7 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         run_key = str(run_id)
         self.trace.record_event(
             "tool_error",
+            call_id=run_key,
             tool_name=(
                 _tool_name({}, kwargs)
                 or self.trace._tool_names.pop(run_key, None)

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -37,6 +37,13 @@ from .projects import (
     PromptValidationError,
 )
 from .run_coordinator import AgentRunCoordinator, RunConflictError
+from .trace import (
+    TraceError,
+    iter_redacted_trace,
+    read_trace,
+    read_trace_event,
+    trace_stats,
+)
 
 
 KEEPALIVE_SECONDS = 15.0
@@ -170,6 +177,16 @@ def create_app(
             for project in project_store.list_projects()
         ]
 
+    @app.get("/api/traces")
+    def list_traces() -> JSONResponse:
+        payload = []
+        for project in project_store.list_projects():
+            item = _project_payload(project_store, project)
+            project_dir = project_store.project_directory(project.project_id)
+            item.update(trace_stats(project_dir))
+            payload.append(item)
+        return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
     @app.post("/api/projects", status_code=201)
     def create_project(request: CreateProjectRequest) -> dict[str, object]:
         try:
@@ -287,6 +304,55 @@ def create_app(
             media_type="application/zip",
             filename="model.scene.zip",
         )
+
+    @app.get("/api/projects/{project_id}/trace")
+    def project_trace(
+        project_id: str,
+        offset: int = Query(default=0, ge=0),
+        q: str = Query(default="", max_length=500),
+    ) -> JSONResponse:
+        project = _get_project_or_404(project_store, project_id)
+        project_dir = project_store.project_directory(project_id)
+        try:
+            batch = read_trace(project_dir, offset=offset, query=q)
+        except TraceError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        payload = batch.to_dict()
+        payload["project"] = _project_payload(project_store, project)
+        payload["trace"] = trace_stats(project_dir)
+        return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/projects/{project_id}/trace/download")
+    def download_project_trace(project_id: str) -> StreamingResponse:
+        _get_project_or_404(project_store, project_id)
+        try:
+            content = iter_redacted_trace(project_store.project_directory(project_id))
+        except TraceError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return StreamingResponse(
+            content,
+            media_type="application/x-ndjson",
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": (
+                    f'attachment; filename="{project_id}-agent-run.redacted.jsonl"'
+                ),
+            },
+        )
+
+    @app.get("/api/projects/{project_id}/trace/events")
+    def project_trace_event(
+        project_id: str,
+        cursor: int = Query(ge=0),
+    ) -> JSONResponse:
+        _get_project_or_404(project_store, project_id)
+        try:
+            payload = read_trace_event(
+                project_store.project_directory(project_id), cursor
+            )
+        except TraceError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/projects/{project_id}/previews/{attempt}/{revision}")
     def project_preview(project_id: str, attempt: int, revision: int) -> FileResponse:
@@ -418,9 +484,19 @@ def _mount_frontend(app: FastAPI, frontend_dist: str | Path | None) -> None:
     if assets.is_dir():
         app.mount("/assets", StaticFiles(directory=assets), name="frontend-assets")
 
+    trace_index = candidate / "trace.html"
+
     @app.get("/", include_in_schema=False)
     def frontend_index() -> FileResponse:
         return FileResponse(index, media_type="text/html")
+
+    if trace_index.is_file():
+
+        @app.get("/trace", include_in_schema=False)
+        @app.get("/trace/{project_id}", include_in_schema=False)
+        def trace_frontend(project_id: str | None = None) -> FileResponse:
+            del project_id
+            return FileResponse(trace_index, media_type="text/html")
 
     @app.get("/{path:path}", include_in_schema=False)
     def frontend_route(path: str) -> FileResponse:
