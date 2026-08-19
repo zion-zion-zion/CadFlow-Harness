@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "CadFlowAgent, a text-to-CAD agent built on CadFlow"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "cadflow==0.1.0",
     "deepagents==0.7.5",
@@ -18,7 +18,7 @@ dependencies = [
 package = false
 
 [tool.uv.sources]
-cadflow = { path = "vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl" }
+cadflow = { path = "vendor/cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

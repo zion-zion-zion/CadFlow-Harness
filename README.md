@@ -9,7 +9,8 @@ canonical Scene Artifact.
 
 - Linux x86_64
 - Python 3.12
-- `uv`, Node.js 22.19 or newer, npm, and bubblewrap (`bwrap`)
+- `uv`, Node.js 22.19 or newer, and npm
+- Linux only: bubblewrap (`bwrap`)
 - API settings copied from `.env.example` to `.env`
 
 The repository vendors `vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl` (SHA256
@@ -27,8 +28,8 @@ cd ../pi-sidecar && npm ci && npm run build
 ./run.sh
 ```
 
-The backend listens on `127.0.0.1:8000` by default and the Vite viewer on
-`127.0.0.1:5173`. `TEXT_TO_CAD_HOST` may be set when the local viewer needs to
+The backend listens on `127.0.0.1:8765` by default and the Vite viewer on
+`127.0.0.1:5678`. `TEXT_TO_CAD_HOST` may be set when the local viewer needs to
 reach the backend from another machine; this remains a trusted-demo boundary.
 
 The backend supervises a resident Pi SDK sidecar. The sidecar communicates only
@@ -38,6 +39,9 @@ credentials in memory only. Its tools can read the current Project and
 repository Skills, while repository examples are hidden from both custom file
 tools and the sandboxed `bash` mount namespace. Pi is an optional harness, so a
 sidecar startup failure leaves Deep Agents available.
+
+On macOS, `run.sh` disables the Pi sidecar by default. Set
+`TEXT_TO_CAD_ENABLE_PI=1` to override this behavior.
 
 ## Skills and Model Source
 

@@ -9,6 +9,7 @@ CadFlowAgent 是一个可信的本机 Text-to-CAD 工作区。用户创建一个
 - Linux x86_64
 - Python 3.12
 - `uv` 和 Node.js/npm
+- 仅 Linux：bubblewrap（`bwrap`）
 - 将 `.env.example` 复制为 `.env` 并填写模型配置
 
 仓库内置 `vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl`，SHA256 为
@@ -25,9 +26,12 @@ cd viewer && npm ci
 ./run.sh
 ```
 
-默认后端地址是 `127.0.0.1:8000`，Viewer 地址是 `127.0.0.1:5173`。
+默认后端地址是 `127.0.0.1:8765`，Viewer 地址是 `127.0.0.1:5678`。
 如需让其他机器访问本机 Viewer，可设置 `TEXT_TO_CAD_HOST`；该服务仍只适合
 可信的本机演示环境。
+
+在 macOS 上，`run.sh` 默认不启动 Pi sidecar。可设置
+`TEXT_TO_CAD_ENABLE_PI=1` 覆盖该行为。
 
 ## Skills 与 Model Source
 

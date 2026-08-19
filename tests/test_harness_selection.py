@@ -112,3 +112,19 @@ def test_unsupported_harness_is_rejected_by_request_model(tmp_path: Path) -> Non
     )
     assert response.status_code == 422
     assert client.get(f"/api/projects/{project['project_id']}").json()["state"] == "Draft"
+
+
+def test_pi_can_be_disabled_without_starting_a_worker(tmp_path: Path) -> None:
+    app = create_app(projects_root=tmp_path, enable_pi=False)
+
+    with TestClient(app) as client:
+        response = client.get("/api/harnesses")
+
+    assert response.status_code == 200
+    statuses = {item["id"]: item for item in response.json()}
+    assert statuses[AgentHarness.DEEPAGENTS.value]["available"] is True
+    assert statuses[AgentHarness.PI.value]["available"] is False
+    assert statuses[AgentHarness.PI.value]["unavailable_reason"] == (
+        "Pi sidecar is disabled"
+    )
+    assert app.state.pi_worker is None

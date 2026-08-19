@@ -45,6 +45,20 @@ DEFAULT_PROJECTS_ROOT = Path(
 )
 
 
+def _pi_enabled_from_environment() -> bool:
+    value = os.environ.get("TEXT_TO_CAD_ENABLE_PI", "1").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("TEXT_TO_CAD_ENABLE_PI must be a boolean value")
+
+
+class _DisabledPiRunService:
+    available = False
+    unavailable_reason = "Pi sidecar is disabled"
+
+
 class CreateProjectRequest(BaseModel):
     name: str = Field(min_length=1)
 
@@ -77,6 +91,7 @@ def create_app(
     agent_factory: Callable[..., ReferenceGroundedAgent] = ReferenceGroundedAgent,
     frontend_dist: str | Path | None = None,
     pi_supervisor: PiWorkerSupervisor | None = None,
+    enable_pi: bool | None = None,
 ) -> FastAPI:
     project_store = store or ProjectStore(projects_root)
     event_store = ProgressEventStore(project_store.root)
@@ -91,26 +106,33 @@ def create_app(
         settings_factory=settings_factory,
         agent_factory=agent_factory,
     )
-    worker = pi_supervisor or PiWorkerSupervisor(resolved_repo_root)
-    adapters = adapter_registry or AgentRunAdapterRegistry(
-        (
-            AgentRunAdapter(
-                AgentHarness.DEEPAGENTS,
-                service,
-                DEEPAGENTS_IMPLEMENTATION_VERSION,
-            ),
-            AgentRunAdapter(
-                AgentHarness.PI,
-                PiAgentRunService(
-                    store=project_store,
-                    repo_root=resolved_repo_root,
-                    supervisor=worker,
-                    settings_factory=settings_factory,
-                ),
-                PI_IMPLEMENTATION_VERSION,
-            ),
-        )
+    pi_enabled = _pi_enabled_from_environment() if enable_pi is None else enable_pi
+    worker = (
+        pi_supervisor or PiWorkerSupervisor(resolved_repo_root)
+        if pi_enabled
+        else None
     )
+    default_adapters = [
+        AgentRunAdapter(
+            AgentHarness.DEEPAGENTS,
+            service,
+            DEEPAGENTS_IMPLEMENTATION_VERSION,
+        )
+    ]
+    pi_service = (
+        PiAgentRunService(
+            store=project_store,
+            repo_root=resolved_repo_root,
+            supervisor=worker,
+            settings_factory=settings_factory,
+        )
+        if worker is not None
+        else _DisabledPiRunService()
+    )
+    default_adapters.append(
+        AgentRunAdapter(AgentHarness.PI, pi_service, PI_IMPLEMENTATION_VERSION)
+    )
+    adapters = adapter_registry or AgentRunAdapterRegistry(default_adapters)
     coordinator = AgentRunCoordinator(
         store=project_store,
         repo_root=resolved_repo_root,
@@ -122,11 +144,13 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        await asyncio.to_thread(worker.start)
+        if worker is not None:
+            await asyncio.to_thread(worker.start)
         try:
             yield
         finally:
-            await asyncio.to_thread(worker.shutdown)
+            if worker is not None:
+                await asyncio.to_thread(worker.shutdown)
 
     app = FastAPI(title="CadFlowAgent", lifespan=lifespan)
     app.state.project_store = project_store
