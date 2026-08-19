@@ -5,14 +5,7 @@ import { ScenePackageError, SceneViewer } from './components/scene-viewer';
 const MAX_PROMPT_CHARS = 32_000;
 
 type ProjectState = 'Draft' | 'Running' | 'Succeeded' | 'Failed' | 'Stopped';
-type AgentHarness = 'deepagents' | 'pi';
-type HarnessStatus = {
-  id: AgentHarness;
-  label: string;
-  available: boolean;
-  implementation_version: string;
-  unavailable_reason: string | null;
-};
+type AgentHarness = 'deepagents';
 type TokenUsage = {
   input_tokens: number | null;
   cached_input_tokens: number | null;
@@ -58,10 +51,6 @@ app.innerHTML = `
         <div class="brand">
           <span class="brand-mark">CF</span>
           <div><strong>CadFlowAgent</strong><span>local text-to-cad workspace</span></div>
-        </div>
-        <div id="harness-selector" class="harness-selector" role="group" aria-label="Agent harness">
-          <button class="harness-option" type="button" data-harness="deepagents">Deep Agents</button>
-          <button class="harness-option" type="button" data-harness="pi">Pi</button>
         </div>
       </div>
       <div class="topbar-actions">
@@ -148,8 +137,6 @@ const projectName = document.querySelector<HTMLHeadingElement>('#project-name')!
 const projectId = document.querySelector<HTMLElement>('#project-id')!;
 const stateBadge = document.querySelector<HTMLSpanElement>('#state-badge')!;
 const harnessMetadata = document.querySelector<HTMLSpanElement>('#harness-metadata')!;
-const harnessSelector = document.querySelector<HTMLDivElement>('#harness-selector')!;
-const harnessButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.harness-option'));
 const totalTokens = document.querySelector<HTMLElement>('#total-tokens')!;
 const inputTokens = document.querySelector<HTMLElement>('#input-tokens')!;
 const cachedTokens = document.querySelector<HTMLElement>('#cached-tokens')!;
@@ -185,11 +172,6 @@ let latestPreviewAttempt = 0;
 let latestPreviewRevision = 0;
 let loadedSceneProjectId: string | null = null;
 let workspaceMessage = '';
-let selectedHarness: AgentHarness = 'deepagents';
-let harnessStatuses: HarnessStatus[] = [
-  { id: 'deepagents', label: 'Deep Agents', available: true, implementation_version: '', unavailable_reason: null },
-  { id: 'pi', label: 'Pi', available: false, implementation_version: '', unavailable_reason: 'Pi worker status is unavailable.' },
-];
 
 const sceneViewer = new SceneViewer(viewerElement, (message, ready) => {
   viewerStatusText.textContent = message;
@@ -202,31 +184,6 @@ function currentProject(): Project | null {
 
 function globalRunActive(): boolean {
   return projects.some((project) => project.state === 'Running');
-}
-
-function harnessStatus(id: AgentHarness): HarnessStatus {
-  return harnessStatuses.find((item) => item.id === id)
-    ?? { id, label: id === 'pi' ? 'Pi' : 'Deep Agents', available: id === 'deepagents', implementation_version: '', unavailable_reason: null };
-}
-
-function selectedHarnessFor(project: Project | null): AgentHarness {
-  return project && project.state !== 'Draft' ? project.harness : selectedHarness;
-}
-
-function renderHarnessSelector(): void {
-  const project = currentProject();
-  const selected = selectedHarnessFor(project);
-  const locked = project === null || project.state !== 'Draft' || globalRunActive();
-  for (const button of harnessButtons) {
-    const id = button.dataset.harness as AgentHarness;
-    const status = harnessStatus(id);
-    const unavailable = !status.available;
-    button.classList.toggle('selected', id === selected);
-    button.classList.toggle('unavailable', unavailable);
-    button.setAttribute('aria-pressed', String(id === selected));
-    button.disabled = locked || (unavailable && id !== selected);
-    button.title = unavailable ? (status.unavailable_reason ?? `${status.label} is unavailable.`) : status.label;
-  }
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -305,7 +262,7 @@ function renderWorkspace(): void {
 
   projectName.textContent = project.name;
   projectId.textContent = project.project_id;
-  harnessMetadata.textContent = harnessStatus(project.harness).label;
+  harnessMetadata.textContent = 'Deep Agents';
   stateBadge.textContent = project.state;
   stateBadge.className = `state-badge state-${project.state.toLowerCase()}`;
   renderRunMetrics(project);
@@ -377,7 +334,6 @@ function renderViewerEmpty(): void {
 function renderAll(): void {
   renderCatalog();
   renderWorkspace();
-  renderHarnessSelector();
   renderViewerEmpty();
 }
 
@@ -586,15 +542,6 @@ async function refreshCatalog(): Promise<void> {
   }
 }
 
-async function refreshHarnesses(): Promise<void> {
-  try {
-    harnessStatuses = await request<HarnessStatus[]>('/api/harnesses');
-    renderAll();
-  } catch (error) {
-    serviceMessage.textContent = errorMessage(error);
-  }
-}
-
 async function createProject(event: SubmitEvent): Promise<void> {
   event.preventDefault();
   const input = document.querySelector<HTMLInputElement>('#new-project-name')!;
@@ -611,7 +558,6 @@ async function createProject(event: SubmitEvent): Promise<void> {
       body: JSON.stringify({ name }),
     });
     input.value = '';
-    selectedHarness = 'deepagents';
     upsertProject(project);
     selectedProjectId = project.project_id;
     await refreshCatalog();
@@ -641,7 +587,7 @@ async function submitPrompt(): Promise<void> {
     const updated = await request<Project>(`/api/projects/${encodeURIComponent(project.project_id)}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, harness: selectedHarnessFor(project) }),
+      body: JSON.stringify({ prompt }),
     });
     upsertProject(updated);
     renderAll();
@@ -757,14 +703,6 @@ runButton.addEventListener('click', () => void submitPrompt());
 stopButton.addEventListener('click', () => void stopRun());
 deleteButton.addEventListener('click', () => void deleteProject());
 document.querySelector<HTMLButtonElement>('#fit-button')!.addEventListener('click', () => sceneViewer.fit());
-harnessSelector.addEventListener('click', (event) => {
-  const button = (event.target as Element).closest<HTMLButtonElement>('[data-harness]');
-  const project = currentProject();
-  if (!button || !project || project.state !== 'Draft' || globalRunActive() || button.disabled) return;
-  selectedHarness = button.dataset.harness as AgentHarness;
-  workspaceMessage = '';
-  renderAll();
-});
 promptInput.addEventListener('input', () => {
   promptCounter.textContent = `${promptInput.value.length.toLocaleString()} / ${MAX_PROMPT_CHARS.toLocaleString()}`;
 });
@@ -783,4 +721,3 @@ window.addEventListener('beforeunload', () => {
 
 renderAll();
 void refreshCatalog();
-void refreshHarnesses();

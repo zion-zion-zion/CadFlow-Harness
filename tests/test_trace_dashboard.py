@@ -15,7 +15,7 @@ def _line(payload: object) -> bytes:
 def test_trace_api_lists_projects_reads_incrementally_and_redacts(
     tmp_path: Path,
 ) -> None:
-    app = create_app(projects_root=tmp_path, enable_pi=False)
+    app = create_app(projects_root=tmp_path)
     client = TestClient(app)
     project = client.post("/api/projects", json={"name": "Observed run"}).json()
     project_dir = tmp_path / project["project_id"]
@@ -100,7 +100,7 @@ def test_trace_api_lists_projects_reads_incrementally_and_redacts(
 def test_trace_api_searches_full_payload_and_exports_valid_parse_errors(
     tmp_path: Path,
 ) -> None:
-    app = create_app(projects_root=tmp_path, enable_pi=False)
+    app = create_app(projects_root=tmp_path)
     client = TestClient(app)
     project = client.post("/api/projects", json={"name": "Searchable run"}).json()
     trace_path = tmp_path / project["project_id"] / "agent-run.jsonl"
@@ -147,7 +147,7 @@ def test_trace_api_searches_full_payload_and_exports_valid_parse_errors(
 def test_trace_api_reports_missing_trace_without_changing_project_api(
     tmp_path: Path,
 ) -> None:
-    app = create_app(projects_root=tmp_path, enable_pi=False)
+    app = create_app(projects_root=tmp_path)
     client = TestClient(app)
     project = client.post("/api/projects", json={"name": "Draft"}).json()
 

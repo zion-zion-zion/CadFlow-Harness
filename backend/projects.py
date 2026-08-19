@@ -386,6 +386,9 @@ class ProjectStore:
         failure_reason = data.get("failure_reason")
         if failure_reason is not None and not isinstance(failure_reason, str):
             raise ProjectError("project failure reason is invalid")
+        persisted_harness = data.get("harness", AgentHarness.DEEPAGENTS.value)
+        if persisted_harness not in {item.value for item in AgentHarness}:
+            persisted_harness = AgentHarness.DEEPAGENTS.value
         return Project(
             project_id=project_id,
             name=name,
@@ -394,7 +397,7 @@ class ProjectStore:
             updated_at=updated_at,
             prompt=prompt,
             failure_reason=failure_reason,
-            harness=data.get("harness", AgentHarness.DEEPAGENTS.value),
+            harness=persisted_harness,
         )
 
     @staticmethod

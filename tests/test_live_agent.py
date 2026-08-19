@@ -81,48 +81,6 @@ def test_live_agent_flange_smoke_crosses_service_and_scene_viewer_path(
 
 
 @pytest.mark.live_agent
-def test_live_pi_flange_smoke_crosses_service_and_scene_viewer_path(
-    tmp_path: Path,
-) -> None:
-    """Run the real Pi SDK sidecar through the public API and Scene boundary."""
-
-    app = create_app(projects_root=tmp_path)
-    with TestClient(app) as client:
-        harnesses = client.get("/api/harnesses")
-        assert harnesses.status_code == 200
-        pi_status = next(item for item in harnesses.json() if item["id"] == "pi")
-        assert pi_status["available"] is True
-
-        project = client.post("/api/projects", json={"name": "Live Pi flange"}).json()
-        started = client.post(
-            f"/api/projects/{project['project_id']}/run",
-            json={"prompt": LIVE_FLANGE_PROMPT, "harness": "pi"},
-        )
-        assert started.status_code == 202
-        assert started.json()["harness"] == "pi"
-
-        finished = _wait_for_terminal_project(
-            client,
-            project["project_id"],
-            timeout_seconds=MAX_AGENT_RUN_SECONDS + 30.0,
-        )
-        assert finished["state"] == ProjectState.SUCCEEDED.value
-        assert finished["harness"] == "pi"
-        assert finished["scene_available"] is True
-
-        scene_response = client.get(f"/api/projects/{project['project_id']}/scene")
-        assert scene_response.status_code == 200
-        assert scene_response.headers["content-type"].startswith("application/zip")
-
-    scene_path = tmp_path / "live-pi-model.scene.zip"
-    scene_path.write_bytes(scene_response.content)
-    parsed = validate_scene_artifact(scene_path)
-    assert parsed.valid is True
-    assert parsed.glb_asset_count >= 1
-    assert parsed.model_json_present is False
-
-
-@pytest.mark.live_agent
 def test_live_agent_stop_observes_stopped_and_terminated_cad_child(
     tmp_path: Path,
 ) -> None:
