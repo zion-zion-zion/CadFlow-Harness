@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
@@ -8,6 +9,7 @@ from pathlib import Path
 import cadflow as cad
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from backend.agent import AgentRunOutcome
 from backend.cad_executor import CancellationToken
@@ -281,6 +283,61 @@ def test_sse_replays_after_last_event_id_and_keeps_payload_curated(
     assert "writing_model" in body
     assert "stdout" not in body
     assert "stderr" not in body
+
+
+def test_sse_stream_delivers_events_appended_while_waiting(tmp_path: Path) -> None:
+    app = create_app(projects_root=tmp_path, run_service=_LifecycleRunHarness())
+    client = TestClient(app)
+    project = client.post("/api/projects", json={"name": "Live Events"}).json()
+    event_store: ProgressEventStore = app.state.event_store
+    event_store.append(project["project_id"], stage="preparing")
+
+    route = next(
+        route
+        for route in app.routes
+        if getattr(route, "path", None) == "/api/projects/{project_id}/events"
+    )
+
+    async def consume_next_event() -> str:
+        async def receive() -> dict[str, object]:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": f"/api/projects/{project['project_id']}/events",
+                "headers": [],
+                "query_string": b"",
+                "server": ("test", 80),
+                "client": ("test", 1),
+                "scheme": "http",
+            },
+            receive,
+        )
+        response = await route.endpoint(
+            request,
+            project["project_id"],
+            None,
+            None,
+            True,
+        )
+        iterator = response.body_iterator
+        first = await iterator.__anext__()
+        loop = asyncio.get_running_loop()
+        loop.call_later(
+            0.01,
+            lambda: event_store.append(
+                project["project_id"], stage="executing"
+            ),
+        )
+        second = await asyncio.wait_for(iterator.__anext__(), timeout=1.0)
+        await iterator.aclose()
+        assert '"stage":"preparing"' in first
+        return second
+
+    second = asyncio.run(consume_next_event())
+    assert '"stage":"executing"' in second
 
 
 def test_app_restart_recovers_running_project_without_an_active_lock(
