@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import threading
@@ -15,7 +14,6 @@ from backend.cad_executor import (
     build_cad_environment,
 )
 from backend.model_source import create_model_source
-from backend.previews import PreviewFrame
 
 
 def test_cancellation_token_preserves_the_first_cancellation_reason() -> None:
@@ -293,70 +291,3 @@ def test_cad_environment_removes_provider_credentials_but_keeps_runtime_values()
     assert "LANGCHAIN_API_KEY" not in environment
     assert environment["PATH"] == "/usr/bin"
     assert environment["SAFE_RUNTIME_VALUE"] == "kept"
-
-
-def test_major_cad_operations_emit_glb_preview_frames(tmp_path: Path) -> None:
-    scaffold = create_model_source(tmp_path)
-    scaffold.model_path.write_text(
-        """import cadflow as cad
-
-def build_model(model: cad.Model):
-    left = model.box(width=20.0, depth=20.0, height=10.0)
-    right = model.box(width=20.0, depth=20.0, height=10.0)
-    joined = model.union(left, right)
-    tool = model.cylinder(radius=3.0, height=20.0)
-    return model.cut(joined, tool)
-""",
-        encoding="utf-8",
-    )
-    frames: list[PreviewFrame] = []
-    published_payloads: dict[int, bytes] = {}
-
-    def capture_frame(frame: PreviewFrame) -> None:
-        frames.append(frame)
-        published_payloads[frame.revision] = frame.path.read_bytes()
-
-    result = CADExecutor().execute(
-        tmp_path,
-        timeout_seconds=30.0,
-        attempt=2,
-        preview_callback=capture_frame,
-    )
-
-    assert result.status == "succeeded"
-    assert [frame.operation for frame in frames] == ["union", "cut"]
-    assert [frame.revision for frame in frames] == [1, 2]
-    for frame in frames:
-        payload = frame.path.read_bytes()
-        assert frame.path.name == f"{frame.revision}.glb"
-        assert payload == published_payloads[frame.revision]
-        assert frame.content_hash == "sha256:" + hashlib.sha256(payload).hexdigest()
-        assert payload[:4] == b"glTF"
-        info = cad.scene.preflight_glb(payload, expected_kind="triangle")
-        assert info.vertex_count > 0
-        assert info.index_count > 0
-    assert result.artifact_entries == ("model.scene.zip",)
-
-
-def test_preview_callback_failure_does_not_fail_cad_execution(tmp_path: Path) -> None:
-    scaffold = create_model_source(tmp_path)
-    scaffold.model_path.write_text(
-        """import cadflow as cad
-
-def build_model(model: cad.Model):
-    return model.box(width=10.0, depth=10.0, height=10.0)
-""",
-        encoding="utf-8",
-    )
-
-    def broken_callback(_frame: object) -> None:
-        raise RuntimeError("viewer unavailable")
-
-    result = CADExecutor().execute(
-        tmp_path,
-        timeout_seconds=30.0,
-        preview_callback=broken_callback,
-    )
-
-    assert result.status == "succeeded"
-    assert result.artifact_entries == ("model.scene.zip",)

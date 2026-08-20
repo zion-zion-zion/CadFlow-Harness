@@ -15,11 +15,6 @@ from typing import Any, Mapping
 
 from .harnesses import AgentHarness
 from .model_source import create_model_source
-from .previews import (
-    PreviewError,
-    preview_path,
-    validate_preview_glb,
-)
 
 
 MAX_PROMPT_CHARS = 32_000
@@ -293,21 +288,6 @@ class ProjectStore:
         if not artifact.is_file() or artifact.is_symlink():
             raise ProjectStateError("Succeeded Project has no canonical Scene Artifact")
         return artifact
-
-    def preview_artifact(self, project_id: str, attempt: int, revision: int) -> Path:
-        """Return one validated live GLB frame for a non-Draft Project."""
-
-        project = self.get_project(project_id)
-        if project.state == ProjectState.DRAFT:
-            raise ProjectStateError("Preview is available only after an Agent Run starts")
-        try:
-            path = preview_path(self.project_directory(project_id), attempt, revision)
-            if path.is_symlink() or not path.is_file():
-                raise PreviewError("preview frame is missing")
-            validate_preview_glb(path.read_bytes())
-        except (OSError, PreviewError) as exc:
-            raise ProjectStateError("Preview frame is invalid") from exc
-        return path
 
     def read_diagnostics(self, project_id: str) -> dict[str, Any] | None:
         """Read the bounded diagnostic record retained for a Project."""

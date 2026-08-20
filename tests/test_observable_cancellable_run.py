@@ -16,6 +16,7 @@ from backend.cad_executor import CancellationToken
 from backend.events import ProgressEventStore
 from backend.app import create_app
 from backend.events import ProgressUpdate
+from backend.live_preview import LivePreviewStore
 from backend.model_source import create_model_source
 from backend.projects import ProjectState, ProjectStateError, ProjectStore
 
@@ -78,32 +79,28 @@ def test_scene_preview_event_and_artifact_are_available_during_a_run(
     project = client.post("/api/projects", json={"name": "Preview"}).json()
     running = app.state.project_store.submit_prompt(project["project_id"], "Create a box.")
     assert running.state is ProjectState.RUNNING
-    preview_dir = tmp_path / project["project_id"] / "previews" / "1"
-    preview_dir.mkdir(parents=True)
     with cad.Model() as model:
-        (preview_dir / "1.glb").write_bytes(model.box(width=1, depth=1, height=1).preview_glb())
+        payload = model.box(width=1, depth=1, height=1).preview_glb()
+    preview_store = LivePreviewStore(tmp_path / project["project_id"])
+    preview_store.publish(payload, "source-hash")
 
-    response = client.get(
-        f"/api/projects/{project['project_id']}/previews/1/1"
-    )
+    response = client.get(f"/api/projects/{project['project_id']}/preview")
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["content-type"].startswith("model/gltf-binary")
     assert response.content[:4] == b"glTF"
-    (preview_dir / "2.glb").write_bytes(b"legacy JSON or a partial frame")
-    assert client.get(
-        f"/api/projects/{project['project_id']}/previews/1/2"
-    ).status_code == 404
+    preview_store.model_path.write_bytes(b"legacy JSON or a partial frame")
+    assert client.get(f"/api/projects/{project['project_id']}/preview").status_code == 404
 
     event = app.state.event_store.append(
         project["project_id"],
-        stage="preview_ready",
-        tool="cad",
+        stage="preview_current",
+        tool="preview",
         attempt=1,
-        result="union preview",
+        result="Live preview current",
         preview_attempt=1,
         preview_revision=1,
-        preview_operation="union",
+        preview_operation="result",
     )
     assert event.to_sse().startswith("id: 1\nevent: scene-preview\ndata: ")
 

@@ -20,7 +20,6 @@ from .cad_executor import (
     CAD_EXECUTION_TIMEOUT_SECONDS,
     CancellationToken,
     ExecutionResult,
-    PreviewFrame,
     redact_credentials,
 )
 from .cad_review import ReviewResult, review_cad
@@ -43,6 +42,15 @@ class AgentRunError(RuntimeError):
 
 class AgentRunCancelled(AgentRunError):
     """Raised inside a tool when the user has stopped the current Agent Run."""
+
+
+def _best_effort_callback(callback: Callable[[], None] | None) -> None:
+    if callback is None:
+        return
+    try:
+        callback()
+    except Exception:
+        return
 
 
 MAX_AGENT_RUN_SECONDS = 10 * 60.0
@@ -329,6 +337,8 @@ def create_agent_tools(
     clock: Callable[[], float] = time.monotonic,
     cancellation_token: object | None = None,
     on_progress: Callable[[ProgressUpdate], None] | None = None,
+    on_validation_start: Callable[[], None] | None = None,
+    on_validation_end: Callable[[], None] | None = None,
 ) -> tuple[BaseTool, ...]:
     """Expose zero-argument CAD validation and review tools."""
 
@@ -354,32 +364,20 @@ def create_agent_tools(
         execution_attempts += 1
         execution_recorded = False
 
-        def report_preview(frame: PreviewFrame) -> None:
-            if on_progress is None:
-                return
-            on_progress(
-                ProgressUpdate(
-                    stage="preview_ready",
-                    tool="cad",
-                    attempt=execution_attempts,
-                    result=f"{frame.operation} preview",
-                    preview_attempt=frame.attempt,
-                    preview_revision=frame.revision,
-                    preview_operation=frame.operation,
-                )
-            )
-
+        _best_effort_callback(on_validation_start)
         try:
-            result = validator.validate_model(
-                cancellation_token=cancellation_token,
-                timeout_seconds=(
-                    min(CAD_EXECUTION_TIMEOUT_SECONDS, remaining)
-                    if remaining is not None
-                    else None
-                ),
-                attempt=execution_attempts,
-                preview_callback=report_preview if on_progress is not None else None,
-            )
+            try:
+                result = validator.validate_model(
+                    cancellation_token=cancellation_token,
+                    timeout_seconds=(
+                        min(CAD_EXECUTION_TIMEOUT_SECONDS, remaining)
+                        if remaining is not None
+                        else None
+                    ),
+                    attempt=execution_attempts,
+                )
+            finally:
+                _best_effort_callback(on_validation_end)
         except Exception as exc:
             if on_execution_error is None:
                 raise
@@ -527,6 +525,8 @@ class ReferenceGroundedAgent:
         executor: Any | None = None,
         model: Any | None = None,
         run_log: AgentRunLog | None = None,
+        on_validation_start: Callable[[Path], None] | None = None,
+        on_validation_end: Callable[[Path], None] | None = None,
     ) -> None:
         self.settings = settings
         self.repo_root = repo_root
@@ -534,6 +534,8 @@ class ReferenceGroundedAgent:
         self.executor = executor
         self.model = model
         self.run_log = run_log
+        self.on_validation_start = on_validation_start
+        self.on_validation_end = on_validation_end
 
     def run(
         self,
@@ -609,6 +611,16 @@ class ReferenceGroundedAgent:
             run_deadline=deadline,
             cancellation_token=token,
             on_progress=emit,
+            on_validation_start=(
+                lambda: self.on_validation_start(Path(self.project_dir))
+                if self.on_validation_start is not None
+                else None
+            ),
+            on_validation_end=(
+                lambda: self.on_validation_end(Path(self.project_dir))
+                if self.on_validation_end is not None
+                else None
+            ),
         )
         agent_error: str | None = None
         timed_out = False
@@ -709,11 +721,15 @@ class AgentRunService:
         repo_root: str | Path,
         settings_factory: Callable[[], AgentSettings] | None = None,
         agent_factory: Callable[..., ReferenceGroundedAgent] = ReferenceGroundedAgent,
+        on_validation_start: Callable[[Path], None] | None = None,
+        on_validation_end: Callable[[Path], None] | None = None,
     ) -> None:
         self.store = store
         self.repo_root = repo_root
         self.settings_factory = settings_factory or AgentSettings.from_environment
         self.agent_factory = agent_factory
+        self.on_validation_start = on_validation_start
+        self.on_validation_end = on_validation_end
 
     def run(
         self,
@@ -794,14 +810,19 @@ class AgentRunService:
                 factory_parameters = inspect.signature(self.agent_factory).parameters
             except (TypeError, ValueError):
                 factory_parameters = {}
+            accepts_factory_kwargs = any(
+                item.kind is inspect.Parameter.VAR_KEYWORD
+                for item in factory_parameters.values()
+            )
             if (
                 "run_log" in factory_parameters
-                or any(
-                    item.kind is inspect.Parameter.VAR_KEYWORD
-                    for item in factory_parameters.values()
-                )
+                or accepts_factory_kwargs
             ):
                 factory_kwargs["run_log"] = run_log
+            if "on_validation_start" in factory_parameters or accepts_factory_kwargs:
+                factory_kwargs["on_validation_start"] = self.on_validation_start
+            if "on_validation_end" in factory_parameters or accepts_factory_kwargs:
+                factory_kwargs["on_validation_end"] = self.on_validation_end
             agent = self.agent_factory(**factory_kwargs)
             outcome = _invoke_agent_run(
                 agent,

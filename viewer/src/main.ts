@@ -13,6 +13,17 @@ type TokenUsage = {
   output_tokens: number | null;
   total_tokens: number | null;
 };
+type LivePreviewState = 'waiting' | 'stale' | 'building' | 'current' | 'failed' | 'validating' | 'paused';
+type LivePreviewStatus = {
+  state: LivePreviewState;
+  revision: number;
+  source_hash: string | null;
+  updated_at: string | null;
+  error: string | null;
+  stdout: string | null;
+  stderr: string | null;
+  artifact_available: boolean;
+};
 type Project = {
   project_id: string;
   name: string;
@@ -26,6 +37,7 @@ type Project = {
   diagnostics_available: boolean;
   duration_seconds: number | null;
   token_usage: TokenUsage | null;
+  preview: LivePreviewStatus;
 };
 type ProgressRecord = {
   id: number;
@@ -114,13 +126,21 @@ app.innerHTML = `
       </section>
 
       <section class="viewer-panel" aria-label="CAD Viewer">
-        <div class="viewer-heading"><div><span class="eyebrow">CAD VIEWER</span><strong>Validated Result</strong></div><button id="fit-button" class="quiet-button" type="button">Fit</button></div>
+        <div class="viewer-heading">
+          <div><span class="eyebrow">CAD VIEWER</span><strong id="viewer-title">Validated Result</strong></div>
+          <div class="viewer-actions">
+            <label id="preview-toggle-control" class="preview-toggle" hidden><input id="preview-toggle" type="checkbox" checked /><span>Live</span></label>
+            <button id="preview-retry" class="quiet-button" type="button" hidden>Retry</button>
+            <button id="fit-button" class="quiet-button" type="button">Fit</button>
+          </div>
+        </div>
         <div id="viewer-stage" class="viewer-stage">
           <div id="viewer" class="viewer"></div>
           <div id="viewer-loading" class="viewer-loading" hidden><span class="spinner"></span><span>Loading Scene Artifact</span></div>
           <div id="viewer-empty" class="viewer-empty"><span class="empty-mark">◇</span><strong id="viewer-empty-title">No Project selected</strong><span id="viewer-empty-copy">Select a Project to inspect its own Scene Artifact.</span></div>
           <div class="viewer-hint">Drag to rotate · right-drag to pan · scroll to zoom</div>
-          <div id="viewer-status" class="viewer-status"><span id="viewer-status-dot" class="status-dot"></span><span id="viewer-status-text">Waiting for a Validated Result</span></div>
+          <details id="preview-details" class="preview-details" hidden><summary>Preview diagnostics</summary><pre id="preview-log"></pre></details>
+          <div id="viewer-status" class="viewer-status" aria-live="polite"><span id="viewer-status-dot" class="status-dot"></span><span id="viewer-status-text">Waiting for a Validated Result</span></div>
         </div>
       </section>
     </section>
@@ -158,6 +178,12 @@ const viewerEmptyTitle = document.querySelector<HTMLElement>('#viewer-empty-titl
 const viewerEmptyCopy = document.querySelector<HTMLElement>('#viewer-empty-copy')!;
 const viewerStatusText = document.querySelector<HTMLSpanElement>('#viewer-status-text')!;
 const viewerStatusDot = document.querySelector<HTMLSpanElement>('#viewer-status-dot')!;
+const viewerTitle = document.querySelector<HTMLElement>('#viewer-title')!;
+const previewToggleControl = document.querySelector<HTMLLabelElement>('#preview-toggle-control')!;
+const previewToggle = document.querySelector<HTMLInputElement>('#preview-toggle')!;
+const previewRetry = document.querySelector<HTMLButtonElement>('#preview-retry')!;
+const previewDetails = document.querySelector<HTMLDetailsElement>('#preview-details')!;
+const previewLog = document.querySelector<HTMLPreElement>('#preview-log')!;
 const serviceMessage = document.querySelector<HTMLSpanElement>('#service-message')!;
 
 let projects: Project[] = [];
@@ -168,8 +194,8 @@ let eventSource: EventSource | null = null;
 let sceneRequest: AbortController | null = null;
 let previewRequest: AbortController | null = null;
 let previewProjectId: string | null = null;
-let latestPreviewAttempt = 0;
 let latestPreviewRevision = 0;
+let loadedPreviewRevision = 0;
 let loadedSceneProjectId: string | null = null;
 let workspaceMessage = '';
 
@@ -317,11 +343,11 @@ function renderViewerEmpty(): void {
     viewerEmptyTitle.textContent = 'Draft Project';
     viewerEmptyCopy.textContent = 'Submit a complete Prompt to generate a Validated Result.';
   } else if (project.state === 'Running') {
-    viewerEmptyTitle.textContent = 'Agent Run in progress';
-    viewerEmptyCopy.textContent = 'The Scene Artifact will appear only after validation succeeds.';
+    viewerEmptyTitle.textContent = project.preview.state === 'failed' ? 'Preview failed' : 'Building live preview';
+    viewerEmptyCopy.textContent = project.preview.error ?? 'The latest model.py result will appear automatically.';
   } else if (project.state === 'Failed') {
     viewerEmptyTitle.textContent = 'No Validated Result';
-    viewerEmptyCopy.textContent = 'This Project failed validation. Partial Scene output is hidden.';
+    viewerEmptyCopy.textContent = 'This Project failed validation and has no usable preview.';
   } else if (project.state === 'Stopped') {
     viewerEmptyTitle.textContent = 'Run stopped';
     viewerEmptyCopy.textContent = 'This Project has no validated Scene Artifact.';
@@ -331,10 +357,67 @@ function renderViewerEmpty(): void {
   }
 }
 
+function renderViewerChrome(): void {
+  const project = currentProject();
+  const running = project?.state === 'Running';
+  viewerTitle.textContent = running
+    ? 'Live Preview'
+    : project && ['Failed', 'Stopped'].includes(project.state) && project.preview.artifact_available
+      ? 'Last Preview'
+      : 'Validated Result';
+  previewToggleControl.hidden = !running;
+  previewRetry.hidden = !running || project.preview.state !== 'failed';
+  previewToggle.checked = project?.preview.state !== 'paused';
+  previewToggle.disabled = !running;
+  const diagnostics = project
+    ? [project.preview.error, project.preview.stderr, project.preview.stdout].filter(Boolean).join('\n\n')
+    : '';
+  previewDetails.hidden = diagnostics.length === 0;
+  previewLog.textContent = diagnostics;
+  if (!project) {
+    viewerStatusDot.className = 'status-dot';
+    viewerStatusText.textContent = 'Waiting for a Project';
+    return;
+  }
+  if (project.state === 'Succeeded') {
+    viewerStatusDot.className = `status-dot${loadedSceneProjectId === project.project_id ? ' ready' : ''}`;
+    viewerStatusText.textContent = loadedSceneProjectId === project.project_id
+      ? 'Validated Scene Artifact'
+      : 'Loading Validated Result';
+    return;
+  }
+  viewerStatusDot.className = 'status-dot';
+  if (project.state === 'Failed' || project.state === 'Stopped') {
+    viewerStatusText.textContent = project.preview.artifact_available
+      ? 'Last preview · unvalidated'
+      : 'No live preview available';
+    viewerStatusDot.classList.toggle('error', project.state === 'Failed');
+    return;
+  }
+  if (project.state === 'Draft') {
+    viewerStatusText.textContent = 'Live preview starts with the Agent Run';
+    return;
+  }
+  const labels: Record<LivePreviewState, string> = {
+    waiting: 'Waiting for model.py',
+    stale: 'Source changed · preview stale',
+    building: 'Building live preview',
+    current: 'Live preview current · unvalidated',
+    failed: project.preview.artifact_available ? 'Preview failed · last result retained' : 'Preview failed',
+    validating: 'Validating model · preview paused',
+    paused: 'Live preview paused',
+  };
+  viewerStatusText.textContent = labels[project.preview.state];
+  viewerStatusDot.classList.toggle('ready', project.preview.state === 'current');
+  viewerStatusDot.classList.toggle('building', ['building', 'validating'].includes(project.preview.state));
+  viewerStatusDot.classList.toggle('error', project.preview.state === 'failed');
+}
+
 function renderAll(): void {
   renderCatalog();
   renderWorkspace();
   renderViewerEmpty();
+  renderViewerChrome();
 }
 
 function setMessage(message: string): void {
@@ -347,55 +430,65 @@ function closeProgressStream(): void {
   eventSource = null;
 }
 
-function isCurrentPreview(projectId: string, version: number, attempt: number, revision: number): boolean {
+function isCurrentPreview(projectId: string, version: number, revision: number): boolean {
+  const project = currentProject();
   return version === selectedVersion
     && selectedProjectId === projectId
-    && currentProject()?.state === 'Running'
-    && latestPreviewAttempt === attempt
+    && project !== null
+    && project.state !== 'Draft'
+    && project.state !== 'Succeeded'
+    && project.preview.revision === revision
     && latestPreviewRevision === revision;
 }
 
-async function handlePreviewEvent(event: MessageEvent, projectId: string, version: number): Promise<void> {
-  if (version !== selectedVersion || selectedProjectId !== projectId || currentProject()?.state !== 'Running') return;
+async function loadLivePreview(project: Project, version: number): Promise<void> {
+  if (!project.preview.artifact_available || project.preview.revision < 1) return;
+  const revision = project.preview.revision;
+  if (previewProjectId === project.project_id && loadedPreviewRevision === revision) return;
   let controller: AbortController | null = null;
   try {
-    const record = JSON.parse(event.data) as ProgressRecord;
-    const preview = record.preview;
-    if (!preview || !Number.isSafeInteger(preview.attempt) || preview.attempt < 1 || !Number.isSafeInteger(preview.revision) || preview.revision < 1 || typeof preview.operation !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(preview.operation)) return;
-    if (preview.attempt !== latestPreviewAttempt) {
-      if (preview.attempt < latestPreviewAttempt) return;
-      latestPreviewAttempt = preview.attempt;
-      latestPreviewRevision = 0;
-    }
-    if (preview.revision <= latestPreviewRevision) return;
-    latestPreviewRevision = preview.revision;
     previewRequest?.abort();
     controller = new AbortController();
     previewRequest = controller;
-    const response = await fetch(
-      `/api/projects/${encodeURIComponent(projectId)}/previews/${preview.attempt}/${preview.revision}`,
-      {
-        signal: controller.signal,
-        headers: { Accept: 'model/gltf-binary' },
-      },
-    );
+    latestPreviewRevision = revision;
+    const response = await fetch(`/api/projects/${encodeURIComponent(project.project_id)}/preview`, {
+      signal: controller.signal,
+      headers: { Accept: 'model/gltf-binary' },
+    });
     if (!response.ok) throw new Error(`Preview request failed (${response.status})`);
     const payload = await response.arrayBuffer();
-    if (!isCurrentPreview(projectId, version, preview.attempt, preview.revision)) return;
+    if (!isCurrentPreview(project.project_id, version, revision)) return;
     const displayed = await sceneViewer.loadPreview(
       payload,
-      `${preview.operation} preview`,
-      () => isCurrentPreview(projectId, version, preview.attempt, preview.revision),
+      project.state === 'Running' ? 'Live preview' : 'Last preview',
+      () => isCurrentPreview(project.project_id, version, revision),
     );
-    if (displayed && isCurrentPreview(projectId, version, preview.attempt, preview.revision)) {
-      previewProjectId = projectId;
+    if (displayed && isCurrentPreview(project.project_id, version, revision)) {
+      previewProjectId = project.project_id;
+      loadedPreviewRevision = revision;
       renderViewerEmpty();
+      renderViewerChrome();
     }
   } catch (error) {
     if (controller?.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return;
-    if (version === selectedVersion && selectedProjectId === projectId) setMessage('Live preview could not be displayed.');
+    if (version === selectedVersion && selectedProjectId === project.project_id) setMessage('Live preview could not be displayed.');
   } finally {
     if (controller !== null && previewRequest === controller) previewRequest = null;
+  }
+}
+
+async function refreshLivePreviewStatus(projectId: string, version: number): Promise<void> {
+  if (version !== selectedVersion || selectedProjectId !== projectId) return;
+  try {
+    const status = await request<LivePreviewStatus>(`/api/projects/${encodeURIComponent(projectId)}/preview/status`);
+    const project = currentProject();
+    if (!project || project.project_id !== projectId || version !== selectedVersion) return;
+    project.preview = status;
+    renderViewerEmpty();
+    renderViewerChrome();
+    await loadLivePreview(project, version);
+  } catch (error) {
+    if (version === selectedVersion && selectedProjectId === projectId) setMessage(errorMessage(error));
   }
 }
 
@@ -418,18 +511,10 @@ function openProgressStream(projectId: string, version: number): void {
       setMessage('Progress Event could not be displayed.');
     }
   });
-  source.addEventListener('scene-preview', (event) => {
-    void handlePreviewEvent(event as MessageEvent, projectId, version);
-    try {
-      const record = JSON.parse((event as MessageEvent).data) as ProgressRecord;
-      const events = progressByProject.get(projectId) ?? [];
-      if (!events.some((item) => item.id === record.id)) events.push(record);
-      progressByProject.set(projectId, events);
-      renderWorkspace();
-    } catch {
-      setMessage('Progress Event could not be displayed.');
-    }
+  source.addEventListener('scene-preview', () => {
+    void refreshLivePreviewStatus(projectId, version);
   });
+  source.addEventListener('preview-status', () => void refreshLivePreviewStatus(projectId, version));
 }
 
 async function refreshSelectedProject(version: number): Promise<void> {
@@ -448,7 +533,12 @@ async function refreshSelectedProject(version: number): Promise<void> {
       else sceneViewer.clear();
       renderViewerEmpty();
     }
-    if (project.state === 'Failed' || project.state === 'Stopped') sceneViewer.markPreviewUnvalidated();
+    if (project.state === 'Failed' || project.state === 'Stopped') {
+      sceneViewer.markPreviewUnvalidated();
+      await loadLivePreview(project, version);
+    } else if (project.state === 'Running') {
+      await loadLivePreview(project, version);
+    }
   } catch (error) {
     if (version === selectedVersion) setMessage(errorMessage(error));
   }
@@ -463,8 +553,8 @@ async function loadScene(project: Project, version: number): Promise<void> {
   previewRequest?.abort();
   previewRequest = null;
   previewProjectId = null;
-  latestPreviewAttempt = 0;
   latestPreviewRevision = 0;
+  loadedPreviewRevision = 0;
   sceneViewer.clear('Loading canonical Scene Artifact');
   viewerEmpty.hidden = true;
   viewerLoading.hidden = false;
@@ -477,6 +567,7 @@ async function loadScene(project: Project, version: number): Promise<void> {
     if (version === selectedVersion && selectedProjectId === project.project_id) {
       loadedSceneProjectId = project.project_id;
       renderViewerEmpty();
+      renderViewerChrome();
     }
   } catch (error) {
     if (controller.signal.aborted || version !== selectedVersion) return;
@@ -502,8 +593,8 @@ async function selectProject(projectId: string): Promise<void> {
   previewRequest?.abort();
   previewRequest = null;
   previewProjectId = null;
-  latestPreviewAttempt = 0;
   latestPreviewRevision = 0;
+  loadedPreviewRevision = 0;
   loadedSceneProjectId = null;
   sceneViewer.clear();
   progressByProject.set(projectId, []);
@@ -515,6 +606,7 @@ async function selectProject(projectId: string): Promise<void> {
     renderAll();
     openProgressStream(projectId, version);
     if (project.state === 'Succeeded') await loadScene(project, version);
+    else await loadLivePreview(project, version);
   } catch (error) {
     if (version === selectedVersion) setMessage(errorMessage(error));
   }
@@ -530,8 +622,8 @@ async function refreshCatalog(): Promise<void> {
       previewRequest?.abort();
       previewRequest = null;
       previewProjectId = null;
-      latestPreviewAttempt = 0;
       latestPreviewRevision = 0;
+      loadedPreviewRevision = 0;
       loadedSceneProjectId = null;
       sceneViewer.clear();
     }
@@ -612,6 +704,45 @@ async function stopRun(): Promise<void> {
   }
 }
 
+async function setLivePreviewPaused(): Promise<void> {
+  const project = currentProject();
+  if (!project || project.state !== 'Running') return;
+  previewToggle.disabled = true;
+  try {
+    const status = await request<LivePreviewStatus>(
+      `/api/projects/${encodeURIComponent(project.project_id)}/preview/pause`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paused: !previewToggle.checked }),
+      },
+    );
+    project.preview = status;
+    renderViewerChrome();
+  } catch (error) {
+    previewToggle.checked = project.preview.state !== 'paused';
+    setMessage(errorMessage(error));
+  } finally {
+    previewToggle.disabled = false;
+  }
+}
+
+async function retryLivePreview(): Promise<void> {
+  const project = currentProject();
+  if (!project || project.state !== 'Running') return;
+  previewRetry.disabled = true;
+  try {
+    await request<{ accepted: boolean }>(
+      `/api/projects/${encodeURIComponent(project.project_id)}/preview/retry`,
+      { method: 'POST' },
+    );
+  } catch (error) {
+    setMessage(errorMessage(error));
+  } finally {
+    previewRetry.disabled = false;
+  }
+}
+
 async function deleteProject(): Promise<void> {
   const project = currentProject();
   if (!project) return;
@@ -628,8 +759,8 @@ async function deleteProject(): Promise<void> {
     previewRequest?.abort();
     previewRequest = null;
     previewProjectId = null;
-    latestPreviewAttempt = 0;
     latestPreviewRevision = 0;
+    loadedPreviewRevision = 0;
     projects = projects.filter((item) => item.project_id !== project.project_id);
     selectedProjectId = null;
     selectedVersion += 1;
@@ -702,6 +833,8 @@ document.querySelector<HTMLButtonElement>('#refresh-projects')!.addEventListener
 runButton.addEventListener('click', () => void submitPrompt());
 stopButton.addEventListener('click', () => void stopRun());
 deleteButton.addEventListener('click', () => void deleteProject());
+previewToggle.addEventListener('change', () => void setLivePreviewPaused());
+previewRetry.addEventListener('click', () => void retryLivePreview());
 document.querySelector<HTMLButtonElement>('#fit-button')!.addEventListener('click', () => sceneViewer.fit());
 promptInput.addEventListener('input', () => {
   promptCounter.textContent = `${promptInput.value.length.toLocaleString()} / ${MAX_PROMPT_CHARS.toLocaleString()}`;

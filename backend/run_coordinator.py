@@ -22,6 +22,7 @@ from .harnesses import (
     AgentRunAdapter,
     AgentRunAdapterRegistry,
 )
+from .live_preview import LivePreviewScheduler, LivePreviewStatus
 from .projects import (
     Project,
     ProjectState,
@@ -61,15 +62,21 @@ class AgentRunCoordinator:
         adapter_registry: AgentRunAdapterRegistry | None = None,
         settings_factory: Callable[[], Any] | None = None,
         agent_factory: Callable[..., Any] | None = None,
+        preview_scheduler: LivePreviewScheduler | None = None,
     ) -> None:
         self.store = store
         self.repo_root = Path(repo_root).expanduser().resolve()
         self.events = event_store or ProgressEventStore(store.root)
+        self.preview_scheduler = preview_scheduler or LivePreviewScheduler(
+            store, on_status=self._record_preview_status
+        )
         self.run_service = run_service or AgentRunService(
             store=store,
             repo_root=self.repo_root,
             settings_factory=settings_factory,
             agent_factory=agent_factory or ReferenceGroundedAgent,
+            on_validation_start=self.preview_scheduler.pause_for_validation,
+            on_validation_end=self.preview_scheduler.resume_after_validation,
         )
         self.adapters = adapter_registry or AgentRunAdapterRegistry(
             (
@@ -137,6 +144,7 @@ class AgentRunCoordinator:
                 tool="service",
                 result=f"{adapter.label} Agent Run accepted",
             )
+            self._preview_call("activate", project.project_id)
             thread = threading.Thread(
                 target=self._run_worker,
                 args=(active,),
@@ -164,6 +172,7 @@ class AgentRunCoordinator:
                     result="Stop requested by user",
                 )
                 active.cancellation_token.cancel()
+                self._preview_call("deactivate", project_id)
         if not active.finished.wait(RUN_STOP_WAIT_SECONDS):
             force_stop = getattr(active.adapter.service, "force_stop", None)
             if callable(force_stop):
@@ -187,6 +196,7 @@ class AgentRunCoordinator:
                         result="Deletion requested; cancelling Agent Run",
                     )
                     active.cancellation_token.cancel()
+                    self._preview_call("deactivate", project_id)
             elif project.state == ProjectState.RUNNING:
                 raise ProjectStateError("Running Project has no active Agent Run")
 
@@ -223,6 +233,9 @@ class AgentRunCoordinator:
                 failure_reason=_safe_reason(exc),
             )
         try:
+            self._preview_call(
+                "deactivate", active.project_id, validated=outcome.validated
+            )
             self._finish_project(active, outcome)
         finally:
             active.finished.set()
@@ -272,6 +285,37 @@ class AgentRunCoordinator:
             )
 
         return record
+
+    def _record_preview_status(
+        self, project_id: str, status: LivePreviewStatus
+    ) -> None:
+        result = status.error or {
+            "waiting": "Waiting for source changes",
+            "stale": "Source changed",
+            "building": "Building live preview",
+            "current": "Live preview is current",
+            "validating": "Paused for validation",
+            "paused": "Live preview paused",
+            "failed": "Live preview failed",
+        }.get(status.state, status.state)
+        preview_ready = status.state == "current" and status.revision > 0
+        self.events.append(
+            project_id,
+            stage=f"preview_{status.state}",
+            tool="preview",
+            result=result,
+            preview_attempt=1 if preview_ready else None,
+            preview_revision=status.revision if preview_ready else None,
+            preview_operation="result" if preview_ready else None,
+        )
+
+    def _preview_call(self, method_name: str, *args: Any, **kwargs: Any) -> None:
+        try:
+            method = getattr(self.preview_scheduler, method_name)
+            method(*args, **kwargs)
+        except Exception:
+            # Live preview is user-facing observability and cannot affect a run.
+            return
 
     def _finish_project(self, active: _ActiveRun, outcome: AgentRunOutcome) -> None:
         project = self.store.get_project(active.project_id)

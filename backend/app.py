@@ -6,6 +6,7 @@ import asyncio
 import math
 import os
 from collections.abc import Mapping
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -27,9 +28,12 @@ from .harnesses import (
     AgentRunAdapterRegistry,
     HarnessUnavailableError,
 )
+from .live_preview import LivePreviewScheduler, LivePreviewStore
+from .previews import PreviewError
 from .projects import (
     ProjectError,
     ProjectNotFoundError,
+    ProjectState,
     ProjectStateError,
     ProjectStore,
     PromptValidationError,
@@ -71,6 +75,10 @@ class DeleteProjectRequest(BaseModel):
         return self.confirmation or self.confirm_name or self.name
 
 
+class PreviewPauseRequest(BaseModel):
+    paused: bool
+
+
 def create_app(
     *,
     projects_root: str | Path = DEFAULT_PROJECTS_ROOT,
@@ -81,6 +89,7 @@ def create_app(
     settings_factory: Callable[[], AgentSettings] | None = None,
     agent_factory: Callable[..., ReferenceGroundedAgent] = ReferenceGroundedAgent,
     frontend_dist: str | Path | None = None,
+    preview_scheduler: LivePreviewScheduler | None = None,
 ) -> FastAPI:
     project_store = store or ProjectStore(projects_root)
     event_store = ProgressEventStore(project_store.root)
@@ -89,11 +98,33 @@ def create_app(
         if repo_root is not None
         else Path(__file__).resolve().parents[1]
     )
+    scheduler = preview_scheduler or LivePreviewScheduler(
+        project_store,
+        on_status=lambda project_id, status: event_store.append(
+            project_id,
+            stage=f"preview_{status.state}",
+            tool="preview",
+            result=status.error or f"Live preview {status.state}",
+            preview_attempt=(1 if status.state == "current" and status.revision > 0 else None),
+            preview_revision=(
+                status.revision
+                if status.state == "current" and status.revision > 0
+                else None
+            ),
+            preview_operation=(
+                "result"
+                if status.state == "current" and status.revision > 0
+                else None
+            ),
+        ),
+    )
     service = run_service or AgentRunService(
         store=project_store,
         repo_root=resolved_repo_root,
         settings_factory=settings_factory,
         agent_factory=agent_factory,
+        on_validation_start=scheduler.pause_for_validation,
+        on_validation_end=scheduler.resume_after_validation,
     )
     adapters = adapter_registry or AgentRunAdapterRegistry(
         (
@@ -110,13 +141,22 @@ def create_app(
         event_store=event_store,
         run_service=service,
         adapter_registry=adapters,
+        preview_scheduler=scheduler,
     )
     coordinator.recover_interrupted_runs()
 
-    app = FastAPI(title="CadFlowAgent")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            yield
+        finally:
+            scheduler.close()
+
+    app = FastAPI(title="CadFlowAgent", lifespan=lifespan)
     app.state.project_store = project_store
     app.state.event_store = event_store
     app.state.run_coordinator = coordinator
+    app.state.preview_scheduler = scheduler
 
     @app.get("/api/projects")
     def list_projects() -> list[dict[str, object]]:
@@ -302,18 +342,56 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
-    @app.get("/api/projects/{project_id}/previews/{attempt}/{revision}")
-    def project_preview(project_id: str, attempt: int, revision: int) -> FileResponse:
+    @app.get("/api/projects/{project_id}/preview/status")
+    def live_preview_status(project_id: str) -> JSONResponse:
         _get_project_or_404(project_store, project_id)
+        status = LivePreviewStore(
+            project_store.project_directory(project_id)
+        ).read_status()
+        return JSONResponse(status.to_dict(), headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/projects/{project_id}/preview")
+    def live_preview_artifact(project_id: str) -> FileResponse:
+        project = _get_project_or_404(project_store, project_id)
+        if project.state == ProjectState.DRAFT:
+            raise HTTPException(
+                status_code=404, detail="Live preview starts with the Agent Run"
+            )
         try:
-            preview = project_store.preview_artifact(project_id, attempt, revision)
-        except ProjectStateError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            artifact = LivePreviewStore(
+                project_store.project_directory(project_id)
+            ).artifact()
+        except (OSError, PreviewError) as exc:
+            raise HTTPException(status_code=404, detail="Live preview is unavailable") from exc
         return FileResponse(
-            preview,
+            artifact,
             media_type="model/gltf-binary",
             headers={"Cache-Control": "no-store"},
         )
+
+    @app.post("/api/projects/{project_id}/preview/retry", status_code=202)
+    def retry_live_preview(project_id: str) -> JSONResponse:
+        project = _get_project_or_404(project_store, project_id)
+        if project.state != ProjectState.RUNNING:
+            raise HTTPException(status_code=409, detail="Live preview is not running")
+        try:
+            scheduler.retry(project_id)
+        except PreviewError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return JSONResponse({"accepted": True}, status_code=202)
+
+    @app.post("/api/projects/{project_id}/preview/pause")
+    def pause_live_preview(
+        project_id: str, request: PreviewPauseRequest
+    ) -> JSONResponse:
+        project = _get_project_or_404(project_store, project_id)
+        if project.state != ProjectState.RUNNING:
+            raise HTTPException(status_code=409, detail="Live preview is not running")
+        try:
+            status = scheduler.set_paused(project_id, request.paused)
+        except PreviewError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return JSONResponse(status.to_dict(), headers={"Cache-Control": "no-store"})
 
     _mount_frontend(app, frontend_dist)
     return app
@@ -334,6 +412,7 @@ def _project_payload(store: ProjectStore, project: Any) -> dict[str, object]:
         except ProjectStateError:
             scene_available = False
     diagnostics = store.read_diagnostics(project.project_id)
+    preview = LivePreviewStore(store.project_directory(project.project_id)).read_status()
     metrics_available = project.state.value in {"Succeeded", "Failed", "Stopped"}
     return {
         "project_id": project.project_id,
@@ -345,6 +424,7 @@ def _project_payload(store: ProjectStore, project: Any) -> dict[str, object]:
         "failure_reason": project.failure_reason,
         "harness": project.harness.value,
         "scene_available": scene_available,
+        "preview": preview.to_dict(),
         "diagnostics_available": diagnostics is not None,
         "duration_seconds": (
             _duration_seconds(diagnostics) if metrics_available else None

@@ -2,13 +2,15 @@
 
 The Vite app is the browser UI for the trusted local Text-to-CAD demo. It
 loads the Project Catalog and Agent Run state from the FastAPI `/api` routes,
-streams revision events while a run is active, and requests a canonical
-`.scene.zip` only for a Succeeded Project.
+streams independent live-preview events while a run is active, and requests a
+canonical `.scene.zip` only for a Succeeded Project.
 
 The CAD Viewer keeps the Scene Schema 1.0 ZIP/member/hash checks, GLB loading,
 automatic framing, Fit, and Three.js OrbitControls for rotate, pan, and zoom.
-Live revisions arrive as bounded native CadFlow GLBs; the Viewer rejects stale
-attempt/revision pairs and swaps a parsed frame only after it is ready.
+Live revisions are generated from the final `build_model()` Shape by a
+low-priority preview process that is separate from `validate_model`. They arrive
+as bounded native CadFlow GLBs; the Viewer keeps the last usable model visible
+when a newer source revision is building or fails.
 It intentionally has no local ZIP picker, model tree, Inspector, entity
 selection, source editor, or Provider credential controls.
 

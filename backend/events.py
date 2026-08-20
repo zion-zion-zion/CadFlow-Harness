@@ -74,7 +74,12 @@ class ProgressEvent:
 
     def to_sse(self) -> str:
         data = json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"))
-        event_name = "scene-preview" if self.preview_revision is not None else "progress"
+        if self.tool == "preview":
+            event_name = (
+                "scene-preview" if self.preview_revision is not None else "preview-status"
+            )
+        else:
+            event_name = "scene-preview" if self.preview_revision is not None else "progress"
         return f"id: {self.event_id}\nevent: {event_name}\ndata: {data}\n\n"
 
 

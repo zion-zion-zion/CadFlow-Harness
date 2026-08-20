@@ -21,12 +21,6 @@ from .model_source import (
     MODEL_SOURCE_NAME,
     SCENE_ARTIFACT_NAME,
 )
-from .previews import (
-    PreviewError,
-    PreviewFrame,
-    prepare_preview_attempt,
-    read_preview_frame,
-)
 from .scene_validation import SceneParseResult, validate_scene_artifact
 
 
@@ -34,7 +28,6 @@ CAD_EXECUTION_TIMEOUT_SECONDS = 120.0
 DEFAULT_OUTPUT_BYTES = 64 * 1024
 _RESULT_PREFIX = "__CADFLOW_EXECUTION_RESULT__"
 _PREFLIGHT_PREFIX = "__CADFLOW_PREFLIGHT__"
-_PREVIEW_PREFIX = "__CADFLOW_PREVIEW__"
 
 _SENSITIVE_ENV_NAME = re.compile(
     r"(?i)(api[_-]?(?:key|token)|access[_-]?token|secret|password|credential|"
@@ -243,7 +236,6 @@ class CADExecutor:
         max_output_bytes: int = DEFAULT_OUTPUT_BYTES,
         cancellation_token: object | None = None,
         attempt: int = 1,
-        preview_callback: Callable[[PreviewFrame], None] | None = None,
     ) -> ExecutionResult:
         """Execute ``model.py`` in the Project's working directory.
 
@@ -268,44 +260,7 @@ class CADExecutor:
         preflight_location: str | None = None
         preflight_status = "not_run"
         imported_modules: tuple[str, ...] = ()
-        live_preview_callback = preview_callback
-        last_preview_revision = 0
-
-        def handle_preview_line(line: str) -> None:
-            nonlocal last_preview_revision
-            if not line.startswith(_PREVIEW_PREFIX) or live_preview_callback is None:
-                return
-            try:
-                payload = json.loads(line[len(_PREVIEW_PREFIX) :])
-                if not isinstance(payload, dict):
-                    return
-                marker_attempt = payload.get("attempt")
-                revision = payload.get("revision")
-                operation = payload.get("operation")
-                if (
-                    marker_attempt != attempt
-                    or not isinstance(revision, int)
-                    or isinstance(revision, bool)
-                    or revision < 1
-                    or revision <= last_preview_revision
-                    or not isinstance(operation, str)
-                ):
-                    return
-                frame = read_preview_frame(
-                    root,
-                    attempt=attempt,
-                    revision=revision,
-                    operation=operation,
-                )
-                last_preview_revision = revision
-                live_preview_callback(frame)
-            except (OSError, PreviewError, TypeError, ValueError, json.JSONDecodeError):
-                return
-
-        stdout_collector = _OutputCollector(
-            max_output_bytes,
-            on_line=handle_preview_line if live_preview_callback is not None else None,
-        )
+        stdout_collector = _OutputCollector(max_output_bytes)
         stderr_collector = _OutputCollector(max_output_bytes)
 
         try:
@@ -317,11 +272,6 @@ class CADExecutor:
                 raise ValueError("attempt must be a positive integer")
             self._validate_project_paths(root, model_path, artifact_dir)
             self._clear_artifacts(artifact_dir)
-            if live_preview_callback is not None:
-                try:
-                    prepare_preview_attempt(root, attempt)
-                except PreviewError:
-                    live_preview_callback = None
             if _is_cancelled(cancellation_token):
                 forced_status = "cancelled"
             else:
@@ -335,8 +285,6 @@ class CADExecutor:
                             "-c",
                             _RUNNER_SOURCE,
                             str(model_path),
-                            str(attempt),
-                            "1" if live_preview_callback is not None else "0",
                         ],
                         cwd=root,
                         env=build_cad_environment(),
@@ -800,8 +748,6 @@ import cadflow as cad
 
 
 model_path = Path(sys.argv[1]).resolve()
-attempt = int(sys.argv[2])
-preview_enabled = sys.argv[3] == "1"
 imported_modules = {{"cadflow"}}
 real_import = builtins.__import__
 
@@ -823,81 +769,10 @@ print({_PREFLIGHT_PREFIX!r} + json.dumps(
     separators=(",", ":"),
 ), flush=True)
 
-class PreviewModel(cad.Model):
-    '''CadFlow model that publishes bounded, best-effort GLB checkpoints.'''
-
-    _preview_limit = 24
-
-    def __init__(self, preview_root, preview_attempt):
-        super().__init__()
-        self._preview_root = Path(preview_root)
-        self._preview_attempt = preview_attempt
-        self._preview_revision = 0
-        self._preview_count = 0
-
-    def _publish_preview(self, operation, shape):
-        if self._preview_count >= self._preview_limit:
-            return
-        try:
-            if not isinstance(shape, cad.Shape):
-                return
-            if int(shape.topology.get("solids", 0)) < 1:
-                return
-            payload = shape.preview_glb(deflection=0.35)
-            if not isinstance(payload, bytes) or not payload:
-                return
-            cad.scene.preflight_glb(payload, expected_kind="triangle")
-            revision = self._preview_revision + 1
-            self._preview_root.mkdir(parents=True, exist_ok=True)
-            path = self._preview_root / (str(revision) + ".glb")
-            temporary = self._preview_root / ("." + str(revision) + ".tmp")
-            temporary.write_bytes(payload)
-            os.replace(temporary, path)
-            self._preview_revision = revision
-            print(
-                {_PREVIEW_PREFIX!r}
-                + json.dumps(
-                    {{
-                        "attempt": self._preview_attempt,
-                        "revision": revision,
-                        "operation": operation,
-                    }},
-                    separators=(",", ":"),
-                ),
-                flush=True,
-            )
-            self._preview_count += 1
-        except Exception:
-            # Preview generation is observability and must never affect the CAD run.
-            return
-
-
-def _preview_method(name):
-    original = getattr(cad.Model, name)
-
-    def wrapped(self, *args, **kwargs):
-        result = original(self, *args, **kwargs)
-        self._publish_preview(name, result)
-        return result
-
-    return wrapped
-
-
-for _operation in (
-    "union", "cut", "intersect", "extrude", "revolve", "loft", "sweep",
-    "fillet", "chamfer", "shell",
-):
-    setattr(PreviewModel, _operation, _preview_method(_operation))
-
-model_type = PreviewModel if preview_enabled else cad.Model
-preview_root = model_path.parent / "previews" / str(attempt)
-with model_type(preview_root, attempt) if preview_enabled else model_type() as model:
+with cad.Model() as model:
     final_shape = build_model(model)
     if not isinstance(final_shape, cad.Shape):
         raise TypeError("Model Source must return one CadFlow Shape")
-    if preview_enabled and isinstance(model, PreviewModel) and model._preview_count == 0:
-        # Primitive-only models still get one observable frame before export.
-        model._publish_preview("result", final_shape)
     topology = final_shape.topology
     solid_count = int(topology.get("solids", 0))
     solid_volume = float(final_shape.volume)
@@ -1018,7 +893,6 @@ __all__ = [
     "CancellationToken",
     "DEFAULT_OUTPUT_BYTES",
     "ExecutionResult",
-    "PreviewFrame",
     "build_cad_environment",
     "redact_credentials",
 ]
