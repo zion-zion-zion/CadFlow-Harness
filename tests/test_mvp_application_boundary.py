@@ -143,6 +143,36 @@ class _DeterministicFailureHarness:
         )
 
 
+class _SequentialTokenUsageHarness:
+    def __init__(self) -> None:
+        self._turn = 0
+
+    def run(self, *_args: object, **_kwargs: object) -> AgentRunOutcome:
+        usages = (
+            {
+                "input_tokens": 100,
+                "cached_input_tokens": 40,
+                "uncached_input_tokens": 60,
+                "output_tokens": 25,
+                "total_tokens": 125,
+            },
+            {
+                "input_tokens": 60,
+                "cached_input_tokens": 10,
+                "uncached_input_tokens": 50,
+                "output_tokens": 15,
+                "total_tokens": 75,
+            },
+        )
+        usage = usages[self._turn]
+        self._turn += 1
+        return AgentRunOutcome(
+            validated=False,
+            failure_reason="deterministic validation failure",
+            token_usage=usage,
+        )
+
+
 class _ValidatedWithoutArtifactHarness:
     def run(self, *_args: object, **_kwargs: object) -> AgentRunOutcome:
         return AgentRunOutcome(validated=True)
@@ -392,6 +422,42 @@ def test_http_boundary_exposes_failed_state_and_accepts_a_second_run(
         json={"prompt": "Try a corrected follow-up."},
     )
     assert second_run.status_code == 202
+
+
+def test_project_token_usage_accumulates_across_multiple_turns(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        projects_root=tmp_path / "projects",
+        run_service=_SequentialTokenUsageHarness(),
+    )
+    client = TestClient(app)
+    project = client.post("/api/projects", json={"name": "Token totals"}).json()
+    project_id = project["project_id"]
+
+    first = client.post(
+        f"/api/projects/{project_id}/run",
+        json={"prompt": "Create the first version."},
+    )
+    assert first.status_code == 202
+    first_result = _wait_for_state(client, project_id, ProjectState.FAILED.value)
+    assert first_result["token_usage"]["total_tokens"] == 125
+    assert app.state.run_coordinator.wait_for_idle(1.0)
+
+    second = client.post(
+        f"/api/projects/{project_id}/run",
+        json={"prompt": "Refine the first version."},
+    )
+    assert second.status_code == 202
+    second_result = _wait_for_state(client, project_id, ProjectState.FAILED.value)
+
+    assert second_result["token_usage"] == {
+        "total_tokens": 200,
+        "input_tokens": 160,
+        "cached_input_tokens": 50,
+        "uncached_input_tokens": 110,
+        "output_tokens": 40,
+    }
 
 
 def test_message_turn_fails_when_a_validated_run_has_no_artifact(tmp_path: Path) -> None:

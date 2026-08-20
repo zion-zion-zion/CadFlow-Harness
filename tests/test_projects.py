@@ -103,6 +103,77 @@ def test_terminal_project_can_start_a_follow_up_turn(tmp_path: Path) -> None:
     assert restarted.failure_reason is None
 
 
+def test_follow_up_without_token_usage_preserves_project_total(tmp_path: Path) -> None:
+    store = ProjectStore(tmp_path)
+    project = store.create_project("Usage history")
+    store.submit_prompt(project.project_id, "Make a box.")
+    store.mark_failed(
+        project.project_id,
+        "first turn failed",
+        {
+            "status": "failed",
+            "token_usage": {
+                "input_tokens": 20,
+                "cached_input_tokens": 5,
+                "uncached_input_tokens": 15,
+                "output_tokens": 10,
+                "total_tokens": 30,
+            },
+        },
+    )
+
+    store.submit_prompt(project.project_id, "Try again.")
+    store.mark_failed(
+        project.project_id,
+        "second turn failed",
+        {"status": "failed", "token_usage": None},
+    )
+
+    diagnostics = store.read_diagnostics(project.project_id)
+    assert diagnostics is not None
+    assert diagnostics["status"] == "failed"
+    assert diagnostics["token_usage"] == {
+        "total_tokens": 30,
+        "input_tokens": 20,
+        "cached_input_tokens": 5,
+        "uncached_input_tokens": 15,
+        "output_tokens": 10,
+    }
+
+
+def test_restart_recovery_does_not_count_previous_token_usage_twice(
+    tmp_path: Path,
+) -> None:
+    store = ProjectStore(tmp_path)
+    project = store.create_project("Interrupted follow-up")
+    store.submit_prompt(project.project_id, "Make a box.")
+    store.mark_failed(
+        project.project_id,
+        "first turn failed",
+        {
+            "token_usage": {
+                "input_tokens": 20,
+                "cached_input_tokens": 5,
+                "output_tokens": 10,
+            }
+        },
+    )
+    store.submit_prompt(project.project_id, "Try again after restart.")
+
+    reloaded = ProjectStore(tmp_path)
+    reloaded.recover_interrupted_runs()
+
+    diagnostics = reloaded.read_diagnostics(project.project_id)
+    assert diagnostics is not None
+    assert diagnostics["token_usage"] == {
+        "total_tokens": 30,
+        "input_tokens": 20,
+        "cached_input_tokens": 5,
+        "uncached_input_tokens": 15,
+        "output_tokens": 10,
+    }
+
+
 def test_success_requires_the_canonical_scene_artifact(tmp_path: Path) -> None:
     store = ProjectStore(tmp_path)
     project = store.create_project("Result")

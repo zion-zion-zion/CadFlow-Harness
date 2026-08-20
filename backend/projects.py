@@ -268,6 +268,7 @@ class ProjectStore:
                     continue
                 existing = self.read_diagnostics(project.project_id) or {}
                 diagnostics = dict(existing)
+                diagnostics.pop("token_usage", None)
                 diagnostics.update(
                     {
                         "status": "failed",
@@ -545,7 +546,11 @@ class ProjectStore:
             if state in {ProjectState.FAILED, ProjectState.STOPPED}:
                 self.discard_unvalidated_artifacts(project_id)
             if diagnostics is not None:
-                _write_json(project_dir / DIAGNOSTICS_NAME, diagnostics)
+                previous_diagnostics = self.read_diagnostics(project_id)
+                _write_json(
+                    project_dir / DIAGNOSTICS_NAME,
+                    _merge_diagnostics(previous_diagnostics, diagnostics),
+                )
             return updated
 
     def _read_project(self, project_dir: Path) -> Project:
@@ -603,6 +608,80 @@ def _validate_prompt(prompt: str) -> None:
         raise PromptValidationError(
             f"Prompt exceeds the {MAX_PROMPT_CHARS}-character limit"
         )
+
+
+def _merge_diagnostics(
+    previous: Mapping[str, Any] | None,
+    current: Mapping[str, Any],
+) -> dict[str, Any]:
+    merged = dict(current)
+    token_usage = _sum_token_usage(
+        previous.get("token_usage") if previous is not None else None,
+        current.get("token_usage"),
+    )
+    if token_usage is not None:
+        merged["token_usage"] = token_usage
+    return merged
+
+
+def _sum_token_usage(previous: Any, current: Any) -> dict[str, int] | None:
+    previous_usage = _normalized_token_usage(previous)
+    current_usage = _normalized_token_usage(current)
+    if previous_usage is None:
+        return current_usage
+    if current_usage is None:
+        return previous_usage
+    return _token_usage_from_counts(
+        input_tokens=(
+            previous_usage["input_tokens"] + current_usage["input_tokens"]
+        ),
+        cached_input_tokens=(
+            previous_usage["cached_input_tokens"]
+            + current_usage["cached_input_tokens"]
+        ),
+        output_tokens=(
+            previous_usage["output_tokens"] + current_usage["output_tokens"]
+        ),
+    )
+
+
+def _normalized_token_usage(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, Mapping):
+        return None
+    input_tokens = _non_negative_int(value.get("input_tokens"))
+    output_tokens = _non_negative_int(value.get("output_tokens"))
+    if input_tokens is None or output_tokens is None:
+        return None
+    cached_input_tokens = min(
+        _non_negative_int(value.get("cached_input_tokens")) or 0,
+        input_tokens,
+    )
+    return _token_usage_from_counts(
+        input_tokens=input_tokens,
+        cached_input_tokens=cached_input_tokens,
+        output_tokens=output_tokens,
+    )
+
+
+def _token_usage_from_counts(
+    *,
+    input_tokens: int,
+    cached_input_tokens: int,
+    output_tokens: int,
+) -> dict[str, int]:
+    return {
+        "total_tokens": input_tokens + output_tokens,
+        "input_tokens": input_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "uncached_input_tokens": input_tokens - cached_input_tokens,
+        "output_tokens": output_tokens,
+    }
+
+
+def _non_negative_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
 
 
 def _replace_project(project: Project, **changes: Any) -> Project:
