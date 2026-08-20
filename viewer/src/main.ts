@@ -34,10 +34,36 @@ type Project = {
   failure_reason: string | null;
   harness: AgentHarness;
   scene_available: boolean;
+  artifact_version: number | null;
+  turn_count: number;
   diagnostics_available: boolean;
   duration_seconds: number | null;
   token_usage: TokenUsage | null;
   preview: LivePreviewStatus;
+};
+type ConversationTurn = {
+  turn_id: string;
+  sequence: number;
+  request_id: string | null;
+  retry_of: string | null;
+  user_message: string;
+  assistant_message: string;
+  status: 'running' | 'succeeded' | 'failed' | 'stopped' | 'cancelled';
+  created_at: string;
+  completed_at: string | null;
+  artifact_version: number | null;
+  error: string | null;
+};
+type ConversationResponse = {
+  conversation_id: string;
+  turns: ConversationTurn[];
+  current_artifact_version: number | null;
+};
+type MessageResponse = {
+  turn: ConversationTurn;
+  project: Project;
+  artifact: { version: number | null; scene_available: boolean };
+  duplicate: boolean;
 };
 type ProgressRecord = {
   id: number;
@@ -92,7 +118,7 @@ app.innerHTML = `
         <div id="project-empty" class="empty-workspace">
           <span class="empty-mark">＋</span>
           <strong>Create or select a Project</strong>
-          <span>A Project keeps one Prompt, one Agent Run and its Validated Result together.</span>
+          <span>A Project keeps its CAD conversation, Agent turns and validated versions together.</span>
         </div>
         <div id="project-content" hidden>
           <div class="panel-heading current-heading">
@@ -107,21 +133,26 @@ app.innerHTML = `
             <div><dt>Output Tokens</dt><dd id="output-tokens">--</dd></div>
             <div><dt>Total Time</dt><dd id="run-time">--</dd></div>
           </dl>
-          <div class="project-controls">
-            <label for="prompt-input">Prompt</label>
-            <textarea id="prompt-input" rows="7" maxlength="32000" placeholder="Describe one complete CAD part..."></textarea>
-            <div class="prompt-footer"><span id="prompt-counter">0 / 32000</span><span>Cmd/Ctrl + Enter to submit</span></div>
+          <section class="conversation-section" aria-label="CAD conversation">
+            <div class="section-heading conversation-heading"><span class="eyebrow">CONVERSATION</span><span id="conversation-count" class="count">0</span></div>
+            <div id="conversation-list" class="conversation-list" aria-live="polite"><p class="panel-empty">No messages yet.</p></div>
+            <div class="project-controls">
+              <label for="prompt-input">Message</label>
+              <textarea id="prompt-input" rows="4" maxlength="32000" placeholder="Describe a part or continue refining the current model..."></textarea>
+              <div class="prompt-footer"><span id="prompt-counter">0 / 32000</span><span>Cmd/Ctrl + Enter</span></div>
+            </div>
             <div class="control-row">
-              <button id="run-button" class="primary-button" type="button">Start Agent Run</button>
+              <button id="run-button" class="primary-button" type="button">Send</button>
               <button id="stop-button" class="warning-button" type="button" hidden>Stop Run</button>
+              <button id="clear-button" class="danger-button clear-button" type="button">Clear Conversation</button>
               <button id="delete-button" class="danger-button" type="button">Delete Project</button>
             </div>
             <p id="action-message" class="action-message" role="status"></p>
-          </div>
-          <section class="progress-section" aria-label="Agent Run progress">
-            <div class="section-heading"><span class="eyebrow">PROGRESS</span><span id="progress-count" class="count">0</span></div>
-            <div id="progress-list" class="progress-list"><p class="panel-empty">No Agent Run yet.</p></div>
           </section>
+          <details class="progress-section" aria-label="Agent Run progress">
+            <summary class="section-heading"><span class="eyebrow">RUN PROGRESS</span><span id="progress-count" class="count">0</span></summary>
+            <div id="progress-list" class="progress-list"><p class="panel-empty">No Agent Run yet.</p></div>
+          </details>
         </div>
       </section>
 
@@ -163,10 +194,13 @@ const cachedTokens = document.querySelector<HTMLElement>('#cached-tokens')!;
 const uncachedTokens = document.querySelector<HTMLElement>('#uncached-tokens')!;
 const outputTokens = document.querySelector<HTMLElement>('#output-tokens')!;
 const runTime = document.querySelector<HTMLElement>('#run-time')!;
+const conversationCount = document.querySelector<HTMLSpanElement>('#conversation-count')!;
+const conversationList = document.querySelector<HTMLDivElement>('#conversation-list')!;
 const promptInput = document.querySelector<HTMLTextAreaElement>('#prompt-input')!;
 const promptCounter = document.querySelector<HTMLSpanElement>('#prompt-counter')!;
 const runButton = document.querySelector<HTMLButtonElement>('#run-button')!;
 const stopButton = document.querySelector<HTMLButtonElement>('#stop-button')!;
+const clearButton = document.querySelector<HTMLButtonElement>('#clear-button')!;
 const deleteButton = document.querySelector<HTMLButtonElement>('#delete-button')!;
 const actionMessage = document.querySelector<HTMLParagraphElement>('#action-message')!;
 const progressCount = document.querySelector<HTMLSpanElement>('#progress-count')!;
@@ -190,6 +224,7 @@ let projects: Project[] = [];
 let selectedProjectId: string | null = null;
 let selectedVersion = 0;
 let progressByProject = new Map<string, ProgressRecord[]>();
+let conversationByProject = new Map<string, ConversationTurn[]>();
 let eventSource: EventSource | null = null;
 let sceneRequest: AbortController | null = null;
 let previewRequest: AbortController | null = null;
@@ -275,13 +310,16 @@ function renderWorkspace(): void {
   projectContent.hidden = !hasProject;
   if (!project) {
     promptInput.value = '';
-    promptInput.readOnly = true;
+    promptInput.disabled = true;
     runButton.disabled = true;
     stopButton.hidden = true;
+    clearButton.disabled = true;
     deleteButton.disabled = true;
     actionMessage.textContent = '';
     harnessMetadata.textContent = '';
     renderRunMetrics(null);
+    conversationCount.textContent = '0';
+    conversationList.innerHTML = '<p class="panel-empty">No Project selected.</p>';
     progressList.innerHTML = '<p class="panel-empty">No Project selected.</p>';
     return;
   }
@@ -292,20 +330,24 @@ function renderWorkspace(): void {
   stateBadge.textContent = project.state;
   stateBadge.className = `state-badge state-${project.state.toLowerCase()}`;
   renderRunMetrics(project);
-  if (document.activeElement !== promptInput || promptInput.readOnly) promptInput.value = project.prompt ?? '';
-  promptInput.readOnly = project.state !== 'Draft';
   promptCounter.textContent = `${promptInput.value.length.toLocaleString()} / ${MAX_PROMPT_CHARS.toLocaleString()}`;
 
-  const anotherRunIsActive = globalRunActive() && project.state === 'Draft';
-  runButton.hidden = project.state !== 'Draft';
-  runButton.disabled = project.state !== 'Draft' || anotherRunIsActive;
+  const turns = conversationByProject.get(project.project_id) ?? [];
+  renderConversation(turns);
+  const anotherRunIsActive = globalRunActive() && project.state !== 'Running';
+  const composerDisabled = project.state === 'Running' || anotherRunIsActive;
+  promptInput.disabled = composerDisabled;
+  runButton.hidden = false;
+  runButton.textContent = turns.length === 0 ? 'Start Conversation' : 'Send';
+  runButton.disabled = composerDisabled || !promptInput.value.trim();
   stopButton.hidden = project.state !== 'Running';
   stopButton.disabled = project.state !== 'Running';
+  clearButton.disabled = project.state === 'Running' || turns.length === 0;
   deleteButton.disabled = false;
   if (workspaceMessage) actionMessage.textContent = workspaceMessage;
-  else if (anotherRunIsActive) actionMessage.textContent = 'Another Agent Run is active. This Draft will remain available.';
-  else if (project.state === 'Failed' || project.state === 'Stopped') actionMessage.textContent = project.failure_reason ?? 'No Validated Result is available.';
-  else actionMessage.textContent = project.state === 'Succeeded' ? 'Validated Result is ready.' : '';
+  else if (anotherRunIsActive) actionMessage.textContent = 'Another Project has an active Agent turn.';
+  else if (project.state === 'Failed' || project.state === 'Stopped') actionMessage.textContent = project.failure_reason ?? 'The last turn did not complete.';
+  else actionMessage.textContent = project.state === 'Succeeded' ? 'Ready for the next refinement.' : '';
 
   const events = progressByProject.get(project.project_id) ?? [];
   progressCount.textContent = String(events.length);
@@ -330,6 +372,57 @@ function renderWorkspace(): void {
       progressList.append(item);
     }
   }
+}
+
+function renderConversation(turns: ConversationTurn[]): void {
+  conversationCount.textContent = String(turns.length);
+  conversationList.replaceChildren();
+  if (turns.length === 0) {
+    conversationList.innerHTML = '<p class="panel-empty">No messages yet. Describe the first CAD part below.</p>';
+    return;
+  }
+  for (const turn of turns) {
+    const article = document.createElement('article');
+    article.className = `conversation-turn turn-${turn.status}`;
+
+    const user = document.createElement('div');
+    user.className = 'message message-user';
+    const userMeta = document.createElement('div');
+    userMeta.className = 'message-meta';
+    userMeta.innerHTML = `<strong>You</strong><time>${formatTime(turn.created_at)}</time>`;
+    const userBody = document.createElement('p');
+    userBody.textContent = turn.user_message;
+    user.append(userMeta, userBody);
+
+    const assistant = document.createElement('div');
+    assistant.className = 'message message-assistant';
+    const assistantMeta = document.createElement('div');
+    assistantMeta.className = 'message-meta';
+    const assistantName = document.createElement('strong');
+    assistantName.textContent = 'CadFlow';
+    const turnStatus = document.createElement('span');
+    turnStatus.className = `turn-status status-${turn.status}`;
+    turnStatus.textContent = turn.status;
+    assistantMeta.append(assistantName, turnStatus);
+    const assistantBody = document.createElement('p');
+    assistantBody.textContent = turn.assistant_message
+      || turn.error
+      || (turn.status === 'running' ? 'Working on this CAD change...' : 'No response was recorded.');
+    assistant.append(assistantMeta, assistantBody);
+
+    if (turn.status === 'failed' || turn.status === 'cancelled') {
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'retry-turn quiet-button';
+      retry.textContent = 'Retry';
+      retry.disabled = globalRunActive();
+      retry.addEventListener('click', () => void retryTurn(turn));
+      assistant.append(retry);
+    }
+    article.append(user, assistant);
+    conversationList.append(article);
+  }
+  conversationList.scrollTop = conversationList.scrollHeight;
 }
 
 function renderViewerEmpty(): void {
@@ -357,11 +450,15 @@ function renderViewerEmpty(): void {
       viewerEmptyCopy.textContent = 'The latest model.py result will appear automatically.';
     }
   } else if (project.state === 'Failed') {
-    viewerEmptyTitle.textContent = 'No Validated Result';
-    viewerEmptyCopy.textContent = 'This Project failed validation and has no usable preview.';
+    viewerEmptyTitle.textContent = project.scene_available ? 'Loading last validated result' : 'No Validated Result';
+    viewerEmptyCopy.textContent = project.scene_available
+      ? 'The latest turn failed; the previous validated CAD version is still available.'
+      : 'This Project has not produced a validated result yet.';
   } else if (project.state === 'Stopped') {
-    viewerEmptyTitle.textContent = 'Run stopped';
-    viewerEmptyCopy.textContent = 'This Project has no validated Scene Artifact.';
+    viewerEmptyTitle.textContent = project.scene_available ? 'Loading last validated result' : 'Run stopped';
+    viewerEmptyCopy.textContent = project.scene_available
+      ? 'The stopped turn did not replace the previous validated CAD version.'
+      : 'This Project has no validated Scene Artifact.';
   } else {
     viewerEmptyTitle.textContent = 'Loading Validated Result';
     viewerEmptyCopy.textContent = 'Fetching this Project’s canonical Scene Artifact.';
@@ -373,8 +470,8 @@ function renderViewerChrome(): void {
   const running = project?.state === 'Running';
   viewerTitle.textContent = running
     ? 'Live Preview'
-    : project && ['Failed', 'Stopped'].includes(project.state) && project.preview.artifact_available
-      ? 'Last Preview'
+    : project && ['Failed', 'Stopped'].includes(project.state) && project.scene_available
+      ? 'Last Validated Result'
       : 'Validated Result';
   previewToggleControl.hidden = !running;
   previewRetry.hidden = !running || project.preview.state !== 'failed';
@@ -390,10 +487,10 @@ function renderViewerChrome(): void {
     viewerStatusText.textContent = 'Waiting for a Project';
     return;
   }
-  if (project.state === 'Succeeded') {
+  if (project.scene_available && project.state !== 'Running') {
     viewerStatusDot.className = `status-dot${loadedSceneProjectId === project.project_id ? ' ready' : ''}`;
     viewerStatusText.textContent = loadedSceneProjectId === project.project_id
-      ? 'Validated Scene Artifact'
+      ? `Validated Artifact${project.artifact_version ? ` · v${String(project.artifact_version).padStart(4, '0')}` : ''}`
       : 'Loading Validated Result';
     return;
   }
@@ -531,19 +628,23 @@ async function refreshSelectedProject(version: number): Promise<void> {
   const projectId = selectedProjectId;
   if (!projectId) return;
   try {
-    const project = await request<Project>(`/api/projects/${encodeURIComponent(projectId)}`);
+    const [project, conversation] = await Promise.all([
+      request<Project>(`/api/projects/${encodeURIComponent(projectId)}`),
+      request<ConversationResponse>(`/api/projects/${encodeURIComponent(projectId)}/messages`),
+    ]);
     if (version !== selectedVersion || selectedProjectId !== projectId) return;
     upsertProject(project);
+    conversationByProject.set(projectId, conversation.turns);
     workspaceMessage = '';
     renderAll();
-    if (project.state === 'Succeeded' && loadedSceneProjectId !== projectId) await loadScene(project, version);
-    if (project.state !== 'Succeeded' && loadedSceneProjectId === projectId) {
+    if (project.scene_available && project.state !== 'Running' && loadedSceneProjectId !== projectId) await loadScene(project, version);
+    if ((!project.scene_available || project.state === 'Running') && loadedSceneProjectId === projectId) {
       loadedSceneProjectId = null;
       if (project.state === 'Failed' || project.state === 'Stopped') sceneViewer.markPreviewUnvalidated();
       else sceneViewer.clear();
       renderViewerEmpty();
     }
-    if (project.state === 'Failed' || project.state === 'Stopped') {
+    if ((project.state === 'Failed' || project.state === 'Stopped') && !project.scene_available) {
       sceneViewer.markPreviewUnvalidated();
       await loadLivePreview(project, version);
     } else if (project.state === 'Running') {
@@ -555,7 +656,7 @@ async function refreshSelectedProject(version: number): Promise<void> {
 }
 
 async function loadScene(project: Project, version: number): Promise<void> {
-  if (project.state !== 'Succeeded') return;
+  if (!project.scene_available || project.state === 'Running') return;
   sceneRequest?.abort();
   const controller = new AbortController();
   sceneRequest = controller;
@@ -606,16 +707,21 @@ async function selectProject(projectId: string): Promise<void> {
   latestPreviewRevision = 0;
   loadedPreviewRevision = 0;
   loadedSceneProjectId = null;
+  promptInput.value = '';
   sceneViewer.clear();
   progressByProject.set(projectId, []);
   renderAll();
   try {
-    const project = await request<Project>(`/api/projects/${encodeURIComponent(projectId)}`);
+    const [project, conversation] = await Promise.all([
+      request<Project>(`/api/projects/${encodeURIComponent(projectId)}`),
+      request<ConversationResponse>(`/api/projects/${encodeURIComponent(projectId)}/messages`),
+    ]);
     if (version !== selectedVersion) return;
     upsertProject(project);
+    conversationByProject.set(projectId, conversation.turns);
     renderAll();
     openProgressStream(projectId, version);
-    if (project.state === 'Succeeded') await loadScene(project, version);
+    if (project.scene_available && project.state !== 'Running') await loadScene(project, version);
     else await loadLivePreview(project, version);
   } catch (error) {
     if (version === selectedVersion) setMessage(errorMessage(error));
@@ -669,34 +775,82 @@ async function createProject(event: SubmitEvent): Promise<void> {
   }
 }
 
-async function submitPrompt(): Promise<void> {
+async function submitMessage(messageOverride?: string, retryOf?: string): Promise<void> {
   const project = currentProject();
-  const prompt = promptInput.value;
-  if (!project || project.state !== 'Draft') return;
-  if (!prompt.trim()) {
-    setMessage('Prompt must not be empty.');
+  const message = messageOverride ?? promptInput.value;
+  if (!project || project.state === 'Running' || globalRunActive()) return;
+  if (!message.trim()) {
+    setMessage('Message must not be empty.');
     promptInput.focus();
     return;
   }
-  if (prompt.length > MAX_PROMPT_CHARS) {
-    setMessage(`Prompt exceeds the ${MAX_PROMPT_CHARS.toLocaleString()}-character limit.`);
+  if (message.length > MAX_PROMPT_CHARS) {
+    setMessage(`Message exceeds the ${MAX_PROMPT_CHARS.toLocaleString()}-character limit.`);
     promptInput.focus();
     return;
   }
+  const requestId = createRequestId();
   runButton.disabled = true;
   workspaceMessage = '';
+  project.state = 'Running';
+  const optimistic: ConversationTurn = {
+    turn_id: requestId,
+    sequence: (conversationByProject.get(project.project_id)?.length ?? 0) + 1,
+    request_id: requestId,
+    retry_of: retryOf ?? null,
+    user_message: message.trim(),
+    assistant_message: '',
+    status: 'running',
+    created_at: new Date().toISOString(),
+    completed_at: null,
+    artifact_version: null,
+    error: null,
+  };
+  conversationByProject.set(project.project_id, [
+    ...(conversationByProject.get(project.project_id) ?? []),
+    optimistic,
+  ]);
+  if (messageOverride === undefined) promptInput.value = '';
+  renderAll();
   try {
-    const updated = await request<Project>(`/api/projects/${encodeURIComponent(project.project_id)}/run`, {
+    const result = await request<MessageResponse>(`/api/projects/${encodeURIComponent(project.project_id)}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({
+        message: message.trim(),
+        request_id: requestId,
+        retry_of: retryOf,
+      }),
     });
-    upsertProject(updated);
+    upsertProject(result.project);
+    await refreshConversation(project.project_id);
+    workspaceMessage = result.turn.status === 'succeeded'
+      ? 'CAD turn completed. You can continue refining the model.'
+      : result.turn.error ?? 'The CAD turn did not complete.';
     renderAll();
     await refreshCatalog();
+    await refreshSelectedProject(selectedVersion);
   } catch (error) {
     setMessage(errorMessage(error));
+    await refreshSelectedProject(selectedVersion);
   }
+}
+
+async function retryTurn(turn: ConversationTurn): Promise<void> {
+  await submitMessage(turn.user_message, turn.turn_id);
+}
+
+async function refreshConversation(projectId: string): Promise<void> {
+  const conversation = await request<ConversationResponse>(
+    `/api/projects/${encodeURIComponent(projectId)}/messages`,
+  );
+  if (selectedProjectId === projectId) conversationByProject.set(projectId, conversation.turns);
+}
+
+function createRequestId(): string {
+  return typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 async function stopRun(): Promise<void> {
@@ -772,11 +926,44 @@ async function deleteProject(): Promise<void> {
     latestPreviewRevision = 0;
     loadedPreviewRevision = 0;
     projects = projects.filter((item) => item.project_id !== project.project_id);
+    conversationByProject.delete(project.project_id);
+    progressByProject.delete(project.project_id);
     selectedProjectId = null;
     selectedVersion += 1;
     loadedSceneProjectId = null;
     sceneViewer.clear();
     await refreshCatalog();
+  } catch (error) {
+    setMessage(errorMessage(error));
+  }
+}
+
+async function clearConversation(): Promise<void> {
+  const project = currentProject();
+  if (!project || project.state === 'Running') return;
+  const confirmed = window.confirm(
+    `Permanently clear the conversation and every CAD artifact in “${project.name}”?`,
+  );
+  if (!confirmed) return;
+  clearButton.disabled = true;
+  try {
+    const reset = await request<Project>(
+      `/api/projects/${encodeURIComponent(project.project_id)}/conversation`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm_name: project.name }),
+      },
+    );
+    conversationByProject.set(project.project_id, []);
+    progressByProject.set(project.project_id, []);
+    upsertProject(reset);
+    promptInput.value = '';
+    loadedSceneProjectId = null;
+    previewProjectId = null;
+    sceneViewer.clear();
+    workspaceMessage = 'Conversation and CAD artifacts were cleared.';
+    renderAll();
   } catch (error) {
     setMessage(errorMessage(error));
   }
@@ -840,19 +1027,25 @@ function errorMessage(error: unknown): string {
 
 document.querySelector<HTMLFormElement>('#create-project-form')!.addEventListener('submit', (event) => void createProject(event));
 document.querySelector<HTMLButtonElement>('#refresh-projects')!.addEventListener('click', () => void refreshCatalog());
-runButton.addEventListener('click', () => void submitPrompt());
+runButton.addEventListener('click', () => void submitMessage());
 stopButton.addEventListener('click', () => void stopRun());
+clearButton.addEventListener('click', () => void clearConversation());
 deleteButton.addEventListener('click', () => void deleteProject());
 previewToggle.addEventListener('change', () => void setLivePreviewPaused());
 previewRetry.addEventListener('click', () => void retryLivePreview());
 document.querySelector<HTMLButtonElement>('#fit-button')!.addEventListener('click', () => sceneViewer.fit());
 promptInput.addEventListener('input', () => {
   promptCounter.textContent = `${promptInput.value.length.toLocaleString()} / ${MAX_PROMPT_CHARS.toLocaleString()}`;
+  const project = currentProject();
+  runButton.disabled = !project
+    || project.state === 'Running'
+    || globalRunActive()
+    || !promptInput.value.trim();
 });
 promptInput.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
     event.preventDefault();
-    void submitPrompt();
+    void submitMessage();
   }
 });
 window.addEventListener('beforeunload', () => {

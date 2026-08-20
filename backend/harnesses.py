@@ -1,4 +1,4 @@
-"""Harness-neutral selection and availability for one-shot Agent Runs."""
+"""Harness-neutral selection and availability for conversation turns."""
 
 from __future__ import annotations
 

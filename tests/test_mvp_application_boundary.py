@@ -143,6 +143,29 @@ class _DeterministicFailureHarness:
         )
 
 
+class _ValidatedWithoutArtifactHarness:
+    def run(self, *_args: object, **_kwargs: object) -> AgentRunOutcome:
+        return AgentRunOutcome(validated=True)
+
+
+class _SuccessFailureSuccessHarness:
+    def __init__(self, projects_root: Path) -> None:
+        self.success = _DeterministicSuccessHarness(projects_root)
+        self.failure = _DeterministicFailureHarness()
+        self.call_count = 0
+
+    def run(self, project_id: str, prompt: str, **kwargs: object) -> AgentRunOutcome:
+        self.call_count += 1
+        harness = self.failure if self.call_count == 2 else self.success
+        return harness.run(
+            project_id,
+            prompt,
+            cancellation_token=kwargs["cancellation_token"],  # type: ignore[arg-type]
+            progress_callback=kwargs["progress_callback"],  # type: ignore[arg-type]
+            prompt_submitted=bool(kwargs["prompt_submitted"]),
+        )
+
+
 class _DeterministicBlockingCadHarness:
     """Exercise HTTP Stop/Delete against a real cancellable CAD child only."""
 
@@ -342,7 +365,7 @@ def test_http_boundary_persists_success_events_and_scene_artifact(
     assert [int(event["id"]) for event in replayed] == event_ids[1:]
 
 
-def test_http_boundary_exposes_failed_state_and_blocks_a_second_run(
+def test_http_boundary_exposes_failed_state_and_accepts_a_second_run(
     tmp_path: Path,
 ) -> None:
     projects_root = tmp_path / "projects"
@@ -363,11 +386,118 @@ def test_http_boundary_exposes_failed_state_and_blocks_a_second_run(
     assert failed["scene_available"] is False
     assert client.get(f"/api/projects/{project['project_id']}/scene").status_code == 404
 
+    assert app.state.run_coordinator.wait_for_idle(1.0)
     second_run = client.post(
         f"/api/projects/{project['project_id']}/run",
-        json={"prompt": "A second prompt is not allowed."},
+        json={"prompt": "Try a corrected follow-up."},
     )
-    assert second_run.status_code == 409
+    assert second_run.status_code == 202
+
+
+def test_message_turn_fails_when_a_validated_run_has_no_artifact(tmp_path: Path) -> None:
+    app = create_app(
+        projects_root=tmp_path,
+        run_service=_ValidatedWithoutArtifactHarness(),
+    )
+    client = TestClient(app)
+    project = client.post("/api/projects", json={"name": "Missing artifact"}).json()
+
+    response = client.post(
+        f"/api/projects/{project['project_id']}/messages",
+        json={"message": "Create a model.", "request_id": "missing-artifact"},
+    )
+
+    assert response.status_code == 200
+    turn = response.json()["turn"]
+    assert turn["status"] == "failed"
+    assert "canonical Scene Artifact" in turn["error"]
+    assert turn["artifact_version"] is None
+
+
+def test_message_api_persists_multiturn_history_idempotency_and_artifact_versions(
+    tmp_path: Path,
+) -> None:
+    projects_root = tmp_path / "projects"
+    harness = _SuccessFailureSuccessHarness(projects_root)
+    app = create_app(projects_root=projects_root, run_service=harness)
+    client = TestClient(app)
+    project = client.post("/api/projects", json={"name": "Conversation"}).json()
+    project_id = project["project_id"]
+
+    first = client.post(
+        f"/api/projects/{project_id}/messages",
+        json={"message": "Create a bracket.", "request_id": "request-1"},
+    )
+    assert first.status_code == 200
+    assert first.json()["turn"]["status"] == "succeeded"
+    assert first.json()["artifact"]["version"] == 1
+
+    second = client.post(
+        f"/api/projects/{project_id}/messages",
+        json={"message": "Make the holes larger.", "request_id": "request-2"},
+    )
+    assert second.status_code == 200
+    second_turn = second.json()["turn"]
+    assert second_turn["status"] == "failed"
+    assert second.json()["artifact"] == {"version": 1, "scene_available": True}
+    assert client.get(f"/api/projects/{project_id}/scene").status_code == 200
+
+    duplicate = client.post(
+        f"/api/projects/{project_id}/messages",
+        json={"message": "Ignored duplicate body.", "request_id": "request-2"},
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["duplicate"] is True
+    assert duplicate.json()["turn"]["turn_id"] == second_turn["turn_id"]
+    assert harness.call_count == 2
+
+    retry = client.post(
+        f"/api/projects/{project_id}/messages",
+        json={
+            "message": "Make the holes larger.",
+            "request_id": "request-3",
+            "retry_of": second_turn["turn_id"],
+        },
+    )
+    assert retry.status_code == 200
+    assert retry.json()["turn"]["status"] == "succeeded"
+    assert retry.json()["turn"]["retry_of"] == second_turn["turn_id"]
+    assert retry.json()["artifact"]["version"] == 2
+
+    conversation = client.get(f"/api/projects/{project_id}/messages").json()
+    assert [turn["status"] for turn in conversation["turns"]] == [
+        "succeeded",
+        "failed",
+        "succeeded",
+    ]
+    assert (projects_root / project_id / "conversation.jsonl").is_file()
+    assert not (projects_root / project_id / "agent-run.jsonl").exists()
+
+
+def test_clear_conversation_removes_history_and_artifacts(tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    app = create_app(
+        projects_root=projects_root,
+        run_service=_DeterministicSuccessHarness(projects_root),
+    )
+    client = TestClient(app)
+    project = client.post("/api/projects", json={"name": "Clear Me"}).json()
+    project_id = project["project_id"]
+    assert client.post(
+        f"/api/projects/{project_id}/messages",
+        json={"message": "Create a block.", "request_id": "request-1"},
+    ).status_code == 200
+
+    cleared = client.request(
+        "DELETE",
+        f"/api/projects/{project_id}/conversation",
+        json={"confirm_name": "Clear Me"},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["state"] == ProjectState.DRAFT.value
+    assert cleared.json()["turn_count"] == 0
+    assert cleared.json()["scene_available"] is False
+    assert client.get(f"/api/projects/{project_id}/messages").json()["turns"] == []
 
 
 def test_http_boundary_stop_conflict_and_delete_remove_project_data(

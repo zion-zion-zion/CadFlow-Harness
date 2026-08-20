@@ -6,7 +6,7 @@ from pathlib import Path
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
-from backend.agent_logging import AgentRunLog
+from backend.agent_logging import ConversationLog
 from backend.cad_executor import CADExecutor, ExecutionResult
 from backend.cad_review import review_cad
 from backend.agent import create_agent_tools
@@ -133,9 +133,9 @@ def test_cad_review_tool_reviews_the_latest_validation(tmp_path: Path) -> None:
     assert any(record.tool_name == "cad_review" for record in validator.tool_use_records)
 
 
-def test_reviewer_usage_is_added_to_the_project_run_log(tmp_path: Path) -> None:
+def test_reviewer_usage_is_added_to_the_conversation_log(tmp_path: Path) -> None:
     execution = _build_project(tmp_path)
-    run_log = AgentRunLog(tmp_path)
+    conversation_log = ConversationLog(tmp_path, turn_id="turn-1")
 
     class _UsageReviewer:
         def invoke(self, messages: object, config: object = None) -> object:
@@ -183,11 +183,11 @@ def test_reviewer_usage_is_added_to_the_project_run_log(tmp_path: Path) -> None:
         execution_result=execution,
         settings=object(),
         reviewer_factory=lambda _settings: _UsageReviewer(),
-        reviewer_callbacks=[run_log.callback_handler()],
+        reviewer_callbacks=[conversation_log.callback_handler()],
     )
 
     assert result.status == "pass"
-    assert run_log.token_usage == {
+    assert conversation_log.token_usage == {
         "total_tokens": 150,
         "input_tokens": 120,
         "cached_input_tokens": 20,
@@ -195,7 +195,7 @@ def test_reviewer_usage_is_added_to_the_project_run_log(tmp_path: Path) -> None:
         "output_tokens": 30,
     }
     assert any(
-        record.get("agent_role") == "reviewer"
-        for record in run_log.data["records"]
+        record["payload"].get("agent_role") == "reviewer"
+        for record in conversation_log.data["records"]
         if record["type"] in {"model_request", "model_response"}
     )

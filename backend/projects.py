@@ -1,8 +1,9 @@
-"""Durable Project and one-shot Prompt state for the generation boundary."""
+"""Durable Project, multi-turn conversation, and CAD artifact state."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import threading
@@ -13,16 +14,20 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 
+from .agent_logging import ConversationLog
 from .harnesses import AgentHarness
-from .model_source import create_model_source
+from .model_source import ARTIFACT_DIRECTORY_NAME, create_model_source
 
 
 MAX_PROMPT_CHARS = 32_000
 PROJECT_METADATA_NAME = "project.json"
 PROMPT_NAME = "prompt.txt"
 DIAGNOSTICS_NAME = "diagnostics.json"
+CURRENT_ARTIFACT_NAME = "current.json"
+DEFAULT_ARTIFACT_VERSION_LIMIT = 10
 RESTART_RECOVERY_REASON = "Agent Run was interrupted by service restart"
 _PROJECT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+_ARTIFACT_VERSION_PATTERN = re.compile(r"^v([0-9]{4,})$")
 
 
 class ProjectError(ValueError):
@@ -90,17 +95,19 @@ class Project:
 
 
 class ProjectStore:
-    """Store Project metadata and Prompt files under one catalog directory.
-
-    This is intentionally a small persistence seam for issue 02. It owns the
-    one-shot Prompt transition; run observation, cancellation, and the HTTP
-    workspace are added by the later issues without changing this contract.
-    """
+    """Store Project metadata, conversation state, and versioned CAD results."""
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self.artifact_version_limit = _artifact_version_limit()
+        for project_dir in self.root.iterdir():
+            if project_dir.is_dir() and _PROJECT_ID_PATTERN.fullmatch(project_dir.name):
+                try:
+                    ConversationLog(project_dir)
+                except (OSError, ValueError):
+                    continue
 
     def create_project(self, name: str) -> Project:
         if not isinstance(name, str) or not name.strip():
@@ -124,6 +131,7 @@ class ProjectStore:
                 updated_at=now,
             )
             create_model_source(project_dir)
+            ConversationLog(project_dir)
             self._write_metadata(project_dir, project)
             return project
 
@@ -183,9 +191,9 @@ class ProjectStore:
         project_dir = self.project_directory(project_id)
         with self._lock:
             project = self.get_project(project_id)
-            if project.state != ProjectState.DRAFT:
+            if project.state == ProjectState.RUNNING:
                 raise ProjectStateError(
-                    f"Project {project_id} is {project.state}; only Draft Projects accept a Prompt"
+                    f"Project {project_id} already has a Running turn"
                 )
             (project_dir / PROMPT_NAME).write_text(prompt, encoding="utf-8")
             updated = _replace_project(
@@ -210,6 +218,7 @@ class ProjectStore:
             raise ProjectStateError(
                 "cannot mark Project Succeeded without the canonical Scene Artifact"
             )
+        self._commit_artifact_version(project_id)
         return self._mark_terminal(
             project_id,
             state=ProjectState.SUCCEEDED,
@@ -277,14 +286,24 @@ class ProjectStore:
         return tuple(recovered)
 
     def scene_artifact(self, project_id: str) -> Path:
-        """Return the canonical result only for a Succeeded Project."""
+        """Return the latest validated result, including after a failed later turn."""
 
         project = self.get_project(project_id)
-        if project.state != ProjectState.SUCCEEDED:
+        if project.state == ProjectState.DRAFT:
             raise ProjectStateError(
-                "Scene Artifact is available only for Succeeded Projects"
+                "Scene Artifact is unavailable before the first successful turn"
             )
-        artifact = self.project_directory(project_id) / "artifacts" / "model.scene.zip"
+        project_dir = self.project_directory(project_id)
+        version = self.current_artifact_version(project_id)
+        artifact = (
+            project_dir
+            / ARTIFACT_DIRECTORY_NAME
+            / f"v{version:04d}"
+            / "files"
+            / "model.scene.zip"
+            if version is not None
+            else project_dir / ARTIFACT_DIRECTORY_NAME / "model.scene.zip"
+        )
         if not artifact.is_file() or artifact.is_symlink():
             raise ProjectStateError("Succeeded Project has no canonical Scene Artifact")
         return artifact
@@ -303,7 +322,7 @@ class ProjectStore:
             return value
 
     def discard_unvalidated_artifacts(self, project_id: str) -> None:
-        """Remove partial Scene output so a Failed Project has no result file."""
+        """Discard partial output and restore the latest validated artifact version."""
 
         artifact_dir = self.project_directory(project_id) / "artifacts"
         with self._lock:
@@ -314,10 +333,192 @@ class ProjectStore:
             if not artifact_dir.is_dir():
                 return
             for child in artifact_dir.iterdir():
+                if _ARTIFACT_VERSION_PATTERN.fullmatch(child.name):
+                    continue
                 if child.is_dir() and not child.is_symlink():
                     shutil.rmtree(child)
                 else:
                     child.unlink()
+            self._restore_current_artifact(project_id)
+
+    def conversation_log(self, project_id: str, **kwargs: Any) -> ConversationLog:
+        project_dir = self.project_directory(project_id)
+        with self._lock:
+            self.get_project(project_id)
+            return ConversationLog(
+                project_dir,
+                conversation_id=project_id,
+                **kwargs,
+            )
+
+    def conversation_turns(self, project_id: str) -> list[dict[str, Any]]:
+        return self.conversation_log(project_id).turns()
+
+    def current_artifact_version(self, project_id: str) -> int | None:
+        path = self.project_directory(project_id) / CURRENT_ARTIFACT_NAME
+        if not path.is_file() or path.is_symlink():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        version = payload.get("version") if isinstance(payload, Mapping) else None
+        return version if isinstance(version, int) and not isinstance(version, bool) else None
+
+    def clear_conversation(self, project_id: str) -> Project:
+        """Reset one non-running Project and remove its conversation and CAD data."""
+
+        project_dir = self.project_directory(project_id)
+        with self._lock:
+            project = self.get_project(project_id)
+            if project.state == ProjectState.RUNNING:
+                raise ProjectStateError("A Running Project cannot be cleared")
+            for name in (
+                "conversation.jsonl",
+                "agent-run.jsonl",
+                PROMPT_NAME,
+                DIAGNOSTICS_NAME,
+                CURRENT_ARTIFACT_NAME,
+                "events.jsonl",
+            ):
+                path = project_dir / name
+                if path.is_file() or path.is_symlink():
+                    path.unlink()
+            for name in (
+                ARTIFACT_DIRECTORY_NAME,
+                "conversation_history",
+                "large_tool_results",
+                "previews",
+                ".cad-review",
+                "__pycache__",
+            ):
+                path = project_dir / name
+                if path.is_symlink():
+                    path.unlink()
+                elif path.is_dir():
+                    shutil.rmtree(path)
+            create_model_source(project_dir, overwrite=True)
+            ConversationLog(project_dir)
+            reset = _replace_project(
+                project,
+                state=ProjectState.DRAFT,
+                updated_at=_timestamp(),
+                prompt=None,
+                failure_reason=None,
+                harness=AgentHarness.DEEPAGENTS,
+            )
+            self._write_metadata(project_dir, reset)
+            return reset
+
+    def _commit_artifact_version(self, project_id: str) -> int:
+        project_dir = self.project_directory(project_id)
+        artifact_dir = project_dir / ARTIFACT_DIRECTORY_NAME
+        versions = self._artifact_versions(project_id)
+        version = (versions[-1] if versions else 0) + 1
+        target = artifact_dir / f"v{version:04d}"
+        temporary = artifact_dir / f".v{version:04d}.{uuid.uuid4().hex}.tmp"
+        files_dir = temporary / "files"
+        source_dir = temporary / "source"
+        files_dir.mkdir(parents=True)
+        source_dir.mkdir(parents=True)
+        for child in artifact_dir.iterdir():
+            if child == temporary or _ARTIFACT_VERSION_PATTERN.fullmatch(child.name):
+                continue
+            destination = files_dir / child.name
+            if child.is_symlink():
+                continue
+            if child.is_dir():
+                shutil.copytree(child, destination)
+            elif child.is_file():
+                shutil.copy2(child, destination)
+        excluded_roots = {
+            ARTIFACT_DIRECTORY_NAME,
+            "conversation_history",
+            "large_tool_results",
+            "previews",
+            "__pycache__",
+            ".git",
+        }
+        for source in project_dir.rglob("*.py"):
+            relative = source.relative_to(project_dir)
+            if source.is_symlink() or any(part in excluded_roots for part in relative.parts):
+                continue
+            destination = source_dir / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        manifest = {
+            "version": version,
+            "created_at": _timestamp(),
+            "scene": f"{ARTIFACT_DIRECTORY_NAME}/v{version:04d}/files/model.scene.zip",
+        }
+        _write_json(temporary / "manifest.json", manifest)
+        temporary.replace(target)
+        _write_json(project_dir / CURRENT_ARTIFACT_NAME, manifest)
+        self._prune_artifact_versions(project_id, current=version)
+        return version
+
+    def _restore_current_artifact(self, project_id: str) -> None:
+        version = self.current_artifact_version(project_id)
+        if version is None:
+            return
+        project_dir = self.project_directory(project_id)
+        version_dir = project_dir / ARTIFACT_DIRECTORY_NAME / f"v{version:04d}"
+        files_dir = version_dir / "files"
+        source_dir = version_dir / "source"
+        artifact_dir = project_dir / ARTIFACT_DIRECTORY_NAME
+        if files_dir.is_dir():
+            for source in files_dir.iterdir():
+                destination = artifact_dir / source.name
+                if source.is_dir():
+                    shutil.copytree(source, destination)
+                else:
+                    shutil.copy2(source, destination)
+        if source_dir.is_dir():
+            saved_sources = {
+                source.relative_to(source_dir)
+                for source in source_dir.rglob("*.py")
+                if source.is_file() and not source.is_symlink()
+            }
+            excluded_roots = {
+                ARTIFACT_DIRECTORY_NAME,
+                "conversation_history",
+                "large_tool_results",
+                "previews",
+                "__pycache__",
+                ".git",
+            }
+            for source in project_dir.rglob("*.py"):
+                relative = source.relative_to(project_dir)
+                if source.is_symlink() or any(
+                    part in excluded_roots for part in relative.parts
+                ):
+                    continue
+                if relative not in saved_sources:
+                    source.unlink()
+            for source in source_dir.rglob("*.py"):
+                relative = source.relative_to(source_dir)
+                destination = project_dir / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+
+    def _artifact_versions(self, project_id: str) -> list[int]:
+        artifact_dir = self.project_directory(project_id) / ARTIFACT_DIRECTORY_NAME
+        versions: list[int] = []
+        if not artifact_dir.is_dir():
+            return versions
+        for child in artifact_dir.iterdir():
+            match = _ARTIFACT_VERSION_PATTERN.fullmatch(child.name)
+            if child.is_dir() and match:
+                versions.append(int(match.group(1)))
+        return sorted(versions)
+
+    def _prune_artifact_versions(self, project_id: str, *, current: int) -> None:
+        versions = self._artifact_versions(project_id)
+        removable = versions[: max(0, len(versions) - self.artifact_version_limit)]
+        artifact_dir = self.project_directory(project_id) / ARTIFACT_DIRECTORY_NAME
+        for version in removable:
+            if version != current:
+                shutil.rmtree(artifact_dir / f"v{version:04d}")
 
     def _mark_terminal(
         self,
@@ -412,6 +613,18 @@ def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
+def _artifact_version_limit() -> int:
+    raw = os.environ.get(
+        "CADFLOW_ARTIFACT_VERSION_LIMIT",
+        str(DEFAULT_ARTIFACT_VERSION_LIMIT),
+    )
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_ARTIFACT_VERSION_LIMIT
+    return value if value > 0 else DEFAULT_ARTIFACT_VERSION_LIMIT
+
+
 def _required_text(data: Mapping[str, Any], key: str) -> str:
     value = data.get(key)
     if not isinstance(value, str):
@@ -429,6 +642,8 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> None:
 
 
 __all__ = [
+    "CURRENT_ARTIFACT_NAME",
+    "DEFAULT_ARTIFACT_VERSION_LIMIT",
     "DIAGNOSTICS_NAME",
     "AgentHarness",
     "MAX_PROMPT_CHARS",

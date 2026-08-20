@@ -129,8 +129,8 @@ def test_stopped_project_keeps_source_prompt_events_and_diagnostics_but_not_scen
         "cad_execution_count": 1,
     }
     assert not artifact.exists()
-    with pytest.raises(ProjectStateError):
-        store.submit_prompt(project.project_id, "Run again.")
+    follow_up = store.submit_prompt(project.project_id, "Run again.")
+    assert follow_up.state is ProjectState.RUNNING
 
 
 def test_restart_rebuild_marks_legacy_running_project_failed(tmp_path: Path) -> None:

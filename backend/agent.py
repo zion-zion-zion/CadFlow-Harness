@@ -8,13 +8,14 @@ import importlib.metadata
 import math
 import os
 import time
+import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from langchain_core.tools import BaseTool, tool
 
-from .agent_logging import AgentRunLog
+from .agent_logging import ConversationLog
 from .agent_backend import create_agent_backend
 from .cad_executor import (
     CAD_EXECUTION_TIMEOUT_SECONDS,
@@ -509,14 +510,14 @@ class ReferenceGroundedAgent:
         project_dir: str | Path,
         executor: Any | None = None,
         model: Any | None = None,
-        run_log: AgentRunLog | None = None,
+        conversation_log: ConversationLog | None = None,
     ) -> None:
         self.settings = settings
         self.repo_root = repo_root
         self.project_dir = project_dir
         self.executor = executor
         self.model = model
-        self.run_log = run_log
+        self.conversation_log = conversation_log
 
     def run(
         self,
@@ -524,6 +525,7 @@ class ReferenceGroundedAgent:
         *,
         cancellation_token: CancellationToken | None = None,
         progress_callback: Callable[[ProgressUpdate], None] | None = None,
+        conversation_context: list[dict[str, str]] | None = None,
     ) -> AgentRunOutcome:
         if not isinstance(prompt, str) or not prompt.strip():
             raise AgentRunError("Prompt must not be empty")
@@ -543,10 +545,10 @@ class ReferenceGroundedAgent:
 
         def on_tool_use(record: ToolUseRecord) -> None:
             if (
-                self.run_log is not None
+                self.conversation_log is not None
                 and record.tool_name == "prepare_model_source"
             ):
-                self.run_log.record_internal_tool(record.tool_name, record.target)
+                self.conversation_log.record_internal_tool(record.tool_name, record.target)
             if record.tool_name == "prepare_model_source":
                 emit(ProgressUpdate(stage="preparing", tool="project"))
 
@@ -584,7 +586,9 @@ class ReferenceGroundedAgent:
             request_text=prompt,
             review_settings=self.settings,
             reviewer_callbacks=(
-                [self.run_log.callback_handler()] if self.run_log is not None else None
+                [self.conversation_log.callback_handler()]
+                if self.conversation_log is not None
+                else None
             ),
             on_execution=record_execution,
             on_execution_error=record_execution,
@@ -608,7 +612,8 @@ class ReferenceGroundedAgent:
                 prompt,
                 deadline=deadline,
                 cancellation_token=token,
-                run_log=self.run_log,
+                conversation_log=self.conversation_log,
+                conversation_context=conversation_context,
             )
         except Exception as exc:  # Agent/provider errors become a safe diagnosis.
             agent_error = _safe_failure_reason(exc)
@@ -683,7 +688,7 @@ class ReferenceGroundedAgent:
 
 
 class AgentRunService:
-    """Submit one Prompt and persist the first Deep Agent outcome."""
+    """Execute one turn within a durable Project conversation."""
 
     def __init__(
         self,
@@ -706,6 +711,8 @@ class AgentRunService:
         cancellation_token: CancellationToken | None = None,
         progress_callback: Callable[[ProgressUpdate], None] | None = None,
         prompt_submitted: bool = False,
+        conversation_log: ConversationLog | None = None,
+        turn_id: str | None = None,
     ) -> AgentRunOutcome:
         project = (
             self.store.get_project(project_id)
@@ -715,8 +722,14 @@ class AgentRunService:
         if prompt_submitted and project.state != ProjectState.RUNNING:
             raise AgentRunError("Agent Run requires a Running Project")
         token = cancellation_token or CancellationToken()
-        run_log = AgentRunLog(
+        owns_conversation = conversation_log is None
+        active_turn_id = turn_id or uuid.uuid4().hex
+        log = conversation_log or ConversationLog(
             self.store.project_directory(project.project_id),
+            conversation_id=project.project_id,
+            turn_id=active_turn_id,
+            request_id=uuid.uuid4().hex,
+            user_message=prompt,
             harness=AgentHarness.DEEPAGENTS.value,
             implementation_version=DEEPAGENTS_IMPLEMENTATION_VERSION,
         )
@@ -731,14 +744,12 @@ class AgentRunService:
                 outcome.failure_reason or "Agent Run stopped by caller",
                 outcome.diagnostics(),
             )
-            run_log.finish(
-                status=outcome.status,
-                failure_reason=outcome.failure_reason,
-            )
+            if owns_conversation:
+                _finish_conversation_turn(log, outcome, self.store, project.project_id)
             return outcome
         try:
             settings = self.settings_factory()
-            run_log.configure(
+            log.configure(
                 provider=settings.provider,
                 model_id=settings.model_id,
                 base_url=settings.base_url,
@@ -761,10 +772,8 @@ class AgentRunService:
                 self.store.mark_failed(
                     project.project_id, reason, outcome.diagnostics()
                 )
-            run_log.finish(
-                status=outcome.status,
-                failure_reason=outcome.failure_reason,
-            )
+            if owns_conversation:
+                _finish_conversation_turn(log, outcome, self.store, project.project_id)
             return outcome
 
         try:
@@ -782,22 +791,26 @@ class AgentRunService:
                 for item in factory_parameters.values()
             )
             if (
-                "run_log" in factory_parameters
+                "conversation_log" in factory_parameters
                 or accepts_factory_kwargs
             ):
-                factory_kwargs["run_log"] = run_log
+                factory_kwargs["conversation_log"] = log
             agent = self.agent_factory(**factory_kwargs)
+            conversation_context = log.context_messages(
+                exclude_turn_id=active_turn_id
+            )
             outcome = _invoke_agent_run(
                 agent,
                 project.prompt or prompt,
                 cancellation_token=token,
                 progress_callback=progress_callback,
+                conversation_context=conversation_context,
             )
         except Exception as exc:
             reason = _safe_failure_reason(exc)
             outcome = AgentRunOutcome(validated=False, failure_reason=reason)
-        if run_log.token_usage is not None:
-            outcome = replace(outcome, token_usage=run_log.token_usage)
+        if log.token_usage is not None:
+            outcome = replace(outcome, token_usage=log.token_usage)
         if (
             token.cancelled
             and token.cancellation_reason != "timeout"
@@ -815,10 +828,8 @@ class AgentRunService:
                 outcome.failure_reason or "Agent Run stopped by caller",
                 outcome.diagnostics(),
             )
-            run_log.finish(
-                status=outcome.status,
-                failure_reason=outcome.failure_reason,
-            )
+            if owns_conversation:
+                _finish_conversation_turn(log, outcome, self.store, project.project_id)
             return outcome
         if outcome.validated:
             try:
@@ -841,10 +852,8 @@ class AgentRunService:
                 outcome.failure_reason or "Agent Run failed",
                 outcome.diagnostics(),
             )
-        run_log.finish(
-            status=outcome.status,
-            failure_reason=outcome.failure_reason,
-        )
+        if owns_conversation:
+            _finish_conversation_turn(log, outcome, self.store, project.project_id)
         return outcome
 
 
@@ -854,6 +863,7 @@ def _invoke_agent_run(
     *,
     cancellation_token: CancellationToken,
     progress_callback: Callable[[ProgressUpdate], None] | None,
+    conversation_context: list[dict[str, str]] | None = None,
 ) -> AgentRunOutcome:
     """Call old issue-03 test adapters and the cancellable Agent uniformly."""
 
@@ -872,7 +882,36 @@ def _invoke_agent_run(
         kwargs["cancellation_token"] = cancellation_token
     if accepts_kwargs or "progress_callback" in parameters:
         kwargs["progress_callback"] = progress_callback
+    if accepts_kwargs or "conversation_context" in parameters:
+        kwargs["conversation_context"] = conversation_context
     return run(prompt, **kwargs)
+
+
+def _finish_conversation_turn(
+    log: ConversationLog,
+    outcome: AgentRunOutcome,
+    store: ProjectStore,
+    project_id: str,
+) -> None:
+    assistant_message = log.latest_model_response_text()
+    if not assistant_message:
+        if outcome.validated:
+            version = store.current_artifact_version(project_id)
+            assistant_message = (
+                f"CAD model updated successfully. Artifact v{version:04d} is ready."
+                if version is not None
+                else "CAD model updated successfully."
+            )
+        else:
+            assistant_message = outcome.failure_reason or "The CAD turn failed."
+    log.finish(
+        status=outcome.status,
+        failure_reason=outcome.failure_reason,
+        assistant_message=assistant_message,
+        artifact_version=(
+            store.current_artifact_version(project_id) if outcome.validated else None
+        ),
+    )
 
 
 def _is_validated_result(result: ExecutionResult) -> bool:
@@ -955,7 +994,8 @@ def _invoke_agent_with_deadline(
     *,
     deadline: float,
     cancellation_token: CancellationToken,
-    run_log: AgentRunLog | None = None,
+    conversation_log: ConversationLog | None = None,
+    conversation_context: list[dict[str, str]] | None = None,
 ) -> tuple[str | None, bool]:
     """Invoke the primary Agent and cancel its task on Stop or timeout."""
 
@@ -966,21 +1006,21 @@ def _invoke_agent_with_deadline(
 
     async def invoke() -> tuple[str | None, bool]:
         config: dict[str, Any] = {}
-        if run_log is not None:
-            config["callbacks"] = [run_log.callback_handler()]
+        if conversation_log is not None:
+            config["callbacks"] = [conversation_log.callback_handler()]
+        messages: list[dict[str, str]] = list(conversation_context or ())
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Complete this CAD generation request in the current "
+                    f"Project: {prompt}"
+                ),
+            }
+        )
         task = asyncio.create_task(
             agent.ainvoke(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": (
-                                "Complete this CAD generation request in the current "
-                                f"Project: {prompt}"
-                            ),
-                        }
-                    ]
-                },
+                {"messages": messages},
                 config=config or None,
             )
         )

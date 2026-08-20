@@ -365,11 +365,11 @@ def test_agent_run_service_persists_provider_token_usage(tmp_path: Path) -> None
     store = ProjectStore(tmp_path)
 
     class UsageReportingAgent:
-        def __init__(self, *, run_log, **_kwargs: object) -> None:
-            self.run_log = run_log
+        def __init__(self, *, conversation_log, **_kwargs: object) -> None:
+            self.conversation_log = conversation_log
 
         def run(self, _prompt: str, **_kwargs: object) -> AgentRunOutcome:
-            self.run_log.callback_handler().on_llm_end(
+            self.conversation_log.callback_handler().on_llm_end(
                 {
                     "generations": [
                         [

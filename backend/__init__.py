@@ -10,6 +10,7 @@ from .cad_executor import (
     redact_credentials,
 )
 from .contracts import ToolUseRecord
+from .agent_logging import CONVERSATION_LOG_NAME, ConversationLog
 from .cad_review import ReviewFinding, ReviewResult, review_cad
 from .harnesses import (
     AgentHarness,
@@ -57,6 +58,7 @@ from .live_preview import (
 )
 from .restricted_tools import AgentModelValidator, RestrictedAgentTools
 from .projects import (
+    CURRENT_ARTIFACT_NAME,
     MAX_PROMPT_CHARS,
     Project,
     ProjectError,
@@ -69,6 +71,7 @@ from .projects import (
 )
 from .run_coordinator import (
     AgentRunCoordinator,
+    MessageSubmission,
     RUN_STOP_WAIT_SECONDS,
     RunConflictError,
 )
@@ -90,6 +93,9 @@ __all__ = [
     "CAD_EXECUTION_TIMEOUT_SECONDS",
     "CADExecutor",
     "CancellationToken",
+    "CONVERSATION_LOG_NAME",
+    "CURRENT_ARTIFACT_NAME",
+    "ConversationLog",
     "DEFAULT_OUTPUT_BYTES",
     "ExecutionResult",
     "EVENTS_NAME",
@@ -98,6 +104,7 @@ __all__ = [
     "MAX_PROMPT_CHARS",
     "MAX_AGENT_RUN_SECONDS",
     "MAX_PROVIDER_RETRIES",
+    "MessageSubmission",
     "MAX_EVENT_RESULT_CHARS",
     "LivePreviewExecutor",
     "LivePreviewResult",

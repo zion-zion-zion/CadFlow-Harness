@@ -63,6 +63,13 @@ class RunProjectRequest(BaseModel):
     harness: AgentHarness = AgentHarness.DEEPAGENTS
 
 
+class ProjectMessageRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=32_000)
+    request_id: str = Field(min_length=1, max_length=128)
+    retry_of: str | None = Field(default=None, min_length=1, max_length=128)
+    harness: AgentHarness = AgentHarness.DEEPAGENTS
+
+
 class DeleteProjectRequest(BaseModel):
     """Accept the UI's name confirmation without making it a Project ID."""
 
@@ -224,6 +231,81 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _project_payload(project_store, project)
 
+    @app.get("/api/projects/{project_id}/messages")
+    def project_messages(project_id: str) -> JSONResponse:
+        _get_project_or_404(project_store, project_id)
+        return JSONResponse(
+            {
+                "conversation_id": project_id,
+                "turns": project_store.conversation_turns(project_id),
+                "current_artifact_version": project_store.current_artifact_version(
+                    project_id
+                ),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/projects/{project_id}/messages")
+    def create_project_message(
+        project_id: str,
+        request: ProjectMessageRequest,
+    ) -> dict[str, object]:
+        try:
+            submission = coordinator.start_message(
+                project_id,
+                request.message,
+                request_id=request.request_id,
+                retry_of=request.retry_of,
+                harness=request.harness,
+            )
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RunConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PromptValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except HarnessUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ProjectStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        coordinator.wait_for_turn(submission.turn_id)
+        project = project_store.get_project(project_id)
+        turn = project_store.conversation_log(project_id).turn(submission.turn_id)
+        if turn is None:
+            raise HTTPException(status_code=500, detail="Conversation turn was not persisted")
+        return {
+            "turn": turn,
+            "project": _project_payload(project_store, project),
+            "artifact": {
+                "version": project_store.current_artifact_version(project_id),
+                "scene_available": _scene_available(project_store, project),
+            },
+            "duplicate": submission.duplicate,
+        }
+
+    @app.delete("/api/projects/{project_id}/conversation")
+    def clear_project_conversation(
+        project_id: str,
+        request: DeleteProjectRequest,
+    ) -> dict[str, object]:
+        project = _get_project_or_404(project_store, project_id)
+        confirmation = request.value
+        if confirmation is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Project name confirmation is required",
+            )
+        if confirmation != project.name:
+            raise HTTPException(
+                status_code=409,
+                detail="Project name confirmation does not match",
+            )
+        try:
+            reset = project_store.clear_conversation(project_id)
+        except ProjectStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _project_payload(project_store, reset)
+
     @app.post("/api/projects/{project_id}/stop")
     def stop_run(project_id: str) -> dict[str, object]:
         try:
@@ -321,7 +403,7 @@ def create_app(
             headers={
                 "Cache-Control": "no-store",
                 "Content-Disposition": (
-                    f'attachment; filename="{project_id}-agent-run.redacted.jsonl"'
+                    f'attachment; filename="{project_id}-conversation.redacted.jsonl"'
                 ),
             },
         )
@@ -403,12 +485,7 @@ def _get_project_or_404(store: ProjectStore, project_id: str):
 
 
 def _project_payload(store: ProjectStore, project: Any) -> dict[str, object]:
-    scene_available = False
-    if project.state.value == "Succeeded":
-        try:
-            scene_available = store.scene_artifact(project.project_id).is_file()
-        except ProjectStateError:
-            scene_available = False
+    scene_available = _scene_available(store, project)
     diagnostics = store.read_diagnostics(project.project_id)
     preview = LivePreviewStore(store.project_directory(project.project_id)).read_status()
     metrics_available = project.state.value in {"Succeeded", "Failed", "Stopped"}
@@ -422,6 +499,8 @@ def _project_payload(store: ProjectStore, project: Any) -> dict[str, object]:
         "failure_reason": project.failure_reason,
         "harness": project.harness.value,
         "scene_available": scene_available,
+        "artifact_version": store.current_artifact_version(project.project_id),
+        "turn_count": len(store.conversation_turns(project.project_id)),
         "preview": preview.to_dict(),
         "diagnostics_available": diagnostics is not None,
         "duration_seconds": (
@@ -429,6 +508,13 @@ def _project_payload(store: ProjectStore, project: Any) -> dict[str, object]:
         ),
         "token_usage": _token_usage(diagnostics) if metrics_available else None,
     }
+
+
+def _scene_available(store: ProjectStore, project: Any) -> bool:
+    try:
+        return store.scene_artifact(project.project_id).is_file()
+    except ProjectStateError:
+        return False
 
 
 def _duration_seconds(diagnostics: Mapping[str, Any] | None) -> float | None:

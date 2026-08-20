@@ -44,6 +44,7 @@ _TOKEN_SECRET = re.compile(
     r"\b(?:sk|pk|ghp|github_pat|xox[baprs])-[A-Za-z0-9._~+/=-]{8,}"
 )
 _TRACEBACK_LOCATION = re.compile(r'File "([^"]+)", line (\d+)')
+_ARTIFACT_VERSION_DIRECTORY = re.compile(r"^v[0-9]{4,}$")
 
 
 @dataclass(frozen=True)
@@ -486,6 +487,8 @@ class CADExecutor:
     @staticmethod
     def _clear_artifacts(artifact_dir: Path) -> None:
         for child in artifact_dir.iterdir():
+            if child.is_dir() and _ARTIFACT_VERSION_DIRECTORY.fullmatch(child.name):
+                continue
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child)
             else:
@@ -656,16 +659,25 @@ def _first_error(stderr: str, stdout: str, fallback: str) -> str:
 def _artifact_entries(artifact_dir: Path) -> tuple[str, ...]:
     if not artifact_dir.is_dir():
         return ()
-    entries = [
-        path.relative_to(artifact_dir).as_posix() for path in artifact_dir.rglob("*")
-    ]
+    entries = []
+    for path in artifact_dir.rglob("*"):
+        relative = path.relative_to(artifact_dir)
+        if relative.parts and _ARTIFACT_VERSION_DIRECTORY.fullmatch(relative.parts[0]):
+            continue
+        entries.append(relative.as_posix())
     return tuple(sorted(entries))
 
 
 def _artifact_has_symlink(artifact_dir: Path) -> bool:
-    return artifact_dir.is_symlink() or any(
-        path.is_symlink() for path in artifact_dir.rglob("*")
-    )
+    if artifact_dir.is_symlink():
+        return True
+    for path in artifact_dir.rglob("*"):
+        relative = path.relative_to(artifact_dir)
+        if relative.parts and _ARTIFACT_VERSION_DIRECTORY.fullmatch(relative.parts[0]):
+            continue
+        if path.is_symlink():
+            return True
+    return False
 
 
 def _is_under(path: Path, root: Path) -> bool:

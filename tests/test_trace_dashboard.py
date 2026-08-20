@@ -19,35 +19,47 @@ def test_trace_api_lists_projects_reads_incrementally_and_redacts(
     client = TestClient(app)
     project = client.post("/api/projects", json={"name": "Observed run"}).json()
     project_dir = tmp_path / project["project_id"]
-    trace_path = project_dir / "agent-run.jsonl"
+    trace_path = project_dir / "conversation.jsonl"
     first = {
         "sequence": 1,
         "timestamp": "2026-08-19T00:00:00.000+00:00",
-        "type": "run_started",
-        "harness": "deepagents",
-        "model": {
-            "model_id": "cad-model",
-            "api_key": "plain-secret",
-            "token": "plain-token",
-            "token_usage": 42,
+        "type": "turn_started",
+        "conversation_id": project["project_id"],
+        "turn_id": "turn-1",
+        "payload": {
+            "harness": "deepagents",
+            "model": {
+                "model_id": "cad-model",
+                "api_key": "plain-secret",
+                "token": "plain-token",
+                "token_usage": 42,
+            },
         },
     }
     second = {
         "sequence": 2,
         "timestamp": "2026-08-19T00:00:01.000+00:00",
         "type": "tool_call",
-        "tool_name": "read_file",
-        "call_id": "tool-1",
-        "arguments": {"authorization": "Bearer abcdefghijklmnop", "path": "model.py"},
+        "conversation_id": project["project_id"],
+        "turn_id": "turn-1",
+        "payload": {
+            "tool_name": "read_file",
+            "call_id": "tool-1",
+            "arguments": {"authorization": "Bearer abcdefghijklmnop", "path": "model.py"},
+        },
     }
     incomplete = json.dumps(
         {
             "sequence": 3,
             "timestamp": "2026-08-19T00:00:02.000+00:00",
             "type": "tool_result",
-            "tool_name": "read_file",
-            "call_id": "tool-1",
-            "result": "ok",
+            "conversation_id": project["project_id"],
+            "turn_id": "turn-1",
+            "payload": {
+                "tool_name": "read_file",
+                "call_id": "tool-1",
+                "result": "ok",
+            },
         }
     ).encode("utf-8")
     trace_path.write_bytes(_line(first) + _line(second) + incomplete)
@@ -65,7 +77,7 @@ def test_trace_api_lists_projects_reads_incrementally_and_redacts(
     assert response.headers["cache-control"] == "no-store"
     batch = response.json()
     assert [event["type"] for event in batch["events"]] == [
-        "run_started",
+        "turn_started",
         "tool_call",
     ]
     assert batch["events"][1]["call_id"] == "tool-1"
@@ -77,15 +89,15 @@ def test_trace_api_lists_projects_reads_incrementally_and_redacts(
     )
     assert detail.status_code == 200
     assert detail.headers["cache-control"] == "no-store"
-    assert detail.json()["event"]["model"]["api_key"] == "[REDACTED]"
-    assert detail.json()["event"]["model"]["token"] == "[REDACTED]"
-    assert detail.json()["event"]["model"]["token_usage"] == 42
+    assert detail.json()["event"]["payload"]["model"]["api_key"] == "[REDACTED]"
+    assert detail.json()["event"]["payload"]["model"]["token"] == "[REDACTED]"
+    assert detail.json()["event"]["payload"]["model"]["token_usage"] == 42
 
     tool_detail = client.get(
         f"/api/projects/{project['project_id']}/trace/events",
         params={"cursor": batch["events"][1]["cursor"]},
     ).json()
-    assert tool_detail["event"]["arguments"]["authorization"] == "[REDACTED]"
+    assert tool_detail["event"]["payload"]["arguments"]["authorization"] == "[REDACTED]"
 
     with trace_path.open("ab") as stream:
         stream.write(b"\n")
@@ -103,17 +115,21 @@ def test_trace_api_searches_full_payload_and_exports_valid_parse_errors(
     app = create_app(projects_root=tmp_path)
     client = TestClient(app)
     project = client.post("/api/projects", json={"name": "Searchable run"}).json()
-    trace_path = tmp_path / project["project_id"] / "agent-run.jsonl"
+    trace_path = tmp_path / project["project_id"] / "conversation.jsonl"
     trace_path.write_bytes(
         _line(
             {
                 "sequence": 1,
                 "timestamp": "2026-08-19T00:00:00.000+00:00",
                 "type": "model_response",
-                "messages": [
-                    {"role": "assistant", "content": "hidden needle after summary"}
-                ],
-                "password": "do-not-export",
+                "conversation_id": project["project_id"],
+                "turn_id": "turn-1",
+                "payload": {
+                    "messages": [
+                        {"role": "assistant", "content": "hidden needle after summary"}
+                    ],
+                    "password": "do-not-export",
+                },
             }
         )
         + b"{broken json}\n"
@@ -140,7 +156,7 @@ def test_trace_api_searches_full_payload_and_exports_valid_parse_errors(
     assert download.status_code == 200
     assert download.headers["cache-control"] == "no-store"
     exported = [json.loads(line) for line in download.text.splitlines()]
-    assert exported[0]["password"] == "[REDACTED]"
+    assert exported[0]["payload"]["password"] == "[REDACTED]"
     assert exported[1]["type"] == "parse_error"
 
 

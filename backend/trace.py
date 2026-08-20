@@ -1,4 +1,4 @@
-"""Read-only, redacted access to Agent Run JSONL traces."""
+"""Read-only, redacted access to Project conversation traces."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .agent_logging import AGENT_RUN_LOG_NAME
+from .agent_logging import CONVERSATION_LOG_NAME
 from .cad_executor import redact_credentials
 
 
@@ -50,13 +50,13 @@ def trace_path(project_dir: Path) -> Path:
     """Return the trace file only when it is a regular Project-owned file."""
 
     root = project_dir.resolve()
-    path = root / AGENT_RUN_LOG_NAME
-    if not path.is_file() or path.is_symlink():
-        raise TraceError("Agent Run trace is not available")
+    path = root / CONVERSATION_LOG_NAME
+    if not path.is_file() or path.is_symlink() or path.stat().st_size == 0:
+        raise TraceError("Conversation trace is not available")
     try:
         path.resolve().relative_to(root)
     except ValueError as exc:
-        raise TraceError("Agent Run trace is outside the Project") from exc
+        raise TraceError("Conversation trace is outside the Project") from exc
     return path
 
 
@@ -220,7 +220,8 @@ def _event_summary(
     record: Mapping[str, Any], cursor: int, byte_size: int
 ) -> dict[str, Any]:
     event_type = str(record.get("type") or "unknown")
-    tool_name = _optional_text(record.get("tool_name"))
+    payload = _payload(record)
+    tool_name = _optional_text(payload.get("tool_name"))
     role = _event_role(record)
     title = _event_title(event_type, tool_name, role, record)
     summary = _summary_text(event_type, record)
@@ -233,20 +234,26 @@ def _event_summary(
             else None
         ),
         "timestamp": _optional_text(record.get("timestamp")),
+        "turn_id": _optional_text(record.get("turn_id")),
         "type": event_type,
         "role": role,
         "title": title,
         "summary": summary,
         "tool_name": tool_name,
-        "call_id": _optional_text(record.get("call_id")),
+        "call_id": _optional_text(payload.get("call_id")),
         "is_error": event_type in _ERROR_TYPES
-        or str(record.get("status", "")).lower() == "failed",
+        or str(payload.get("status", "")).lower() in {"failed", "cancelled"},
         "byte_size": byte_size,
     }
 
 
 def _event_role(record: Mapping[str, Any]) -> str | None:
-    messages = record.get("messages")
+    payload = _payload(record)
+    if record.get("type") == "user_message":
+        return "user"
+    if record.get("type") == "assistant_message":
+        return "assistant"
+    messages = payload.get("messages")
     if not isinstance(messages, list) or not messages:
         return None
     first = messages[0]
@@ -261,11 +268,16 @@ def _event_title(
     role: str | None,
     record: Mapping[str, Any],
 ) -> str:
-    if event_type == "run_started":
-        return "Run started"
-    if event_type == "run_finished":
-        status = _optional_text(record.get("status")) or "finished"
-        return f"Run {status}"
+    payload = _payload(record)
+    if event_type == "turn_started":
+        return "Turn started"
+    if event_type in {"turn_succeeded", "turn_failed"}:
+        status = _optional_text(payload.get("status")) or "finished"
+        return f"Turn {status}"
+    if event_type == "user_message":
+        return "User"
+    if event_type == "assistant_message":
+        return "Assistant"
     if event_type in {"tool_call", "tool_result", "tool_error", "backend_tool"}:
         return tool_name or event_type.replace("_", " ").title()
     if event_type in {"model_request", "model_response"}:
@@ -274,36 +286,40 @@ def _event_title(
 
 
 def _summary_text(event_type: str, record: Mapping[str, Any]) -> str:
-    if event_type == "run_started":
-        model = record.get("model")
+    payload = _payload(record)
+    if event_type == "turn_started":
+        model = payload.get("model")
         if isinstance(model, Mapping):
             return _truncate(
                 " / ".join(
                     str(value)
                     for value in (
-                        record.get("harness"),
+                        payload.get("harness"),
                         model.get("provider"),
                         model.get("model_id"),
                     )
                     if value
                 )
             )
-    if event_type == "run_finished":
+    if event_type in {"turn_succeeded", "turn_failed"}:
         return _truncate(
-            _optional_text(record.get("failure_reason"))
-            or _optional_text(record.get("status"))
-            or "Run finished"
+            _optional_text(payload.get("failure_reason"))
+            or _optional_text(payload.get("status"))
+            or "Turn finished"
         )
     if event_type in {"tool_call", "backend_tool"}:
-        value = record.get("arguments", record.get("target", ""))
+        value = payload.get("arguments", payload.get("target", ""))
         return _truncate(_compact_value(value))
     if event_type == "tool_result":
-        return _truncate(_compact_value(record.get("result", "")))
+        return _truncate(_compact_value(payload.get("result", "")))
     if event_type in _ERROR_TYPES:
-        error = record.get("error", record.get("raw_line", ""))
+        error = payload.get("error", record.get("raw_line", ""))
         return _truncate(_compact_value(error))
 
-    messages = record.get("messages")
+    if event_type in {"user_message", "assistant_message", "context_summary"}:
+        return _truncate(_compact_value(payload.get("content", "")))
+
+    messages = payload.get("messages")
     if isinstance(messages, list) and messages:
         last = messages[-1]
         if isinstance(last, Mapping):
@@ -319,7 +335,12 @@ def _summary_text(event_type: str, record: Mapping[str, Any]) -> str:
                 ]
                 if names:
                     return _truncate("Calls " + ", ".join(names))
-    return _truncate(_compact_value(record))
+    return _truncate(_compact_value(payload or record))
+
+
+def _payload(record: Mapping[str, Any]) -> Mapping[str, Any]:
+    payload = record.get("payload")
+    return payload if isinstance(payload, Mapping) else record
 
 
 def _compact_value(value: Any) -> str:

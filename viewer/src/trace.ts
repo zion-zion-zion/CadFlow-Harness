@@ -18,6 +18,7 @@ type TraceEvent = {
   cursor: number;
   sequence: number | null;
   timestamp: string | null;
+  turn_id: string | null;
   type: string;
   role: string | null;
   title: string;
@@ -49,7 +50,7 @@ root.innerHTML = `
   <a class="skip-link" href="#main-content">Skip to trace</a>
   <div class="trace-shell">
     <header class="trace-topbar">
-      <div class="trace-brand"><span class="trace-brand-mark">CF</span><div><strong>CadFlow Trace</strong><span>AGENT RUN OBSERVABILITY</span></div></div>
+      <div class="trace-brand"><span class="trace-brand-mark">CF</span><div><strong>CadFlow Trace</strong><span>CONVERSATION OBSERVABILITY</span></div></div>
       <div class="trace-run-heading"><strong id="active-project-name">No Project selected</strong><code id="active-project-id"></code></div>
       <div class="trace-top-actions">
         <span id="poll-status" class="poll-status" role="status"><span></span>Idle</span>
@@ -86,7 +87,7 @@ root.innerHTML = `
             <button type="button" data-mode="sequence" aria-pressed="false">Sequence</button>
           </div>
         </div>
-        <div class="trajectory" id="trajectory" aria-label="Agent Run trajectory">
+        <div class="trajectory" id="trajectory" aria-label="Conversation trajectory">
           <div class="track-labels"><span>Input</span><span>Model</span><span>Tools</span><span>Run</span></div>
           <div id="track-lanes" class="track-lanes"></div>
         </div>
@@ -329,11 +330,12 @@ function displayEvents(): DisplayEvent[] {
   const display: DisplayEvent[] = [];
   const callsById = new Map<string, DisplayEvent>();
   const callsByName = new Map<string, DisplayEvent[]>();
-  let firstRequestSeen = false;
+  const requestTurns = new Set<string>();
   for (const event of filtered) {
     if (event.type === 'model_request') {
-      if (firstRequestSeen) continue;
-      firstRequestSeen = true;
+      const turnKey = event.turn_id ?? 'unassigned';
+      if (requestTurns.has(turnKey)) continue;
+      requestTurns.add(turnKey);
       display.push({ event: { ...event, title: 'Initial context' } });
       continue;
     }
@@ -686,8 +688,8 @@ function addSummary(panel: HTMLElement, label: string, value: string): void {
 }
 
 function eventGroup(event: TraceEvent): string {
-  if (event.type === 'model_request') return 'Input';
-  if (event.type === 'model_response' || event.type === 'model_error' || event.type === 'provider_retry') return 'Model';
+  if (event.type === 'model_request' || event.type === 'user_message') return 'Input';
+  if (event.type === 'model_response' || event.type === 'assistant_message' || event.type === 'model_error' || event.type === 'provider_retry') return 'Model';
   if (event.type.includes('tool')) return 'Tools';
   return 'Run';
 }
@@ -699,8 +701,8 @@ function eventKind(event: TraceEvent): string {
 
 function eventLabel(event: TraceEvent): string {
   if (event.is_error) return 'ERROR';
-  if (event.type === 'model_request') return 'INPUT';
-  if (event.type === 'model_response') return 'ASSISTANT';
+  if (event.type === 'model_request' || event.type === 'user_message') return 'INPUT';
+  if (event.type === 'model_response' || event.type === 'assistant_message') return 'ASSISTANT';
   if (event.type.includes('tool')) return 'TOOL';
   return 'RUN';
 }

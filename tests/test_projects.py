@@ -15,7 +15,7 @@ from backend.projects import (
 )
 
 
-def test_prompt_submission_is_persisted_and_one_shot(tmp_path: Path) -> None:
+def test_prompt_submission_is_persisted_across_multiple_turns(tmp_path: Path) -> None:
     store = ProjectStore(tmp_path)
     project = store.create_project("Flange")
 
@@ -34,8 +34,10 @@ def test_prompt_submission_is_persisted_and_one_shot(tmp_path: Path) -> None:
     assert reloaded.state is ProjectState.RUNNING
     assert reloaded.prompt == "Create a round flange."
 
-    with pytest.raises(ProjectStateError):
-        store.submit_prompt(project.project_id, "A second Prompt.")
+    store.mark_failed(project.project_id, "first turn failed")
+    second = store.submit_prompt(project.project_id, "A second Prompt.")
+    assert second.state is ProjectState.RUNNING
+    assert second.prompt == "A second Prompt."
 
 
 def test_run_uses_deepagents_harness(tmp_path: Path) -> None:
@@ -90,14 +92,15 @@ def test_invalid_prompt_is_rejected_before_running(tmp_path: Path, prompt: str) 
     assert not (tmp_path / project.project_id / "prompt.txt").exists()
 
 
-def test_terminal_project_cannot_be_run_again(tmp_path: Path) -> None:
+def test_terminal_project_can_start_a_follow_up_turn(tmp_path: Path) -> None:
     store = ProjectStore(tmp_path)
     project = store.create_project("Draft")
     store.submit_prompt(project.project_id, "Make a box.")
     store.mark_failed(project.project_id, "first CAD execution failed")
 
-    with pytest.raises(ProjectStateError):
-        store.submit_prompt(project.project_id, "Try again.")
+    restarted = store.submit_prompt(project.project_id, "Try again.")
+    assert restarted.state is ProjectState.RUNNING
+    assert restarted.failure_reason is None
 
 
 def test_success_requires_the_canonical_scene_artifact(tmp_path: Path) -> None:
@@ -114,3 +117,24 @@ def test_success_requires_the_canonical_scene_artifact(tmp_path: Path) -> None:
 
     assert succeeded.state is ProjectState.SUCCEEDED
     assert store.scene_artifact(project.project_id).name == "model.scene.zip"
+
+
+def test_failed_follow_up_restores_the_previous_source_tree(tmp_path: Path) -> None:
+    store = ProjectStore(tmp_path)
+    project = store.create_project("Versioned source")
+    project_dir = tmp_path / project.project_id
+    model_path = project_dir / "model.py"
+    model_path.write_text("FIRST = True\n", encoding="utf-8")
+    store.submit_prompt(project.project_id, "Create the first model.")
+    (project_dir / "artifacts" / "model.scene.zip").write_bytes(b"first")
+    store.mark_succeeded(project.project_id)
+
+    store.submit_prompt(project.project_id, "Try a follow-up.")
+    model_path.write_text("BROKEN = True\n", encoding="utf-8")
+    added_source = project_dir / "new_helper.py"
+    added_source.write_text("BROKEN_HELPER = True\n", encoding="utf-8")
+    store.mark_failed(project.project_id, "follow-up failed")
+
+    assert model_path.read_text(encoding="utf-8") == "FIRST = True\n"
+    assert not added_source.exists()
+    assert store.scene_artifact(project.project_id).read_bytes() == b"first"
