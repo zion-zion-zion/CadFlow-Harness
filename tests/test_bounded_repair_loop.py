@@ -104,26 +104,27 @@ def test_validate_model_allows_retries_beyond_three_attempts(
     assert results[-1]["scene_parse_result"]["valid"] is True
 
 
-def test_validate_model_notifies_preview_boundary_without_requesting_frames(
+def test_validate_model_does_not_request_preview_frames(
     tmp_path: Path,
 ) -> None:
-    callbacks: list[str] = []
-
     class RecordingExecutor:
         def execute(self, _project_dir: Path, **kwargs: object) -> ExecutionResult:
             assert "preview_callback" not in kwargs
-            return _execution_result()
+            return _execution_result(
+                status="succeeded",
+                error=None,
+                volume=12.5,
+                scene_valid=True,
+            )
 
     _restricted, tools = _validation_tools(
         tmp_path,
         RecordingExecutor(),
-        on_validation_start=lambda: callbacks.append("start"),
-        on_validation_end=lambda: callbacks.append("end"),
     )
 
-    tools["validate_model"].invoke({})
+    result = tools["validate_model"].invoke({})
 
-    assert callbacks == ["start", "end"]
+    assert result["status"] == "succeeded"
 
 
 def test_validate_model_refuses_to_start_after_run_deadline(tmp_path: Path) -> None:

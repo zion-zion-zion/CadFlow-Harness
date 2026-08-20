@@ -5,6 +5,7 @@ from pathlib import Path
 
 import cadflow as cad
 
+from backend.app import create_app
 from backend.live_preview import (
     LivePreviewExecutor,
     LivePreviewResult,
@@ -161,3 +162,16 @@ def test_scheduler_waits_for_build_model_before_previewing(tmp_path: Path) -> No
         assert executor.calls == 1
     finally:
         scheduler.close()
+
+
+def test_default_agent_service_has_no_live_preview_validation_callbacks(
+    tmp_path: Path,
+) -> None:
+    app = create_app(projects_root=tmp_path)
+    service = app.state.run_coordinator.run_service
+    scheduler = app.state.preview_scheduler
+
+    assert getattr(service, "on_validation_start", None) is None
+    assert getattr(service, "on_validation_end", None) is None
+    assert not hasattr(scheduler, "pause_for_validation")
+    assert not hasattr(scheduler, "resume_after_validation")

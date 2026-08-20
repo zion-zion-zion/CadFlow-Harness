@@ -75,8 +75,6 @@ class AgentRunCoordinator:
             repo_root=self.repo_root,
             settings_factory=settings_factory,
             agent_factory=agent_factory or ReferenceGroundedAgent,
-            on_validation_start=self.preview_scheduler.pause_for_validation,
-            on_validation_end=self.preview_scheduler.resume_after_validation,
         )
         self.adapters = adapter_registry or AgentRunAdapterRegistry(
             (
@@ -294,7 +292,6 @@ class AgentRunCoordinator:
             "stale": "Source changed",
             "building": "Building live preview",
             "current": "Live preview is current",
-            "validating": "Paused for validation",
             "paused": "Live preview paused",
             "failed": "Live preview failed",
         }.get(status.state, status.state)

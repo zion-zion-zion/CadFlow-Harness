@@ -123,8 +123,6 @@ def create_app(
         repo_root=resolved_repo_root,
         settings_factory=settings_factory,
         agent_factory=agent_factory,
-        on_validation_start=scheduler.pause_for_validation,
-        on_validation_end=scheduler.resume_after_validation,
     )
     adapters = adapter_registry or AgentRunAdapterRegistry(
         (

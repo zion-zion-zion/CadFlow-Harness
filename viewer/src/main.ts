@@ -13,7 +13,7 @@ type TokenUsage = {
   output_tokens: number | null;
   total_tokens: number | null;
 };
-type LivePreviewState = 'waiting' | 'stale' | 'building' | 'current' | 'failed' | 'validating' | 'paused';
+type LivePreviewState = 'waiting' | 'stale' | 'building' | 'current' | 'failed' | 'paused';
 type LivePreviewStatus = {
   state: LivePreviewState;
   revision: number;
@@ -352,9 +352,6 @@ function renderViewerEmpty(): void {
     } else if (project.preview.state === 'failed') {
       viewerEmptyTitle.textContent = 'Preview failed';
       viewerEmptyCopy.textContent = project.preview.error ?? 'No usable preview is available.';
-    } else if (project.preview.state === 'validating') {
-      viewerEmptyTitle.textContent = 'Validating model';
-      viewerEmptyCopy.textContent = 'Live preview is paused during validation.';
     } else {
       viewerEmptyTitle.textContent = 'Building live preview';
       viewerEmptyCopy.textContent = 'The latest model.py result will appear automatically.';
@@ -418,12 +415,11 @@ function renderViewerChrome(): void {
     building: 'Building live preview',
     current: 'Live preview current · unvalidated',
     failed: project.preview.artifact_available ? 'Preview failed · last result retained' : 'Preview failed',
-    validating: 'Validating model · preview paused',
     paused: 'Live preview paused',
   };
   viewerStatusText.textContent = labels[project.preview.state];
   viewerStatusDot.classList.toggle('ready', project.preview.state === 'current');
-  viewerStatusDot.classList.toggle('building', ['building', 'validating'].includes(project.preview.state));
+  viewerStatusDot.classList.toggle('building', project.preview.state === 'building');
   viewerStatusDot.classList.toggle('error', project.preview.state === 'failed');
 }
 

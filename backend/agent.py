@@ -44,15 +44,6 @@ class AgentRunCancelled(AgentRunError):
     """Raised inside a tool when the user has stopped the current Agent Run."""
 
 
-def _best_effort_callback(callback: Callable[[], None] | None) -> None:
-    if callback is None:
-        return
-    try:
-        callback()
-    except Exception:
-        return
-
-
 MAX_AGENT_RUN_SECONDS = 10 * 60.0
 AGENT_RUN_TIMEOUT_SECONDS = MAX_AGENT_RUN_SECONDS
 MAX_PROVIDER_RETRIES = 2
@@ -337,8 +328,6 @@ def create_agent_tools(
     clock: Callable[[], float] = time.monotonic,
     cancellation_token: object | None = None,
     on_progress: Callable[[ProgressUpdate], None] | None = None,
-    on_validation_start: Callable[[], None] | None = None,
-    on_validation_end: Callable[[], None] | None = None,
 ) -> tuple[BaseTool, ...]:
     """Expose zero-argument CAD validation and review tools."""
 
@@ -364,20 +353,16 @@ def create_agent_tools(
         execution_attempts += 1
         execution_recorded = False
 
-        _best_effort_callback(on_validation_start)
         try:
-            try:
-                result = validator.validate_model(
-                    cancellation_token=cancellation_token,
-                    timeout_seconds=(
-                        min(CAD_EXECUTION_TIMEOUT_SECONDS, remaining)
-                        if remaining is not None
-                        else None
-                    ),
-                    attempt=execution_attempts,
-                )
-            finally:
-                _best_effort_callback(on_validation_end)
+            result = validator.validate_model(
+                cancellation_token=cancellation_token,
+                timeout_seconds=(
+                    min(CAD_EXECUTION_TIMEOUT_SECONDS, remaining)
+                    if remaining is not None
+                    else None
+                ),
+                attempt=execution_attempts,
+            )
         except Exception as exc:
             if on_execution_error is None:
                 raise
@@ -525,8 +510,6 @@ class ReferenceGroundedAgent:
         executor: Any | None = None,
         model: Any | None = None,
         run_log: AgentRunLog | None = None,
-        on_validation_start: Callable[[Path], None] | None = None,
-        on_validation_end: Callable[[Path], None] | None = None,
     ) -> None:
         self.settings = settings
         self.repo_root = repo_root
@@ -534,8 +517,6 @@ class ReferenceGroundedAgent:
         self.executor = executor
         self.model = model
         self.run_log = run_log
-        self.on_validation_start = on_validation_start
-        self.on_validation_end = on_validation_end
 
     def run(
         self,
@@ -611,16 +592,6 @@ class ReferenceGroundedAgent:
             run_deadline=deadline,
             cancellation_token=token,
             on_progress=emit,
-            on_validation_start=(
-                lambda: self.on_validation_start(Path(self.project_dir))
-                if self.on_validation_start is not None
-                else None
-            ),
-            on_validation_end=(
-                lambda: self.on_validation_end(Path(self.project_dir))
-                if self.on_validation_end is not None
-                else None
-            ),
         )
         agent_error: str | None = None
         timed_out = False
@@ -721,15 +692,11 @@ class AgentRunService:
         repo_root: str | Path,
         settings_factory: Callable[[], AgentSettings] | None = None,
         agent_factory: Callable[..., ReferenceGroundedAgent] = ReferenceGroundedAgent,
-        on_validation_start: Callable[[Path], None] | None = None,
-        on_validation_end: Callable[[Path], None] | None = None,
     ) -> None:
         self.store = store
         self.repo_root = repo_root
         self.settings_factory = settings_factory or AgentSettings.from_environment
         self.agent_factory = agent_factory
-        self.on_validation_start = on_validation_start
-        self.on_validation_end = on_validation_end
 
     def run(
         self,
@@ -819,10 +786,6 @@ class AgentRunService:
                 or accepts_factory_kwargs
             ):
                 factory_kwargs["run_log"] = run_log
-            if "on_validation_start" in factory_parameters or accepts_factory_kwargs:
-                factory_kwargs["on_validation_start"] = self.on_validation_start
-            if "on_validation_end" in factory_parameters or accepts_factory_kwargs:
-                factory_kwargs["on_validation_end"] = self.on_validation_end
             agent = self.agent_factory(**factory_kwargs)
             outcome = _invoke_agent_run(
                 agent,

@@ -220,14 +220,6 @@ class LivePreviewExecutor:
             if not self._closed:
                 self._ensure_worker_locked()
 
-    def preempt(self) -> None:
-        """Stop all preview work so validation can take full priority."""
-
-        with self._process_lock:
-            process = self._process
-        if process is not None:
-            self._discard_worker(process)
-
     def close(self) -> None:
         with self._process_lock:
             self._closed = True
@@ -427,7 +419,6 @@ class LivePreviewScheduler:
         self._due_at: float | None = None
         self._running_hash: str | None = None
         self._running_token: CancellationToken | None = None
-        self._validating = False
         self._user_paused = False
         self._closed = False
         self._monitor: threading.Thread | None = None
@@ -442,7 +433,6 @@ class LivePreviewScheduler:
             self._observed_hash = None
             self._pending_hash = None
             self._due_at = None
-            self._validating = False
             self._user_paused = False
             self._condition.notify_all()
         self._emit(project_id, LivePreviewStore(root).write_status("waiting"))
@@ -463,48 +453,6 @@ class LivePreviewScheduler:
         if not validated:
             store = LivePreviewStore(self.store.project_directory(project_id))
             self._emit(project_id, store.write_status("stale"))
-
-    def pause_for_validation(self, project_dir: str | Path) -> None:
-        project_id = Path(project_dir).expanduser().resolve().name
-        token: CancellationToken | None = None
-        with self._condition:
-            if self._active_project_id != project_id:
-                return
-            self._validating = True
-            token = self._running_token
-            if self._running_hash is not None:
-                self._pending_hash = self._running_hash
-            self._due_at = None
-            self._condition.notify_all()
-        if token is not None:
-            threading.Thread(
-                target=token.cancel,
-                name="live-preview-validation-cancel",
-                daemon=True,
-            ).start()
-        else:
-            threading.Thread(
-                target=self._executor_call,
-                args=("preempt",),
-                name="live-preview-validation-preempt",
-                daemon=True,
-            ).start()
-        threading.Thread(
-            target=self._publish_validation_status,
-            args=(project_id,),
-            name="live-preview-validation-status",
-            daemon=True,
-        ).start()
-
-    def resume_after_validation(self, project_dir: str | Path) -> None:
-        project_id = Path(project_dir).expanduser().resolve().name
-        with self._condition:
-            if self._active_project_id != project_id:
-                return
-            self._validating = False
-            if self._pending_hash is not None:
-                self._due_at = time.monotonic()
-            self._condition.notify_all()
 
     def set_paused(self, project_id: str, paused: bool) -> LivePreviewStatus:
         token: CancellationToken | None = None
@@ -626,7 +574,6 @@ class LivePreviewScheduler:
                         self._active_project_id is not None
                         and self._pending_hash is not None
                         and self._due_at is not None
-                        and not self._validating
                         and not self._user_paused
                     )
                     if ready:
@@ -660,7 +607,6 @@ class LivePreviewScheduler:
                     and self._active_project_id == project_id
                     and self._observed_hash == source_hash
                     and disk_hash == source_hash
-                    and not self._validating
                     and not self._user_paused
                 )
                 if self._running_token is token:
@@ -691,15 +637,6 @@ class LivePreviewScheduler:
         status = store.write_status(state, source_hash=source_hash)
         self._emit(project_id, status)
         return status
-
-    def _publish_validation_status(self, project_id: str) -> None:
-        try:
-            with self._condition:
-                if self._active_project_id != project_id or not self._validating:
-                    return
-                self._set_status(project_id, "validating")
-        except Exception:
-            return
 
     def _emit(self, project_id: str, status: LivePreviewStatus) -> None:
         if self.on_status is None:
