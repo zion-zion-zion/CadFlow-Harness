@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -16,16 +17,17 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import BinaryIO, Callable, Protocol
 
 from .cad_executor import CancellationToken, build_cad_environment, redact_credentials
 from .previews import PreviewError, validate_preview_glb
 from .projects import ProjectState, ProjectStore
 
 
-PREVIEW_DEBOUNCE_SECONDS = 0.5
-PREVIEW_POLL_SECONDS = 0.25
+PREVIEW_DEBOUNCE_SECONDS = 0.2
+PREVIEW_POLL_SECONDS = 0.1
 PREVIEW_TIMEOUT_SECONDS = 15.0
+PREVIEW_DEFLECTION = 1.0
 PREVIEW_OUTPUT_BYTES = 64 * 1024
 LIVE_PREVIEW_DIRECTORY = "previews/live"
 LIVE_PREVIEW_STATUS_NAME = "status.json"
@@ -202,7 +204,36 @@ class LivePreviewStore:
 
 
 class LivePreviewExecutor:
-    """Run one source snapshot without producing validation artifacts."""
+    """Run source snapshots in one reusable, isolated CadFlow worker."""
+
+    def __init__(self) -> None:
+        self._execution_lock = threading.Lock()
+        self._process_lock = threading.RLock()
+        self._process: subprocess.Popen[bytes] | None = None
+        self._worker_stderr: BinaryIO | None = None
+        self._closed = False
+
+    def warm(self) -> None:
+        """Start importing CadFlow before the first usable source arrives."""
+
+        with self._process_lock:
+            if not self._closed:
+                self._ensure_worker_locked()
+
+    def preempt(self) -> None:
+        """Stop all preview work so validation can take full priority."""
+
+        with self._process_lock:
+            process = self._process
+        if process is not None:
+            self._discard_worker(process)
+
+    def close(self) -> None:
+        with self._process_lock:
+            self._closed = True
+            process = self._process
+        if process is not None:
+            self._discard_worker(process)
 
     def execute(
         self,
@@ -210,6 +241,20 @@ class LivePreviewExecutor:
         *,
         timeout_seconds: float = PREVIEW_TIMEOUT_SECONDS,
         cancellation_token: CancellationToken | None = None,
+    ) -> LivePreviewResult:
+        with self._execution_lock:
+            return self._execute_locked(
+                project_dir,
+                timeout_seconds=timeout_seconds,
+                cancellation_token=cancellation_token,
+            )
+
+    def _execute_locked(
+        self,
+        project_dir: str | Path,
+        *,
+        timeout_seconds: float,
+        cancellation_token: CancellationToken | None,
     ) -> LivePreviewResult:
         root = Path(project_dir).expanduser().resolve()
         token = cancellation_token or CancellationToken()
@@ -222,46 +267,66 @@ class LivePreviewExecutor:
                 if not model_path.is_file():
                     return LivePreviewResult("failed", error="model.py is missing")
                 output_path = Path(temporary) / LIVE_PREVIEW_MODEL_NAME
-                process = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-u",
-                        "-c",
-                        _PREVIEW_RUNNER,
-                        str(model_path),
-                        str(output_path),
-                    ],
-                    cwd=snapshot,
-                    env=build_cad_environment(),
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    close_fds=True,
-                    start_new_session=os.name == "posix",
-                    preexec_fn=_lower_process_priority if os.name == "posix" else None,
-                )
+                response_path = Path(temporary) / "response.json"
+                stdout_path = Path(temporary) / "stdout.log"
+                stderr_path = Path(temporary) / "stderr.log"
+                with self._process_lock:
+                    if self._closed:
+                        return LivePreviewResult("cancelled")
+                    process = self._ensure_worker_locked()
                 token.register_process(process, _terminate_process)
                 try:
-                    stdout_raw, stderr_raw = process.communicate(timeout=timeout_seconds)
-                except subprocess.TimeoutExpired:
-                    token.cancel("timeout")
-                    stdout_raw, stderr_raw = process.communicate()
-                    return LivePreviewResult(
-                        "timed_out",
-                        error=f"Live preview timed out after {timeout_seconds:g} seconds",
-                        stdout=_safe_output(stdout_raw),
-                        stderr=_safe_output(stderr_raw),
-                    )
+                    request = {
+                        "model_path": str(model_path),
+                        "output_path": str(output_path),
+                        "response_path": str(response_path),
+                        "stdout_path": str(stdout_path),
+                        "stderr_path": str(stderr_path),
+                        "deflection": PREVIEW_DEFLECTION,
+                    }
+                    with self._process_lock:
+                        if self._process is not process or process.stdin is None:
+                            return LivePreviewResult("cancelled")
+                        process.stdin.write(
+                            json.dumps(request, separators=(",", ":")).encode("utf-8")
+                            + b"\n"
+                        )
+                        process.stdin.flush()
+                    deadline = time.monotonic() + timeout_seconds
+                    while not response_path.is_file():
+                        if token.cancelled:
+                            self._discard_worker(process)
+                            return LivePreviewResult("cancelled")
+                        if process.poll() is not None:
+                            error = self._worker_failure(process)
+                            self._discard_worker(process)
+                            return LivePreviewResult("failed", error=error)
+                        if time.monotonic() >= deadline:
+                            token.cancel("timeout")
+                            self._discard_worker(process)
+                            return LivePreviewResult(
+                                "timed_out",
+                                error=f"Live preview timed out after {timeout_seconds:g} seconds",
+                                stdout=_read_output(stdout_path),
+                                stderr=_read_output(stderr_path),
+                            )
+                        time.sleep(0.01)
                 finally:
                     token.clear_process(process)
-                stdout = _safe_output(stdout_raw)
-                stderr = _safe_output(stderr_raw)
+                stdout = _read_output(stdout_path)
+                stderr = _read_output(stderr_path)
                 if token.cancelled:
                     return LivePreviewResult("cancelled", stdout=stdout, stderr=stderr)
-                if process.returncode != 0:
+                response = json.loads(response_path.read_text(encoding="utf-8"))
+                if response.get("status") != "succeeded":
+                    response_error = _optional_text(response.get("error"))
                     return LivePreviewResult(
                         "failed",
-                        error=_first_error(stderr, stdout),
+                        error=(
+                            redact_credentials(response_error)
+                            if response_error is not None
+                            else _first_error(stderr, stdout)
+                        ),
                         stdout=stdout,
                         stderr=stderr,
                     )
@@ -273,8 +338,69 @@ class LivePreviewExecutor:
         except (OSError, PreviewError, ValueError) as exc:
             return LivePreviewResult("failed", error=redact_credentials(str(exc)))
         finally:
-            if process is not None and process.poll() is None:
-                _terminate_process(process)
+            if process is not None and process.poll() is not None:
+                self._discard_worker(process)
+
+    def _ensure_worker_locked(self) -> subprocess.Popen[bytes]:
+        process = self._process
+        if process is not None and process.poll() is None:
+            return process
+        self._release_worker_locked()
+        worker_stderr = tempfile.TemporaryFile(prefix="cadflow-preview-worker-")
+        process = subprocess.Popen(
+            [sys.executable, "-u", "-c", _PREVIEW_WORKER],
+            cwd=Path.cwd(),
+            env=build_cad_environment(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=worker_stderr,
+            close_fds=True,
+            start_new_session=os.name == "posix",
+            preexec_fn=_lower_process_priority if os.name == "posix" else None,
+        )
+        self._process = process
+        self._worker_stderr = worker_stderr
+        return process
+
+    def _worker_failure(self, process: subprocess.Popen[bytes]) -> str:
+        with self._process_lock:
+            if self._process is not process or self._worker_stderr is None:
+                return "Live preview worker stopped unexpectedly"
+            self._worker_stderr.flush()
+            self._worker_stderr.seek(0)
+            stderr = _safe_output(self._worker_stderr.read())
+        return _first_error(stderr, "")
+
+    def _discard_worker(self, process: subprocess.Popen[bytes]) -> None:
+        with self._process_lock:
+            if self._process is not process:
+                return
+            self._process = None
+            worker_stderr = self._worker_stderr
+            self._worker_stderr = None
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+        _terminate_process(process)
+        if worker_stderr is not None:
+            worker_stderr.close()
+
+    def _release_worker_locked(self) -> None:
+        process = self._process
+        worker_stderr = self._worker_stderr
+        self._process = None
+        self._worker_stderr = None
+        if process is not None:
+            if process.stdin is not None:
+                try:
+                    process.stdin.close()
+                except OSError:
+                    pass
+            _terminate_process(process)
+        if worker_stderr is not None:
+            worker_stderr.close()
 
 
 class LivePreviewScheduler:
@@ -320,6 +446,7 @@ class LivePreviewScheduler:
             self._user_paused = False
             self._condition.notify_all()
         self._emit(project_id, LivePreviewStore(root).write_status("waiting"))
+        self._executor_call("warm")
 
     def deactivate(self, project_id: str, *, validated: bool = False) -> None:
         token: CancellationToken | None = None
@@ -355,6 +482,13 @@ class LivePreviewScheduler:
                 name="live-preview-validation-cancel",
                 daemon=True,
             ).start()
+        else:
+            threading.Thread(
+                target=self._executor_call,
+                args=("preempt",),
+                name="live-preview-validation-preempt",
+                daemon=True,
+            ).start()
         threading.Thread(
             target=self._publish_validation_status,
             args=(project_id,),
@@ -380,19 +514,24 @@ class LivePreviewScheduler:
             self._user_paused = paused
             token = self._running_token if paused else None
             if not paused:
-                self._pending_hash = self._observed_hash
-                self._due_at = time.monotonic()
+                root = self.store.project_directory(project_id)
+                if _preview_source_ready(root):
+                    self._pending_hash = self._observed_hash
+                    self._due_at = time.monotonic()
             self._condition.notify_all()
         if token is not None:
             token.cancel()
         return self._set_status(project_id, "paused" if paused else "waiting")
 
     def retry(self, project_id: str) -> None:
+        root = self.store.project_directory(project_id)
         with self._condition:
             if self._active_project_id != project_id:
                 raise PreviewError("live preview is not active")
+            if not _preview_source_ready(root):
+                return
             self._pending_hash = self._observed_hash or _source_hash(
-                self.store.project_directory(project_id)
+                root
             )
             self._due_at = time.monotonic()
             self._condition.notify_all()
@@ -409,6 +548,7 @@ class LivePreviewScheduler:
             self._monitor.join(timeout=1.0)
         if self._worker is not None:
             self._worker.join(timeout=1.0)
+        self._executor_call("close")
 
     def _ensure_started(self) -> None:
         with self._condition:
@@ -438,21 +578,28 @@ class LivePreviewScheduler:
             if project_id is not None:
                 try:
                     project = self.store.get_project(project_id)
-                    digest = (
-                        _source_hash(self.store.project_directory(project_id))
-                        if project.state == ProjectState.RUNNING
-                        else None
-                    )
+                    root = self.store.project_directory(project_id)
+                    if project.state == ProjectState.RUNNING:
+                        digest = _source_hash(root)
+                        source_ready = _preview_source_ready(root)
+                    else:
+                        digest = None
+                        source_ready = False
                 except (OSError, ValueError):
                     digest = None
+                    source_ready = False
                 if digest is not None:
                     token: CancellationToken | None = None
                     changed = False
                     with self._condition:
                         if self._active_project_id == project_id and digest != self._observed_hash:
                             self._observed_hash = digest
-                            self._pending_hash = digest
-                            self._due_at = time.monotonic() + self.debounce_seconds
+                            self._pending_hash = digest if source_ready else None
+                            self._due_at = (
+                                time.monotonic() + self.debounce_seconds
+                                if source_ready
+                                else None
+                            )
                             if self._running_hash is not None and self._running_hash != digest:
                                 token = self._running_token
                             changed = True
@@ -460,7 +607,13 @@ class LivePreviewScheduler:
                     if token is not None:
                         token.cancel()
                     if changed:
-                        self._set_status(project_id, "stale", source_hash=digest)
+                        store = LivePreviewStore(root)
+                        state = (
+                            "stale"
+                            if source_ready or store.read_status().artifact_available
+                            else "waiting"
+                        )
+                        self._set_status(project_id, state, source_hash=digest)
             time.sleep(self.poll_seconds)
 
     def _worker_loop(self) -> None:
@@ -556,6 +709,15 @@ class LivePreviewScheduler:
         except Exception:
             return
 
+    def _executor_call(self, method_name: str) -> None:
+        method = getattr(self.executor, method_name, None)
+        if not callable(method):
+            return
+        try:
+            method()
+        except Exception:
+            return
+
 
 def _source_hash(project_dir: Path) -> str:
     digest = hashlib.sha256()
@@ -574,6 +736,19 @@ def _source_hash(project_dir: Path) -> str:
         digest.update(len(payload).to_bytes(8, "big"))
         digest.update(payload)
     return digest.hexdigest()
+
+
+def _preview_source_ready(project_dir: Path) -> bool:
+    model_path = project_dir / "model.py"
+    try:
+        source = model_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(model_path))
+    except (OSError, SyntaxError, UnicodeError):
+        return False
+    return any(
+        isinstance(node, ast.FunctionDef) and node.name == "build_model"
+        for node in tree.body
+    )
 
 
 def _copy_preview_inputs(source: Path, destination: Path) -> None:
@@ -624,6 +799,13 @@ def _safe_output(payload: bytes) -> str:
     return redact_credentials(text).strip()
 
 
+def _read_output(path: Path) -> str:
+    try:
+        return _safe_output(path.read_bytes())
+    except OSError:
+        return ""
+
+
 def _first_error(stderr: str, stdout: str) -> str:
     for value in (stderr, stdout):
         lines = [line.strip() for line in value.splitlines() if line.strip()]
@@ -647,29 +829,76 @@ def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
-_PREVIEW_RUNNER = r'''
+_PREVIEW_WORKER = r'''
+import contextlib
+import importlib
+import json
+import os
 import runpy
 import sys
+import traceback
 from pathlib import Path
 
 import cadflow as cad
 
-model_path = Path(sys.argv[1]).resolve()
-output_path = Path(sys.argv[2]).resolve()
-namespace = runpy.run_path(str(model_path), run_name="cadflow_live_preview")
-build_model = namespace.get("build_model")
-if not callable(build_model):
-    raise RuntimeError("Model Source must define build_model(model) -> cad.Shape")
-with cad.Model() as model:
-    final_shape = build_model(model)
-    if not isinstance(final_shape, cad.Shape):
-        raise TypeError("Model Source must return one CadFlow Shape")
-    topology = final_shape.topology
-    if int(topology.get("solids", 0)) < 1:
-        raise ValueError("Live preview Shape must contain at least one solid")
-    payload = final_shape.preview_glb(deflection=0.35)
-    cad.scene.preflight_glb(payload, expected_kind="triangle")
-    output_path.write_bytes(payload)
+def clear_snapshot_modules(snapshot):
+    for name, module in tuple(sys.modules.items()):
+        filename = getattr(module, "__file__", None)
+        if not filename:
+            continue
+        try:
+            Path(filename).resolve().relative_to(snapshot)
+        except (OSError, ValueError):
+            continue
+        sys.modules.pop(name, None)
+    importlib.invalidate_caches()
+
+
+for line in sys.stdin.buffer:
+    request = json.loads(line)
+    model_path = Path(request["model_path"]).resolve()
+    snapshot = model_path.parent
+    output_path = Path(request["output_path"])
+    response_path = Path(request["response_path"])
+    stdout_path = Path(request["stdout_path"])
+    stderr_path = Path(request["stderr_path"])
+    response = {"status": "failed"}
+    previous_cwd = Path.cwd()
+    try:
+        os.chdir(snapshot)
+        with (
+            stdout_path.open("w", encoding="utf-8") as stdout,
+            stderr_path.open("w", encoding="utf-8") as stderr,
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            try:
+                namespace = runpy.run_path(
+                    str(model_path), run_name="cadflow_live_preview"
+                )
+                build_model = namespace.get("build_model")
+                if not callable(build_model):
+                    raise RuntimeError(
+                        "Model Source must define build_model(model) -> cad.Shape"
+                    )
+                with cad.Model() as model:
+                    final_shape = build_model(model)
+                    if not isinstance(final_shape, cad.Shape):
+                        raise TypeError("Model Source must return one CadFlow Shape")
+                    payload = final_shape.preview_glb(
+                        deflection=float(request["deflection"])
+                    )
+                    output_path.write_bytes(payload)
+                response = {"status": "succeeded"}
+            except BaseException as exc:
+                traceback.print_exc()
+                response = {"status": "failed", "error": str(exc)}
+    finally:
+        os.chdir(previous_cwd)
+        clear_snapshot_modules(snapshot)
+        temporary_response = response_path.with_suffix(".tmp")
+        temporary_response.write_text(json.dumps(response), encoding="utf-8")
+        temporary_response.replace(response_path)
 '''
 
 

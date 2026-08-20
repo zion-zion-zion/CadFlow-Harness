@@ -343,8 +343,22 @@ function renderViewerEmpty(): void {
     viewerEmptyTitle.textContent = 'Draft Project';
     viewerEmptyCopy.textContent = 'Submit a complete Prompt to generate a Validated Result.';
   } else if (project.state === 'Running') {
-    viewerEmptyTitle.textContent = project.preview.state === 'failed' ? 'Preview failed' : 'Building live preview';
-    viewerEmptyCopy.textContent = project.preview.error ?? 'The latest model.py result will appear automatically.';
+    if (project.preview.state === 'waiting') {
+      viewerEmptyTitle.textContent = 'Waiting for model';
+      viewerEmptyCopy.textContent = 'No preview source is ready yet.';
+    } else if (project.preview.state === 'paused') {
+      viewerEmptyTitle.textContent = 'Preview paused';
+      viewerEmptyCopy.textContent = 'The current preview is paused.';
+    } else if (project.preview.state === 'failed') {
+      viewerEmptyTitle.textContent = 'Preview failed';
+      viewerEmptyCopy.textContent = project.preview.error ?? 'No usable preview is available.';
+    } else if (project.preview.state === 'validating') {
+      viewerEmptyTitle.textContent = 'Validating model';
+      viewerEmptyCopy.textContent = 'Live preview is paused during validation.';
+    } else {
+      viewerEmptyTitle.textContent = 'Building live preview';
+      viewerEmptyCopy.textContent = 'The latest model.py result will appear automatically.';
+    }
   } else if (project.state === 'Failed') {
     viewerEmptyTitle.textContent = 'No Validated Result';
     viewerEmptyCopy.textContent = 'This Project failed validation and has no usable preview.';

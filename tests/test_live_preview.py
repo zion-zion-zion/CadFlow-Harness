@@ -35,14 +35,39 @@ def _wait_until(predicate, timeout: float = 3.0) -> None:
 
 def test_live_preview_executor_isolated_from_validation_outputs(tmp_path: Path) -> None:
     (tmp_path / "model.py").write_text(_model_source(5.0), encoding="utf-8")
-
-    result = LivePreviewExecutor().execute(tmp_path, timeout_seconds=10.0)
+    executor = LivePreviewExecutor()
+    try:
+        result = executor.execute(tmp_path, timeout_seconds=10.0)
+    finally:
+        executor.close()
 
     assert result.status == "succeeded"
     assert result.payload is not None and result.payload[:4] == b"glTF"
     assert not (tmp_path / "preview-side-effect.txt").exists()
     assert not (tmp_path / "artifacts").exists()
     assert not (tmp_path / ".cad-review").exists()
+
+
+def test_live_preview_executor_reuses_worker_between_builds(tmp_path: Path) -> None:
+    (tmp_path / "model.py").write_text(
+        _model_source(5.0)
+        .replace("import cadflow as cad", "import os\nimport cadflow as cad")
+        .replace(
+            "def build_model",
+            'print(f"preview-worker:{os.getpid()}")\n\ndef build_model',
+        ),
+        encoding="utf-8",
+    )
+    executor = LivePreviewExecutor()
+    try:
+        first = executor.execute(tmp_path, timeout_seconds=10.0)
+        second = executor.execute(tmp_path, timeout_seconds=10.0)
+    finally:
+        executor.close()
+
+    assert first.status == second.status == "succeeded"
+    assert first.stdout.startswith("preview-worker:")
+    assert first.stdout == second.stdout
 
 
 def test_live_preview_store_keeps_last_model_when_next_build_fails(
@@ -96,5 +121,43 @@ def test_scheduler_rebuilds_after_project_python_changes(tmp_path: Path) -> None
         assert len(executor.sources) == 2
         assert "width=9.0" in executor.sources[-1]
         assert store.read_status().state == "current"
+    finally:
+        scheduler.close()
+
+
+def test_scheduler_waits_for_build_model_before_previewing(tmp_path: Path) -> None:
+    projects = ProjectStore(tmp_path)
+    project = projects.create_project("Live")
+    project = projects.submit_prompt(project.project_id, "Create a box")
+    project_dir = projects.project_directory(project.project_id)
+    with cad.Model() as model:
+        payload = model.box(width=1.0, depth=1.0, height=1.0).preview_glb()
+
+    class RecordingExecutor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, _root: Path, **_kwargs: object) -> LivePreviewResult:
+            self.calls += 1
+            return LivePreviewResult("succeeded", payload=payload)
+
+    executor = RecordingExecutor()
+    scheduler = LivePreviewScheduler(
+        projects,
+        executor=executor,
+        debounce_seconds=0.02,
+        poll_seconds=0.01,
+    )
+    try:
+        scheduler.activate(project.project_id)
+        time.sleep(0.1)
+
+        assert executor.calls == 0
+        assert LivePreviewStore(project_dir).read_status().state == "waiting"
+
+        project_dir.joinpath("model.py").write_text(_model_source(3.0), encoding="utf-8")
+        _wait_until(lambda: LivePreviewStore(project_dir).read_status().revision == 1)
+
+        assert executor.calls == 1
     finally:
         scheduler.close()
