@@ -1,6 +1,7 @@
 import './style.css';
 
 import { ScenePackageError, SceneViewer } from './components/scene-viewer';
+import { shouldLoadCanonicalScene } from './scene-state';
 
 const MAX_PROMPT_CHARS = 32_000;
 
@@ -232,6 +233,7 @@ let previewProjectId: string | null = null;
 let latestPreviewRevision = 0;
 let loadedPreviewRevision = 0;
 let loadedSceneProjectId: string | null = null;
+let loadedSceneArtifactVersion: number | null = null;
 let workspaceMessage = '';
 
 const sceneViewer = new SceneViewer(viewerElement, (message, ready) => {
@@ -637,9 +639,18 @@ async function refreshSelectedProject(version: number): Promise<void> {
     conversationByProject.set(projectId, conversation.turns);
     workspaceMessage = '';
     renderAll();
-    if (project.scene_available && project.state !== 'Running' && loadedSceneProjectId !== projectId) await loadScene(project, version);
+    if (shouldLoadCanonicalScene({
+      projectId,
+      state: project.state,
+      sceneAvailable: project.scene_available,
+      artifactVersion: project.artifact_version,
+      loadedSceneProjectId,
+      loadedSceneArtifactVersion,
+      previewProjectId,
+    })) await loadScene(project, version);
     if ((!project.scene_available || project.state === 'Running') && loadedSceneProjectId === projectId) {
       loadedSceneProjectId = null;
+      loadedSceneArtifactVersion = null;
       if (project.state === 'Failed' || project.state === 'Stopped') sceneViewer.markPreviewUnvalidated();
       else sceneViewer.clear();
       renderViewerEmpty();
@@ -661,6 +672,7 @@ async function loadScene(project: Project, version: number): Promise<void> {
   const controller = new AbortController();
   sceneRequest = controller;
   loadedSceneProjectId = null;
+  loadedSceneArtifactVersion = null;
   previewRequest?.abort();
   previewRequest = null;
   previewProjectId = null;
@@ -677,6 +689,7 @@ async function loadScene(project: Project, version: number): Promise<void> {
     await sceneViewer.load(blob);
     if (version === selectedVersion && selectedProjectId === project.project_id) {
       loadedSceneProjectId = project.project_id;
+      loadedSceneArtifactVersion = project.artifact_version;
       renderViewerEmpty();
       renderViewerChrome();
     }
@@ -707,6 +720,7 @@ async function selectProject(projectId: string): Promise<void> {
   latestPreviewRevision = 0;
   loadedPreviewRevision = 0;
   loadedSceneProjectId = null;
+  loadedSceneArtifactVersion = null;
   promptInput.value = '';
   sceneViewer.clear();
   progressByProject.set(projectId, []);
@@ -741,6 +755,7 @@ async function refreshCatalog(): Promise<void> {
       latestPreviewRevision = 0;
       loadedPreviewRevision = 0;
       loadedSceneProjectId = null;
+      loadedSceneArtifactVersion = null;
       sceneViewer.clear();
     }
     renderAll();
@@ -925,6 +940,7 @@ async function deleteProject(): Promise<void> {
     previewProjectId = null;
     latestPreviewRevision = 0;
     loadedPreviewRevision = 0;
+    loadedSceneArtifactVersion = null;
     projects = projects.filter((item) => item.project_id !== project.project_id);
     conversationByProject.delete(project.project_id);
     progressByProject.delete(project.project_id);
@@ -960,6 +976,7 @@ async function clearConversation(): Promise<void> {
     upsertProject(reset);
     promptInput.value = '';
     loadedSceneProjectId = null;
+    loadedSceneArtifactVersion = null;
     previewProjectId = null;
     sceneViewer.clear();
     workspaceMessage = 'Conversation and CAD artifacts were cleared.';
