@@ -270,5 +270,35 @@ def test_chat_model_selects_api_for_reasoning_effort(
     )
 
     assert model.max_retries == 2
-    assert model.reasoning_effort == reasoning_effort
     assert model.use_responses_api is use_responses_api
+    if use_responses_api:
+        assert model.reasoning == (
+            {"effort": reasoning_effort} if reasoning_effort is not None else None
+        )
+        assert model.reasoning_effort is None
+    else:
+        assert model.reasoning is None
+        assert model.reasoning_effort == reasoning_effort
+
+
+def test_chat_model_sends_reasoning_summary_only_to_responses() -> None:
+    responses_model = build_chat_model(
+        AgentSettings(
+            model_id="cad-model",
+            api_key="test-key",
+            reasoning_effort="high",
+            reasoning_summary="auto",
+        )
+    )
+    chat_model = build_chat_model(
+        AgentSettings(
+            model_id="cad-model",
+            api_key="test-key",
+            reasoning_effort="none",
+            reasoning_summary="auto",
+        )
+    )
+
+    assert responses_model.reasoning == {"effort": "high", "summary": "auto"}
+    assert chat_model.reasoning is None
+    assert chat_model.reasoning_effort == "none"

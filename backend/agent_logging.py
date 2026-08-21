@@ -54,6 +54,7 @@ class ConversationLog:
         model_id: str | None = None,
         base_url: str | None = None,
         reasoning_effort: str | None = None,
+        reasoning_summary: str | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).expanduser().resolve()
         self.path = self.project_dir / CONVERSATION_LOG_NAME
@@ -83,6 +84,7 @@ class ConversationLog:
                         "model_id": model_id,
                         "base_url": base_url,
                         "reasoning_effort": reasoning_effort,
+                        "reasoning_summary": reasoning_summary,
                     },
                 )
                 if user_message is not None:
@@ -152,6 +154,7 @@ class ConversationLog:
         model_id: str | None = None,
         base_url: str | None = None,
         reasoning_effort: str | None = None,
+        reasoning_summary: str | None = None,
     ) -> None:
         """Fill the current turn's provider metadata once settings are available."""
 
@@ -174,6 +177,7 @@ class ConversationLog:
                     "model_id": model_id,
                     "base_url": base_url,
                     "reasoning_effort": reasoning_effort,
+                    "reasoning_summary": reasoning_summary,
                 }
             )
             self._rewrite_locked()

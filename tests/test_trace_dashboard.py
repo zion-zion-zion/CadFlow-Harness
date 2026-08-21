@@ -6,10 +6,37 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
+from backend.trace import _summary_text
 
 
 def _line(payload: object) -> bytes:
     return (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def test_trace_summary_extracts_responses_reasoning_summary() -> None:
+    record = {
+        "type": "model_response",
+        "payload": {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "reasoning",
+                            "summary": [
+                                {"type": "summary_text", "text": "Checked the CAD constraints."}
+                            ],
+                        },
+                        {"type": "text", "text": "The model is ready."},
+                    ],
+                }
+            ]
+        },
+    }
+
+    assert _summary_text("model_response", record) == (
+        "Reasoning summary: Checked the CAD constraints."
+    )
 
 
 def test_trace_api_lists_projects_reads_incrementally_and_redacts(

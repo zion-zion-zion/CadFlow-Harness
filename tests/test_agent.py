@@ -91,6 +91,7 @@ def test_agent_settings_are_backend_only_and_require_model_credentials() -> None
             "OPENAI_MODEL_ID": "cad-model",
             "OPENAI_BASE_URL": "https://provider.invalid/v1",
             "OPENAI_REASONING_EFFORT": "high",
+            "OPENAI_REASONING_SUMMARY": "auto",
         }
     )
 
@@ -98,6 +99,7 @@ def test_agent_settings_are_backend_only_and_require_model_credentials() -> None
     assert settings.model_id == "cad-model"
     assert settings.base_url == "https://provider.invalid/v1"
     assert settings.reasoning_effort == "high"
+    assert settings.reasoning_summary == "auto"
     assert "secret-key" not in repr(settings)
 
     default_settings = AgentSettings.from_environment(
@@ -119,6 +121,15 @@ def test_agent_settings_are_backend_only_and_require_model_credentials() -> None
         }
     )
     assert chat_settings.reasoning_effort == "none"
+
+    with pytest.raises(AgentConfigurationError, match="OPENAI_REASONING_SUMMARY"):
+        AgentSettings.from_environment(
+            {
+                "OPENAI_API_KEY": "secret-key",
+                "OPENAI_MODEL_ID": "cad-model",
+                "OPENAI_REASONING_SUMMARY": "verbose",
+            }
+        )
 
     with pytest.raises(AgentConfigurationError, match="must be one of"):
         AgentSettings.from_environment(

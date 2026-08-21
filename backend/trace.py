@@ -316,6 +316,11 @@ def _summary_text(event_type: str, record: Mapping[str, Any]) -> str:
         error = payload.get("error", record.get("raw_line", ""))
         return _truncate(_compact_value(error))
 
+    if event_type == "model_response":
+        reasoning = _reasoning_summary(payload.get("messages"))
+        if reasoning:
+            return _truncate(f"Reasoning summary: {reasoning}")
+
     if event_type in {"user_message", "assistant_message", "context_summary"}:
         return _truncate(_compact_value(payload.get("content", "")))
 
@@ -336,6 +341,31 @@ def _summary_text(event_type: str, record: Mapping[str, Any]) -> str:
                 if names:
                     return _truncate("Calls " + ", ".join(names))
     return _truncate(_compact_value(payload or record))
+
+
+def _reasoning_summary(messages: Any) -> str | None:
+    if not isinstance(messages, list):
+        return None
+    summaries: list[str] = []
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, Mapping) or block.get("type") != "reasoning":
+                continue
+            summary_items = block.get("summary")
+            if not isinstance(summary_items, list):
+                continue
+            for item in summary_items:
+                if not isinstance(item, Mapping):
+                    continue
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    summaries.append(text.strip())
+    return "\n\n".join(summaries) or None
 
 
 def _payload(record: Mapping[str, Any]) -> Mapping[str, Any]:

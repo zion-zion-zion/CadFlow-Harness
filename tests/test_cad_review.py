@@ -30,11 +30,13 @@ def test_default_reviewer_uses_responses_api_for_reasoning() -> None:
         api_key = "test-key"
         base_url = "https://provider.invalid/v1"
         reasoning_effort = "high"
+        reasoning_summary = "detailed"
         use_responses_api = True
 
     reviewer = _default_reviewer_factory(_Settings())
 
-    assert reviewer.reasoning_effort == "high"
+    assert reviewer.reasoning_effort is None
+    assert reviewer.reasoning == {"effort": "high", "summary": "detailed"}
     assert reviewer.use_responses_api is True
 
 

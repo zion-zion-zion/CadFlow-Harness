@@ -346,7 +346,19 @@ def _default_reviewer_factory(settings: Any) -> Any:
     }
     if getattr(settings, "base_url", None):
         arguments["base_url"] = settings.base_url
-    if getattr(settings, "reasoning_effort", None):
+    reasoning_parameters = getattr(settings, "reasoning_parameters", None)
+    if reasoning_parameters is None and getattr(settings, "use_responses_api", False):
+        reasoning_parameters = {
+            key: value
+            for key, value in {
+                "effort": getattr(settings, "reasoning_effort", None),
+                "summary": getattr(settings, "reasoning_summary", None),
+            }.items()
+            if value is not None
+        }
+    if reasoning_parameters:
+        arguments["reasoning"] = reasoning_parameters
+    elif getattr(settings, "reasoning_effort", None):
         arguments["reasoning_effort"] = settings.reasoning_effort
     return ChatOpenAI(**arguments)
 

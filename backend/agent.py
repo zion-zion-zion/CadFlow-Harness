@@ -75,12 +75,18 @@ _AGENT_TOOL_DESCRIPTION_OVERRIDES = {
 }
 
 ReasoningEffort = Literal["none", "low", "medium", "high", "max"]
+ReasoningSummary = Literal["auto", "concise", "detailed"]
 REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
     "none",
     "low",
     "medium",
     "high",
     "max",
+)
+REASONING_SUMMARIES: tuple[ReasoningSummary, ...] = (
+    "auto",
+    "concise",
+    "detailed",
 )
 
 
@@ -93,6 +99,7 @@ class AgentSettings:
     base_url: str | None = None
     provider: str = "openai"
     reasoning_effort: ReasoningEffort | None = None
+    reasoning_summary: ReasoningSummary | None = None
 
     @classmethod
     def from_environment(
@@ -115,6 +122,12 @@ class AgentSettings:
             raise AgentConfigurationError(
                 f"OPENAI_REASONING_EFFORT must be one of: {allowed}"
             )
+        reasoning_summary = values.get("OPENAI_REASONING_SUMMARY", "").strip()
+        if reasoning_summary and reasoning_summary not in REASONING_SUMMARIES:
+            allowed = ", ".join(REASONING_SUMMARIES)
+            raise AgentConfigurationError(
+                f"OPENAI_REASONING_SUMMARY must be one of: {allowed}"
+            )
         return cls(
             model_id=values["OPENAI_MODEL_ID"].strip(),
             api_key=values["OPENAI_API_KEY"],
@@ -122,6 +135,11 @@ class AgentSettings:
             reasoning_effort=(
                 cast(ReasoningEffort, reasoning_effort)
                 if reasoning_effort
+                else None
+            ),
+            reasoning_summary=(
+                cast(ReasoningSummary, reasoning_summary)
+                if reasoning_summary
                 else None
             ),
         )
@@ -135,6 +153,19 @@ class AgentSettings:
         """Use Chat Completions only when reasoning is explicitly disabled."""
 
         return self.reasoning_effort != "none"
+
+    @property
+    def reasoning_parameters(self) -> dict[str, str] | None:
+        """Return Responses-only reasoning options, when Responses is active."""
+
+        if not self.use_responses_api:
+            return None
+        parameters: dict[str, str] = {}
+        if self.reasoning_effort is not None:
+            parameters["effort"] = self.reasoning_effort
+        if self.reasoning_summary is not None:
+            parameters["summary"] = self.reasoning_summary
+        return parameters or None
 
 
 @dataclass(frozen=True)
@@ -371,7 +402,9 @@ def build_chat_model(settings: AgentSettings) -> Any:
     }
     if settings.base_url is not None:
         arguments["base_url"] = settings.base_url
-    if settings.reasoning_effort is not None:
+    if settings.reasoning_parameters is not None:
+        arguments["reasoning"] = settings.reasoning_parameters
+    elif settings.reasoning_effort is not None:
         arguments["reasoning_effort"] = settings.reasoning_effort
     return ChatOpenAI(**arguments)
 
@@ -819,6 +852,7 @@ class AgentRunService:
                 model_id=settings.model_id,
                 base_url=settings.base_url,
                 reasoning_effort=settings.reasoning_effort,
+                reasoning_summary=settings.reasoning_summary,
             )
         except Exception as exc:
             reason = _safe_failure_reason(exc)
@@ -1160,6 +1194,8 @@ __all__ = [
     "AgentRunOutcome",
     "AgentRunService",
     "AgentSettings",
+    "ReasoningEffort",
+    "ReasoningSummary",
     "AGENT_RUN_TIMEOUT_SECONDS",
     "MAX_AGENT_RUN_SECONDS",
     "MAX_PROVIDER_RETRIES",
