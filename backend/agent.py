@@ -228,13 +228,36 @@ source before the initial todo plan exists.
 
 ## Implementation and validation loop
 
-Implement the requested geometry in the Project Model Source and local Python
-modules.
+Choose a workflow before implementing the requested geometry:
 
-After the Model Source is complete, call `validate_model`. Treat its
-structured result as the source of truth. Inspect the reported status, failure
-type, location, preflight result, imported modules, geometry facts, Scene
-Artifact status, and diagnostic output.
+- For simple work, implement the complete Model Source and validate it once.
+- For complex single-part work, use staged implementation and validation.
+
+Use judgment rather than a fixed feature-count threshold. Multiple dependent
+boolean feature groups, repeated features, and topology-sensitive finishing
+operations such as fillets, chamfers, or shells are signals that staged work
+will reduce risk.
+
+For complex work, normally plan two to four materially distinct validation
+stages in the todo list. Every stage must leave a runnable Model Source whose
+`build_model` entry point returns exactly one positive-volume solid that is a
+meaningful precursor of the requested final part. For a new part, progress
+from the base solid through major additive or subtractive feature groups and
+then topology-sensitive finishing features. For a complex change to an
+existing implementation, preserve the current model and add requested feature
+groups incrementally instead of rebuilding it without cause. Do not turn a
+requested single part into an assembly merely to split the work into stages.
+
+Call `validate_model` after each planned stage. A successful intermediate
+validation is only a checkpoint: continue to the next planned stage without
+calling `cad_review`. If an intermediate validation fails, repair that stage
+and validate the material source change before adding later feature groups.
+Never stack more features on a failed stage.
+
+For every validation, treat the structured result as the source of truth.
+Inspect the reported status, failure type, location, preflight result,
+imported modules, geometry facts, Scene Artifact status, and diagnostic
+output.
 
 When validation fails:
 
@@ -249,11 +272,12 @@ unrelated changes merely to continue the run.
 If the requested result cannot satisfy the current run contract, stop with a
 failure rather than silently changing the requested geometry or output type.
 
-When validation succeeds, call `cad_review` immediately. The review tool is a
-read-only quality gate and must be called before you claim completion. If it
-returns `fail`, use its structured findings to make a material Model Source
-change, then call `validate_model` and `cad_review` again. Stop only after
-`cad_review` returns `pass` or the request cannot be satisfied.
+When the complete requested geometry passes final validation, call
+`cad_review` immediately. The review tool is a read-only quality gate and must
+be called before you claim completion. If it returns `fail`, use its
+structured findings to make a material Model Source change, then call
+`validate_model` and `cad_review` again. Stop only after `cad_review` returns
+`pass` or the request cannot be satisfied.
 """
 
 
@@ -395,9 +419,11 @@ def create_agent_tools(
     def cad_review() -> dict[str, Any]:
         """Review the latest validated CAD model against the user's request.
 
-        This tool is mandatory after a successful validate_model call. It
-        returns a bounded pass/fail result with structured findings; it never
-        edits model.py or runs a repair loop.
+        This tool is mandatory after the complete requested geometry passes
+        its final validate_model call. Do not call it for successful
+        intermediate checkpoints in a staged build. It returns a bounded
+        pass/fail result with structured findings; it never edits model.py or
+        runs a repair loop.
         """
 
         remaining = require_time_remaining()

@@ -113,6 +113,12 @@ def test_agent_tools_include_the_cad_specific_surface(
     tools = create_agent_tools(restricted)
 
     assert {tool.name for tool in tools} == {"validate_model", "cad_review"}
+    review_tool = next(tool for tool in tools if tool.name == "cad_review")
+    review_description = " ".join(review_tool.description.split())
+    assert "complete requested geometry" in review_description
+    assert "Do not call it for successful intermediate checkpoints" in (
+        review_description
+    )
 
 
 def test_validator_has_no_reference_or_source_write_gate(tmp_path: Path) -> None:
@@ -323,7 +329,26 @@ def test_agent_prompt_requires_diagnostic_repairs_before_retry(tmp_path: Path) -
     assert "Call `validate_model` again only after the source has materially changed." in prompt
     assert "Never retry an unchanged or semantically equivalent Model Source." in prompt
     assert "unrelated changes merely to continue the run." in prompt
-    assert "When validation succeeds, call `cad_review` immediately." in prompt
+    assert "complete requested geometry passes final validation" in prompt
+    assert "`cad_review` immediately" in prompt
+
+
+def test_agent_prompt_stages_complex_single_part_work(tmp_path: Path) -> None:
+    prompt = _build_agent_system_prompt(
+        workspace_root=tmp_path,
+        skill_root=None,
+    )
+
+    assert "For simple work, implement the complete Model Source" in prompt
+    assert "For complex single-part work, use staged implementation" in prompt
+    assert "Use judgment rather than a fixed feature-count threshold." in prompt
+    assert "normally plan two to four materially distinct validation" in prompt
+    assert "returns exactly one positive-volume solid" in prompt
+    assert "preserve the current model and add requested feature" in prompt
+    assert "Do not turn a\nrequested single part into an assembly" in prompt
+    assert "Call `validate_model` after each planned stage." in prompt
+    assert "continue to the next planned stage without\ncalling `cad_review`" in prompt
+    assert "Never stack more features on a failed stage." in prompt
 
 
 def test_agent_prompt_requires_todo_plan_before_source_edits(tmp_path: Path) -> None:
