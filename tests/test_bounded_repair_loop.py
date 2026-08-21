@@ -250,7 +250,9 @@ def test_chat_model_configures_only_two_provider_retries() -> None:
             model_id="cad-model",
             api_key="test-key",
             base_url="https://provider.invalid/v1",
+            reasoning_effort="max",
         )
     )
 
     assert model.max_retries == 2
+    assert model.reasoning_effort == "max"

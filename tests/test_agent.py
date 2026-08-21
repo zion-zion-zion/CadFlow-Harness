@@ -90,16 +90,35 @@ def test_agent_settings_are_backend_only_and_require_model_credentials() -> None
             "OPENAI_API_KEY": "secret-key",
             "OPENAI_MODEL_ID": "cad-model",
             "OPENAI_BASE_URL": "https://provider.invalid/v1",
+            "OPENAI_REASONING_EFFORT": "high",
         }
     )
 
     assert settings.provider == "openai"
     assert settings.model_id == "cad-model"
     assert settings.base_url == "https://provider.invalid/v1"
+    assert settings.reasoning_effort == "high"
     assert "secret-key" not in repr(settings)
+
+    default_settings = AgentSettings.from_environment(
+        {
+            "OPENAI_API_KEY": "secret-key",
+            "OPENAI_MODEL_ID": "cad-model",
+        }
+    )
+    assert default_settings.reasoning_effort is None
 
     with pytest.raises(AgentConfigurationError, match="OPENAI_API_KEY"):
         AgentSettings.from_environment({"OPENAI_MODEL_ID": "cad-model"})
+
+    with pytest.raises(AgentConfigurationError, match="must be one of"):
+        AgentSettings.from_environment(
+            {
+                "OPENAI_API_KEY": "secret-key",
+                "OPENAI_MODEL_ID": "cad-model",
+                "OPENAI_REASONING_EFFORT": "xhigh",
+            }
+        )
 
 
 def test_agent_tools_include_the_cad_specific_surface(

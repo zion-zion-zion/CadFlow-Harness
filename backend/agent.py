@@ -11,7 +11,7 @@ import time
 import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence, cast
 
 from langchain_core.tools import BaseTool, tool
 
@@ -73,6 +73,14 @@ _AGENT_TOOL_DESCRIPTION_OVERRIDES = {
     ),
 }
 
+ReasoningEffort = Literal["low", "medium", "high", "max"]
+REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
+    "low",
+    "medium",
+    "high",
+    "max",
+)
+
 
 @dataclass(frozen=True)
 class AgentSettings:
@@ -82,6 +90,7 @@ class AgentSettings:
     api_key: str = field(repr=False)
     base_url: str | None = None
     provider: str = "openai"
+    reasoning_effort: ReasoningEffort | None = None
 
     @classmethod
     def from_environment(
@@ -98,10 +107,21 @@ class AgentSettings:
                 "missing required Agent configuration: " + ", ".join(missing)
             )
         base_url = values.get("OPENAI_BASE_URL", "").strip() or None
+        reasoning_effort = values.get("OPENAI_REASONING_EFFORT", "").strip()
+        if reasoning_effort and reasoning_effort not in REASONING_EFFORTS:
+            allowed = ", ".join(REASONING_EFFORTS)
+            raise AgentConfigurationError(
+                f"OPENAI_REASONING_EFFORT must be one of: {allowed}"
+            )
         return cls(
             model_id=values["OPENAI_MODEL_ID"].strip(),
             api_key=values["OPENAI_API_KEY"],
             base_url=base_url,
+            reasoning_effort=(
+                cast(ReasoningEffort, reasoning_effort)
+                if reasoning_effort
+                else None
+            ),
         )
 
     @property
@@ -336,6 +356,8 @@ def build_chat_model(settings: AgentSettings) -> Any:
     }
     if settings.base_url is not None:
         arguments["base_url"] = settings.base_url
+    if settings.reasoning_effort is not None:
+        arguments["reasoning_effort"] = settings.reasoning_effort
     return ChatOpenAI(**arguments)
 
 
@@ -779,6 +801,7 @@ class AgentRunService:
                 provider=settings.provider,
                 model_id=settings.model_id,
                 base_url=settings.base_url,
+                reasoning_effort=settings.reasoning_effort,
             )
         except Exception as exc:
             reason = _safe_failure_reason(exc)

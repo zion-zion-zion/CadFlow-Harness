@@ -322,6 +322,8 @@ def _default_reviewer_factory(settings: Any) -> Any:
     }
     if getattr(settings, "base_url", None):
         arguments["base_url"] = settings.base_url
+    if getattr(settings, "reasoning_effort", None):
+        arguments["reasoning_effort"] = settings.reasoning_effort
     return ChatOpenAI(**arguments)
 
 

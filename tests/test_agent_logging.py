@@ -22,6 +22,7 @@ def test_conversation_log_persists_turn_model_and_tool_lifecycle(tmp_path: Path)
         provider="openai",
         model_id="cad-model",
         base_url="https://provider.invalid/v1",
+        reasoning_effort="high",
     )
     handler = trace.callback_handler()
     handler.on_chat_model_start(
@@ -104,6 +105,7 @@ def test_conversation_log_persists_turn_model_and_tool_lifecycle(tmp_path: Path)
         "base_url": "https://provider.invalid/v1",
         "model_id": "cad-model",
         "provider": "openai",
+        "reasoning_effort": "high",
     }
     assert records[-1]["payload"]["status"] == "succeeded"
     assert set(payload) == {
