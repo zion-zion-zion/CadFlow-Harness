@@ -13,6 +13,23 @@ from backend.live_preview import (
     LivePreviewStore,
 )
 from backend.projects import ProjectStore
+from backend.scene_validation import validate_scene_artifact
+
+
+def _scene_payload(path: Path) -> bytes:
+    with cad.Model():
+        package = cad.compile_scene(
+            scene_id="preview",
+            roots=(
+                cad.SceneRoot(
+                    root_id="main",
+                    value=cad.make_box_rsolid(width=1.0, height=1.0, depth=1.0),
+                ),
+            ),
+            source=cad.SceneSource(kind="manual", source_id="test"),
+        )
+        cad.export_scene(package=package, path=path)
+    return path.read_bytes()
 
 
 def _model_source(width: float) -> str:
@@ -43,10 +60,56 @@ def test_live_preview_executor_isolated_from_validation_outputs(tmp_path: Path) 
         executor.close()
 
     assert result.status == "succeeded"
-    assert result.payload is not None and result.payload[:4] == b"glTF"
+    assert result.result_kind == "part"
+    assert result.payload is not None and result.payload[:2] == b"PK"
     assert not (tmp_path / "preview-side-effect.txt").exists()
     assert not (tmp_path / "artifacts").exists()
     assert not (tmp_path / ".cad-review").exists()
+
+
+def test_live_preview_executor_exports_an_assembly_scene(tmp_path: Path) -> None:
+    (tmp_path / "model.py").write_text(
+        """import cadflow as cad
+
+def build_model(model: cad.Model):
+    first = cad.make_part_rpart(
+        part_id="first",
+        body=cad.make_box_rsolid(width=2.0, height=2.0, depth=2.0),
+    )
+    second = cad.make_part_rpart(
+        part_id="second",
+        body=cad.make_box_rsolid(width=1.0, height=1.0, depth=1.0),
+    )
+    assembly = cad.make_assembly_rassembly(assembly_id="pair")
+    assembly = cad.add_component_rassembly(
+        assembly=assembly,
+        item=first,
+        component_id="first",
+        placement=cad.identity_placement_rplacement(),
+    )
+    return cad.add_component_rassembly(
+        assembly=assembly,
+        item=second,
+        component_id="second",
+        placement=cad.make_placement_rplacement(origin=(4.0, 0.0, 0.0)),
+    )
+""",
+        encoding="utf-8",
+    )
+    executor = LivePreviewExecutor()
+    try:
+        result = executor.execute(tmp_path, timeout_seconds=10.0)
+    finally:
+        executor.close()
+
+    assert result.status == "succeeded"
+    assert result.result_kind == "assembly"
+    assert result.payload is not None
+    artifact = tmp_path / "assembly-preview.scene.zip"
+    artifact.write_bytes(result.payload)
+    parsed = validate_scene_artifact(artifact)
+    assert parsed.valid is True
+    assert parsed.geometry_asset_count == 2
 
 
 def test_live_preview_executor_reuses_worker_between_builds(tmp_path: Path) -> None:
@@ -74,16 +137,16 @@ def test_live_preview_executor_reuses_worker_between_builds(tmp_path: Path) -> N
 def test_live_preview_store_keeps_last_model_when_next_build_fails(
     tmp_path: Path,
 ) -> None:
-    with cad.Model() as model:
-        payload = model.box(width=2.0, depth=2.0, height=2.0).preview_glb()
+    payload = _scene_payload(tmp_path / "preview.scene.zip")
     store = LivePreviewStore(tmp_path)
 
-    current = store.publish(payload, "first-hash")
+    current = store.publish(payload, "first-hash", result_kind="part")
     failed = store.write_status("failed", source_hash="second-hash", error="broken")
 
     assert current.revision == 1
     assert failed.revision == 1
     assert failed.artifact_available is True
+    assert failed.result_kind == "part"
     assert store.artifact().read_bytes() == payload
 
 
@@ -93,8 +156,7 @@ def test_scheduler_rebuilds_after_project_python_changes(tmp_path: Path) -> None
     project = projects.submit_prompt(project.project_id, "Create a box")
     project_dir = projects.project_directory(project.project_id)
     project_dir.joinpath("model.py").write_text(_model_source(3.0), encoding="utf-8")
-    with cad.Model() as model:
-        payload = model.box(width=1.0, depth=1.0, height=1.0).preview_glb()
+    payload = _scene_payload(tmp_path / "scheduled.scene.zip")
 
     class RecordingExecutor:
         def __init__(self) -> None:
@@ -102,7 +164,7 @@ def test_scheduler_rebuilds_after_project_python_changes(tmp_path: Path) -> None
 
         def execute(self, root: Path, **_kwargs: object) -> LivePreviewResult:
             self.sources.append(Path(root, "model.py").read_text(encoding="utf-8"))
-            return LivePreviewResult("succeeded", payload=payload)
+            return LivePreviewResult("succeeded", payload=payload, result_kind="part")
 
     executor = RecordingExecutor()
     scheduler = LivePreviewScheduler(
@@ -131,8 +193,7 @@ def test_scheduler_waits_for_build_model_before_previewing(tmp_path: Path) -> No
     project = projects.create_project("Live")
     project = projects.submit_prompt(project.project_id, "Create a box")
     project_dir = projects.project_directory(project.project_id)
-    with cad.Model() as model:
-        payload = model.box(width=1.0, depth=1.0, height=1.0).preview_glb()
+    payload = _scene_payload(tmp_path / "waiting.scene.zip")
 
     class RecordingExecutor:
         def __init__(self) -> None:
@@ -140,7 +201,7 @@ def test_scheduler_waits_for_build_model_before_previewing(tmp_path: Path) -> No
 
         def execute(self, _root: Path, **_kwargs: object) -> LivePreviewResult:
             self.calls += 1
-            return LivePreviewResult("succeeded", payload=payload)
+            return LivePreviewResult("succeeded", payload=payload, result_kind="part")
 
     executor = RecordingExecutor()
     scheduler = LivePreviewScheduler(

@@ -319,8 +319,9 @@ def test_agent_prompt_routes_through_applicable_skills_without_widening_contract
         skill_root=Path(__file__).parents[1] / "skills",
     )
 
-    assert "The current executor accepts one final `cad.Shape`" in prompt
-    assert "not a general limitation of CadFlow" in prompt
+    assert "The current executor accepts either a final `cad.Shape`" in prompt
+    assert "or a final `cad.Assembly`" in prompt
+    assert "not a\ngeneral limitation of CadFlow" in prompt
     assert "Read any relevant CadFlow Skills" in prompt
     assert "You may choose more than one Skill" in prompt
     assert "If Skills disagree, preserve the" in prompt
@@ -365,6 +366,7 @@ def test_agent_prompt_stages_complex_single_part_work(tmp_path: Path) -> None:
     assert "returns exactly one positive-volume solid" in prompt
     assert "preserve the current model and add requested feature" in prompt
     assert "Do not turn a\nrequested single part into an assembly" in prompt
+    assert "For multi-part work, return a `cad.Assembly`" in prompt
     assert "Call `validate_model` after each planned stage." in prompt
     assert "continue to the next planned stage without\ncalling `cad_review`" in prompt
     assert "Never stack more features on a failed stage." in prompt

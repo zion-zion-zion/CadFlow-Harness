@@ -79,16 +79,28 @@ def test_scene_preview_event_and_artifact_are_available_during_a_run(
     project = client.post("/api/projects", json={"name": "Preview"}).json()
     running = app.state.project_store.submit_prompt(project["project_id"], "Create a box.")
     assert running.state is ProjectState.RUNNING
-    with cad.Model() as model:
-        payload = model.box(width=1, depth=1, height=1).preview_glb()
+    scene_path = tmp_path / "preview.scene.zip"
+    with cad.Model():
+        package = cad.compile_scene(
+            scene_id="preview",
+            roots=(
+                cad.SceneRoot(
+                    root_id="main",
+                    value=cad.make_box_rsolid(width=1, height=1, depth=1),
+                ),
+            ),
+            source=cad.SceneSource(kind="manual", source_id="test"),
+        )
+        cad.export_scene(package=package, path=scene_path)
+    payload = scene_path.read_bytes()
     preview_store = LivePreviewStore(tmp_path / project["project_id"])
-    preview_store.publish(payload, "source-hash")
+    preview_store.publish(payload, "source-hash", result_kind="part")
 
     response = client.get(f"/api/projects/{project['project_id']}/preview")
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
-    assert response.headers["content-type"].startswith("model/gltf-binary")
-    assert response.content[:4] == b"glTF"
+    assert response.headers["content-type"].startswith("application/zip")
+    assert response.content[:2] == b"PK"
     preview_store.model_path.write_bytes(b"legacy JSON or a partial frame")
     assert client.get(f"/api/projects/{project['project_id']}/preview").status_code == 404
 

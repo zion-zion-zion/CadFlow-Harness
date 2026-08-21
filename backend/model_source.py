@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,6 +10,17 @@ from pathlib import Path
 MODEL_SOURCE_NAME = "model.py"
 ARTIFACT_DIRECTORY_NAME = "artifacts"
 SCENE_ARTIFACT_NAME = "model.scene.zip"
+_EXCLUDED_SOURCE_ROOTS = frozenset(
+    {
+        ".cad-review",
+        ".git",
+        "__pycache__",
+        ARTIFACT_DIRECTORY_NAME,
+        "conversation_history",
+        "large_tool_results",
+        "previews",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -47,10 +59,57 @@ def create_model_source(
     )
 
 
+def model_source_files(project_dir: str | Path) -> tuple[Path, ...]:
+    """Return the complete executable Python source set for a Project."""
+
+    root = Path(project_dir).expanduser().resolve()
+    return tuple(
+        sorted(
+            path
+            for path in root.rglob("*.py")
+            if path.is_file()
+            and not path.is_symlink()
+            and not any(
+                part in _EXCLUDED_SOURCE_ROOTS
+                for part in path.relative_to(root).parts
+            )
+        )
+    )
+
+
+def model_source_digest(project_dir: str | Path) -> str:
+    """Hash source paths and bytes so helper changes invalidate evidence."""
+
+    root = Path(project_dir).expanduser().resolve()
+    digest = hashlib.sha256()
+    for path in model_source_files(root):
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        payload = path.read_bytes()
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
+def read_model_source_bundle(project_dir: str | Path) -> str:
+    """Read all Project Python sources into one reviewer-friendly document."""
+
+    root = Path(project_dir).expanduser().resolve()
+    sections = []
+    for path in model_source_files(root):
+        relative = path.relative_to(root).as_posix()
+        sections.append(f"# FILE: {relative}\n{path.read_text(encoding='utf-8')}")
+    return "\n\n".join(sections)
+
+
 __all__ = [
     "ARTIFACT_DIRECTORY_NAME",
     "MODEL_SOURCE_NAME",
     "ModelSourceScaffold",
     "SCENE_ARTIFACT_NAME",
     "create_model_source",
+    "model_source_digest",
+    "model_source_files",
+    "read_model_source_bundle",
 ]

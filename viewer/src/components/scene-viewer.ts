@@ -75,6 +75,11 @@ type SceneManifest = {
 };
 type PackageFiles = Record<string, Uint8Array>;
 type PackageRecord = { uri: string; byte_length: number; content_hash: string };
+type SceneLoadOptions = {
+  statusLabel?: string;
+  ready?: boolean;
+  isCurrent?: () => boolean;
+};
 
 const MAX_PACKAGE_BYTES = 256 * 1024 * 1024;
 const MAX_PACKAGE_MEMBERS = 10_000;
@@ -82,7 +87,6 @@ const MAX_UNPACKED_BYTES = 512 * 1024 * 1024;
 const MAX_MEMBER_BYTES = 256 * 1024 * 1024;
 const MAX_SCENE_JSON_BYTES = 8 * 1024 * 1024;
 const MAX_COMPRESSION_RATIO = 100;
-const MAX_PREVIEW_BYTES = 16 * 1024 * 1024;
 const CAD_EDGE_LIGHTNESS_OFFSET = 0.5;
 const CAD_EDGE_LINE_WIDTH = 1.6;
 
@@ -102,7 +106,6 @@ export class SceneViewer {
   private readonly controls: OrbitControls;
   private readonly loader = new GLTFLoader();
   private readonly modelRoot = new THREE.Group();
-  private readonly previewRoot = new THREE.Group();
   private readonly geometryCache = new Map<string, THREE.Object3D>();
   private readonly edgeCache = new Map<string, THREE.Object3D>();
   private readonly definitions = new Map<string, Definition>();
@@ -111,7 +114,6 @@ export class SceneViewer {
   private currentManifest: SceneManifest | null = null;
   private currentFiles: PackageFiles | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  private previewHasFramed = false;
 
   constructor(container: HTMLElement, onStatus: SceneViewerStatus = () => undefined) {
     this.onStatus = onStatus;
@@ -141,11 +143,7 @@ export class SceneViewer {
     this.scene.add(fillLight, fillLight.target);
 
     this.modelRoot.name = 'validated-scene';
-    this.previewRoot.name = 'live-preview';
-    // Native preview GLBs use glTF's Y-up basis: (x, z, -y) / 1000.
-    // The application scene is Z-up, so rotate the preview into that basis.
-    this.previewRoot.rotation.x = Math.PI / 2;
-    this.scene.add(this.modelRoot, this.previewRoot);
+    this.scene.add(this.modelRoot);
     this.resizeObserver = new ResizeObserver(() => this.resize(container));
     this.resizeObserver.observe(container);
     this.resize(container);
@@ -155,7 +153,7 @@ export class SceneViewer {
     });
   }
 
-  async load(blob: Blob): Promise<void> {
+  async load(blob: Blob, options: SceneLoadOptions = {}): Promise<boolean> {
     this.clearModel();
     this.onStatus('Checking Scene Artifact', false);
     try {
@@ -177,65 +175,34 @@ export class SceneViewer {
       for (const definition of manifest.definitions) this.definitions.set(definition.definition_id, definition);
       for (const appearance of manifest.appearances) this.appearances.set(appearance.appearance_id, appearance);
       await this.buildScene();
+      if (!(options.isCurrent ?? (() => true))()) {
+        this.clearModel();
+        return false;
+      }
       this.frame();
-      this.onStatus(
-        `${manifest.geometry_assets.length} geometry asset${manifest.geometry_assets.length === 1 ? '' : 's'} · ${manifest.coordinate_system.length_unit}`,
-        true,
-      );
+      const ready = options.ready ?? true;
+      this.onStatus(ready
+        ? `${manifest.geometry_assets.length} geometry asset${manifest.geometry_assets.length === 1 ? '' : 's'} · ${manifest.coordinate_system.length_unit}`
+        : `${options.statusLabel ?? 'Live preview'} · unvalidated`, ready);
+      return true;
     } catch (error) {
       this.clearModel();
       throw error;
     }
   }
 
-  async loadPreview(
-    payload: ArrayBuffer,
+  async loadPreviewPackage(
+    blob: Blob,
     label: string,
     isCurrent: () => boolean = () => true,
   ): Promise<boolean> {
-    if (payload.byteLength > MAX_PREVIEW_BYTES) {
-      throw new ScenePackageError('Preview frame exceeds the browser size limit');
-    }
-    let next: THREE.Object3D;
-    try {
-      const gltf = await this.loader.parseAsync(payload, '');
-      next = gltf.scene;
-    } catch (error) {
-      throw new ScenePackageError(
-        `Preview frame is not a valid CadFlow GLB: ${error instanceof Error ? error.message : 'parse failed'}`,
-      );
-    }
-    next.name = 'preview-model';
-    next.traverse((object) => {
-      if (!(object instanceof THREE.Mesh)) return;
-      const materials = Array.isArray(object.material) ? object.material : [object.material];
-      for (const material of materials) {
-        if (material instanceof THREE.MeshStandardMaterial) {
-          material.color.set('#b5e87d');
-          material.metalness = 0.18;
-          material.roughness = 0.42;
-          material.side = THREE.DoubleSide;
-        }
-      }
-    });
-    if (!isCurrent()) {
-      this.disposePreviewObject(next);
-      return false;
-    }
-    // Parsing completes before this swap, so a failed or stale frame leaves the
-    // last usable preview visible and its GPU resources intact.
-    this.clearPreview();
-    this.previewRoot.add(next);
-    if (!this.previewHasFramed) {
-      this.frame(this.previewRoot);
-      this.previewHasFramed = true;
-    }
-    this.onStatus(`${label} · unvalidated`, false);
-    return true;
+    return this.load(blob, { statusLabel: label, ready: false, isCurrent });
   }
 
   markPreviewUnvalidated(): void {
-    if (this.previewRoot.children.length > 0) this.onStatus('Last preview · unvalidated', false);
+    if (this.modelRoot.children.length > 0) {
+      this.onStatus('Last preview · unvalidated', false);
+    }
   }
 
   clear(message = 'No validated Scene Artifact'): void {
@@ -244,7 +211,7 @@ export class SceneViewer {
   }
 
   fit(): void {
-    this.frame(this.modelRoot.children.length > 0 ? this.modelRoot : this.previewRoot);
+    this.frame(this.modelRoot);
   }
 
   dispose(): void {
@@ -404,9 +371,6 @@ export class SceneViewer {
     this.modelRoot.traverse((object) => {
       if (object instanceof LineSegments2) object.material.resolution.set(width, height);
     });
-    this.previewRoot.traverse((object) => {
-      if (object instanceof LineSegments2) object.material.resolution.set(width, height);
-    });
   }
 
   private clearModel(): void {
@@ -438,8 +402,6 @@ export class SceneViewer {
       }
     };
     clearRoot(this.modelRoot);
-    clearRoot(this.previewRoot);
-    this.previewHasFramed = false;
     this.geometryCache.clear();
     this.edgeCache.clear();
     this.definitions.clear();
@@ -448,32 +410,6 @@ export class SceneViewer {
     this.currentFiles = null;
   }
 
-  private clearPreview(): void {
-    while (this.previewRoot.children.length) {
-      const child = this.previewRoot.children[0];
-      this.disposePreviewObject(child);
-      this.previewRoot.remove(child);
-    }
-  }
-
-  private disposePreviewObject(root: THREE.Object3D): void {
-    const geometries = new Set<THREE.BufferGeometry>();
-    const materials = new Set<THREE.Material>();
-    root.traverse((object) => {
-      if (!(object instanceof THREE.Mesh || object instanceof THREE.LineSegments || object instanceof THREE.Points)) return;
-      if (!geometries.has(object.geometry)) {
-        object.geometry.dispose();
-        geometries.add(object.geometry);
-      }
-      const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
-      for (const material of objectMaterials) {
-        if (!materials.has(material)) {
-          material.dispose();
-          materials.add(material);
-        }
-      }
-    });
-  }
 }
 
 function bytesFor(files: PackageFiles, uri: string): Uint8Array {
