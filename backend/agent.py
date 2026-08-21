@@ -74,8 +74,9 @@ _AGENT_TOOL_DESCRIPTION_OVERRIDES = {
     ),
 }
 
-ReasoningEffort = Literal["low", "medium", "high", "max"]
+ReasoningEffort = Literal["none", "low", "medium", "high", "max"]
 REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
+    "none",
     "low",
     "medium",
     "high",
@@ -128,6 +129,12 @@ class AgentSettings:
     @property
     def deep_agent_model_spec(self) -> str:
         return f"{self.provider}:{self.model_id}"
+
+    @property
+    def use_responses_api(self) -> bool:
+        """Use Chat Completions only when reasoning is explicitly disabled."""
+
+        return self.reasoning_effort != "none"
 
 
 @dataclass(frozen=True)
@@ -360,6 +367,7 @@ def build_chat_model(settings: AgentSettings) -> Any:
         "api_key": settings.api_key,
         "max_retries": MAX_PROVIDER_RETRIES,
         "timeout": MAX_AGENT_RUN_SECONDS,
+        "use_responses_api": settings.use_responses_api,
     }
     if settings.base_url is not None:
         arguments["base_url"] = settings.base_url

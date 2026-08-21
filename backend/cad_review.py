@@ -342,6 +342,7 @@ def _default_reviewer_factory(settings: Any) -> Any:
         "api_key": settings.api_key,
         "max_retries": 1,
         "timeout": 120,
+        "use_responses_api": settings.use_responses_api,
     }
     if getattr(settings, "base_url", None):
         arguments["base_url"] = settings.base_url

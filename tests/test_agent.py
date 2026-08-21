@@ -111,6 +111,15 @@ def test_agent_settings_are_backend_only_and_require_model_credentials() -> None
     with pytest.raises(AgentConfigurationError, match="OPENAI_API_KEY"):
         AgentSettings.from_environment({"OPENAI_MODEL_ID": "cad-model"})
 
+    chat_settings = AgentSettings.from_environment(
+        {
+            "OPENAI_API_KEY": "secret-key",
+            "OPENAI_MODEL_ID": "cad-model",
+            "OPENAI_REASONING_EFFORT": "none",
+        }
+    )
+    assert chat_settings.reasoning_effort == "none"
+
     with pytest.raises(AgentConfigurationError, match="must be one of"):
         AgentSettings.from_environment(
             {

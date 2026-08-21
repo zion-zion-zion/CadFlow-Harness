@@ -10,6 +10,7 @@ from backend.agent import (
     AgentRunOutcome,
     AgentRunService,
     AgentSettings,
+    ReasoningEffort,
     build_chat_model,
     create_agent_tools,
 )
@@ -244,15 +245,30 @@ def test_agent_run_service_persists_three_attempts_and_removes_partial_output(
     assert records[-1]["payload"]["status"] == "failed"
 
 
-def test_chat_model_configures_only_two_provider_retries() -> None:
+@pytest.mark.parametrize(
+    ("reasoning_effort", "use_responses_api"),
+    [
+        (None, True),
+        ("none", False),
+        ("low", True),
+        ("medium", True),
+        ("high", True),
+        ("max", True),
+    ],
+)
+def test_chat_model_selects_api_for_reasoning_effort(
+    reasoning_effort: ReasoningEffort | None,
+    use_responses_api: bool,
+) -> None:
     model = build_chat_model(
         AgentSettings(
             model_id="cad-model",
             api_key="test-key",
             base_url="https://provider.invalid/v1",
-            reasoning_effort="max",
+            reasoning_effort=reasoning_effort,
         )
     )
 
     assert model.max_retries == 2
-    assert model.reasoning_effort == "max"
+    assert model.reasoning_effort == reasoning_effort
+    assert model.use_responses_api is use_responses_api

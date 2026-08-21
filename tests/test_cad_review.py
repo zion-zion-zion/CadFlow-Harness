@@ -8,7 +8,7 @@ from langchain_core.outputs import ChatGeneration, LLMResult
 
 from backend.agent_logging import ConversationLog
 from backend.cad_executor import CADExecutor, ExecutionResult
-from backend.cad_review import review_cad
+from backend.cad_review import _default_reviewer_factory, review_cad
 from backend.agent import create_agent_tools
 from backend.model_source import create_model_source
 from backend.restricted_tools import AgentModelValidator
@@ -22,6 +22,20 @@ class _FakeReviewer:
     def invoke(self, _messages: object, config: object = None) -> object:
         del config
         return self.payload
+
+
+def test_default_reviewer_uses_responses_api_for_reasoning() -> None:
+    class _Settings:
+        model_id = "cad-model"
+        api_key = "test-key"
+        base_url = "https://provider.invalid/v1"
+        reasoning_effort = "high"
+        use_responses_api = True
+
+    reviewer = _default_reviewer_factory(_Settings())
+
+    assert reviewer.reasoning_effort == "high"
+    assert reviewer.use_responses_api is True
 
 
 def _build_project(tmp_path: Path) -> ExecutionResult:
