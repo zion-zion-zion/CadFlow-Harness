@@ -65,32 +65,6 @@ def test_validate_model_generates_hash_bound_review_evidence(tmp_path: Path) -> 
     assert len(manifest["views"]) == 8
 
 
-def test_review_evidence_hash_covers_local_python_helpers(tmp_path: Path) -> None:
-    scaffold = create_model_source(tmp_path)
-    scaffold.model_path.write_text(
-        "import cadflow as cad\nfrom dimensions import WIDTH\n\n"
-        "def build_model(model: cad.Model):\n"
-        "    return model.box(width=WIDTH, depth=2.0, height=3.0)\n",
-        encoding="utf-8",
-    )
-    helper = tmp_path / "dimensions.py"
-    helper.write_text("WIDTH = 4.0\n", encoding="utf-8")
-
-    first = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
-    helper.write_text("WIDTH = 5.0\n", encoding="utf-8")
-    second = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
-
-    assert first.status == second.status == "succeeded"
-    assert first.review_model_sha256 != second.review_model_sha256
-    manifest = json.loads(
-        (tmp_path / second.review_manifest_path).read_text(encoding="utf-8")
-    )
-    assert [item["path"] for item in manifest["source_files"]] == [
-        "dimensions.py",
-        "model.py",
-    ]
-
-
 def test_review_passes_with_independent_structured_reviewer(tmp_path: Path) -> None:
     execution = _build_project(tmp_path)
     result = review_cad(

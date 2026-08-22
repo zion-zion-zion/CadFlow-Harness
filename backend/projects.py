@@ -218,10 +218,7 @@ class ProjectStore:
             raise ProjectStateError(
                 "cannot mark Project Succeeded without the canonical Scene Artifact"
             )
-        self._commit_artifact_version(
-            project_id,
-            result_kind=_diagnostic_result_kind(diagnostics),
-        )
+        self._commit_artifact_version(project_id)
         return self._mark_terminal(
             project_id,
             state=ProjectState.SUCCEEDED,
@@ -369,24 +366,6 @@ class ProjectStore:
         version = payload.get("version") if isinstance(payload, Mapping) else None
         return version if isinstance(version, int) and not isinstance(version, bool) else None
 
-    def current_result_kind(self, project_id: str) -> str | None:
-        """Return the validated result type, defaulting legacy versions to part."""
-
-        path = self.project_directory(project_id) / CURRENT_ARTIFACT_NAME
-        if not path.is_file() or path.is_symlink():
-            return None
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return None
-        if not isinstance(payload, Mapping):
-            return None
-        value = payload.get("result_kind")
-        if value in {"part", "assembly"}:
-            return str(value)
-        version = payload.get("version")
-        return "part" if isinstance(version, int) and not isinstance(version, bool) else None
-
     def clear_conversation(self, project_id: str) -> Project:
         """Reset one non-running Project and remove its conversation and CAD data."""
 
@@ -432,12 +411,7 @@ class ProjectStore:
             self._write_metadata(project_dir, reset)
             return reset
 
-    def _commit_artifact_version(
-        self,
-        project_id: str,
-        *,
-        result_kind: str,
-    ) -> int:
+    def _commit_artifact_version(self, project_id: str) -> int:
         project_dir = self.project_directory(project_id)
         artifact_dir = project_dir / ARTIFACT_DIRECTORY_NAME
         versions = self._artifact_versions(project_id)
@@ -476,7 +450,6 @@ class ProjectStore:
         manifest = {
             "version": version,
             "created_at": _timestamp(),
-            "result_kind": result_kind,
             "scene": f"{ARTIFACT_DIRECTORY_NAME}/v{version:04d}/files/model.scene.zip",
         }
         _write_json(temporary / "manifest.json", manifest)
@@ -717,16 +690,6 @@ def _replace_project(project: Project, **changes: Any) -> Project:
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
-
-
-def _diagnostic_result_kind(diagnostics: Mapping[str, Any] | None) -> str:
-    if isinstance(diagnostics, Mapping):
-        execution = diagnostics.get("execution_result")
-        if isinstance(execution, Mapping):
-            value = execution.get("result_kind")
-            if value in {"part", "assembly"}:
-                return str(value)
-    return "part"
 
 
 def _artifact_version_limit() -> int:

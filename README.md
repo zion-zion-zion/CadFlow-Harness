@@ -1,7 +1,7 @@
 # CadFlowAgent
 
 CadFlowAgent is a trusted local Text-to-CAD workspace. A user creates one
-Project, submits one complete part or assembly description, and a bounded Deep Agent writes
+Project, submits one complete part description, and a bounded Deep Agent writes
 and validates a CadFlow Python Model Source before the Viewer loads its
 canonical Scene Artifact.
 
@@ -52,33 +52,27 @@ whose descriptions match the request, and reads their full instructions only
 when needed. The skill files are the source of truth for CadFlow workflows and
 API references.
 
-Each Project starts with a non-passing `model.py` scaffold and keeps this stable
-entry point for both parts and assemblies:
+The current application still has a deliberately narrower output contract:
+each Project starts with a non-passing `model.py` scaffold and keeps this stable
+entry point:
 
 ```python
 import cadflow as cad
 
 
-def build_model(model: cad.Model) -> cad.Shape | cad.Assembly:
-    # The Agent replaces this scaffold with the requested model.
+def build_model(model: cad.Model) -> cad.Shape:
+    # The Agent replaces this scaffold with the requested part.
     raise NotImplementedError
 ```
 
 The Agent owns the Project workspace and may add local modules or use any
-already-installed local CadFlow/Python API. A single-part request must return
-one valid `cad.Shape` with exactly one positive-volume solid. A multi-part
-request must return a `cad.Assembly` whose leaf Parts each contain one
-positive-volume `cad.Solid`; multi-solid Shapes and flattened Compounds are not
-accepted as final results. The backend produces
-`artifacts/model.scene.zip`, uses the same Scene package for live preview, and
-records whether the validated result is a part or assembly. Review evidence
-hashes every local Python source file so optional helper modules are covered by
-the same validation and version history as `model.py`.
-
-Agent runs may read repository Skills as a read-only reference, but repository
-examples are not mounted into the Agent workspace. The root `model.py` remains
-the required entry point; helper modules are optional and should follow real
-component or shared-dimension boundaries rather than a fixed file-count rule.
+already-installed local CadFlow/Python API. The backend does not reject an API
+based on its source. The returned value must still be one valid `cad.Shape` with
+one solid and positive volume. The backend creates `artifacts/model.scene.zip`
+after validating the returned Shape and keeps STEP conversion internal to the
+Scene bridge. Agent runs may read repository Skills as a read-only reference,
+but repository examples are not mounted into the Agent workspace. Their
+alternative inputs or output types do not change this Project contract.
 
 ## Checks
 

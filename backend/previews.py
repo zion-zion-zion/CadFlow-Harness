@@ -1,10 +1,30 @@
-"""Errors shared by the browser-facing live preview boundary."""
+"""Validation for browser-facing live GLB previews."""
 
 from __future__ import annotations
 
+import cadflow as cad
+
+
+MAX_PREVIEW_BYTES = 16 * 1024 * 1024
+
 
 class PreviewError(ValueError):
-    """Raised when a live preview artifact is invalid or unavailable."""
+    """Raised when a live preview frame is invalid or unsafe."""
 
 
-__all__ = ["PreviewError"]
+def validate_preview_glb(payload: bytes | bytearray | memoryview) -> None:
+    """Validate one complete native triangle GLB before exposing it."""
+
+    if not isinstance(payload, (bytes, bytearray, memoryview)):
+        raise PreviewError("preview frame must be binary GLB data")
+    if memoryview(payload).nbytes > MAX_PREVIEW_BYTES:
+        raise PreviewError("preview frame exceeds the size limit")
+    try:
+        cad.scene.preflight_glb(payload, expected_kind="triangle")
+    except (TypeError, ValueError) as exc:
+        raise PreviewError("preview frame is not a valid CadFlow triangle GLB") from exc
+__all__ = [
+    "MAX_PREVIEW_BYTES",
+    "PreviewError",
+    "validate_preview_glb",
+]

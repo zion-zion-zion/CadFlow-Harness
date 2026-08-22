@@ -445,8 +445,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="Live preview is unavailable") from exc
         return FileResponse(
             artifact,
-            media_type="application/zip",
-            filename="model.scene.zip",
+            media_type="model/gltf-binary",
             headers={"Cache-Control": "no-store"},
         )
 
@@ -501,7 +500,6 @@ def _project_payload(store: ProjectStore, project: Any) -> dict[str, object]:
         "harness": project.harness.value,
         "scene_available": scene_available,
         "artifact_version": store.current_artifact_version(project.project_id),
-        "result_kind": store.current_result_kind(project.project_id),
         "turn_count": len(store.conversation_turns(project.project_id)),
         "preview": preview.to_dict(),
         "diagnostics_available": diagnostics is not None,

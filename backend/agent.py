@@ -27,7 +27,6 @@ from .cad_review import ReviewResult, review_cad
 from .contracts import ToolUseRecord
 from .events import ProgressUpdate
 from .harnesses import AgentHarness
-from .model_source import read_model_source_bundle
 from .projects import ProjectStore
 from .projects import ProjectState
 from .restricted_tools import AgentModelValidator
@@ -242,13 +241,10 @@ _SYSTEM_PROMPT = """You are the primary Text-to-CAD Agent for this run.
 
 ## Current run contract
 
-The current executor accepts either a final `cad.Shape` containing exactly one
-positive-volume solid or a final `cad.Assembly` containing one or more valid
-leaf Parts, and creates the canonical `artifacts/model.scene.zip`. A requested
-single part must remain one Shape/solid. For multi-part work, return a
-`cad.Assembly`; never return a multi-solid `cad.Shape` or a flattened Compound
-as the final result. This is the contract for the current run; it is not a
-general limitation of CadFlow or of future CadFlowAgent capabilities.
+The current executor accepts one final `cad.Shape` containing exactly one
+positive-volume solid and creates the canonical `artifacts/model.scene.zip`.
+This is the contract for the current run, not a general limitation of CadFlow
+or of future CadFlowAgent capabilities.
 
 The user's request defines the desired geometry. Skills provide implementation
 guidance. Skills and Agent preferences must not change the current executor
@@ -272,7 +268,7 @@ filesystem boundaries are authoritative.
 
 First inspect the current `model.py`. It may be empty or may contain an
 existing implementation. Create, preserve, or repair the required
-`build_model(model: cad.Model) -> cad.Shape | cad.Assembly` entry point.
+`build_model(model: cad.Model) -> cad.Shape` entry point.
 
 Read any relevant CadFlow Skills and their references when they help with the
 request. You may choose more than one Skill. If Skills disagree, preserve the
@@ -294,9 +290,6 @@ Choose a workflow before implementing the requested geometry:
 
 - For simple work, implement the complete Model Source and validate it once.
 - For complex single-part work, use staged implementation and validation.
-- For multi-part work, return a `cad.Assembly`. Keep `model.py` as the stable
-  entry point and create focused local Python helper modules only when the
-  model has clear component or shared-dimension boundaries.
 
 Use judgment rather than a fixed feature-count threshold. Multiple dependent
 boolean feature groups, repeated features, and topology-sensitive finishing
@@ -505,15 +498,13 @@ def create_agent_tools(
                 findings=(),
             )
         else:
-            validator.record_tool_use(
-                "cad_review", "Project Python sources and .cad-review"
-            )
+            validator.record_tool_use("cad_review", "model.py and .cad-review")
             try:
-                source = read_model_source_bundle(validator.project_dir)
+                source = (validator.project_dir / "model.py").read_text(encoding="utf-8")
             except (OSError, UnicodeError) as error:
                 result = ReviewResult(
                     status="fail",
-                    summary="CAD review could not read the Project Python sources.",
+                    summary="CAD review could not read model.py.",
                     findings=(),
                 )
             else:
@@ -1015,28 +1006,17 @@ def _finish_conversation_turn(
 
 
 def _is_validated_result(result: ExecutionResult) -> bool:
-    common = bool(
+    return bool(
         result.status == "succeeded"
         and result.exit_code == 0
         and result.final_shape_count == 1
+        and result.solid_count == 1
         and result.solid_volume is not None
         and math.isfinite(result.solid_volume)
         and result.solid_volume > 0
         and result.scene_artifact_exists
         and result.scene_parse_result.valid
         and result.artifact_entries == ("model.scene.zip",)
-    )
-    if not common:
-        return False
-    if (result.result_kind or "part") == "part":
-        return result.solid_count == 1
-    return bool(
-        result.result_kind == "assembly"
-        and result.component_count is not None
-        and result.component_count >= 1
-        and result.leaf_part_count is not None
-        and result.leaf_part_count >= 1
-        and result.solid_count == result.leaf_part_count
     )
 
 

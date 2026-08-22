@@ -42,7 +42,6 @@ def build_model(model: cad.Model):
     result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
 
     assert result.status == "succeeded"
-    assert result.result_kind == "part"
     assert result.exit_code == 0
     assert result.final_shape_count == 1
     assert result.solid_count == 1
@@ -56,108 +55,6 @@ def build_model(model: cad.Model):
     assert result.preflight_status == "passed"
     assert result.error_type is None
     assert "cadflow" in result.imported_modules
-
-
-def test_cad_execution_accepts_a_multi_part_assembly(tmp_path: Path) -> None:
-    scaffold = create_model_source(tmp_path)
-    scaffold.model_path.write_text(
-        """import cadflow as cad
-
-def build_model(model: cad.Model):
-    housing = cad.make_part_rpart(
-        part_id="housing",
-        body=cad.make_box_rsolid(width=10.0, height=4.0, depth=6.0),
-        name="Housing",
-    )
-    shaft = cad.make_part_rpart(
-        part_id="shaft",
-        body=cad.make_cylinder_rsolid(radius=1.0, height=12.0),
-        name="Shaft",
-    )
-    assembly = cad.make_assembly_rassembly(assembly_id="drive", name="Drive")
-    assembly = cad.add_component_rassembly(
-        assembly=assembly,
-        item=housing,
-        component_id="housing",
-        placement=cad.identity_placement_rplacement(),
-    )
-    return cad.add_component_rassembly(
-        assembly=assembly,
-        item=shaft,
-        component_id="shaft",
-        placement=cad.make_placement_rplacement(origin=(5.0, 2.0, 0.0)),
-    )
-""",
-        encoding="utf-8",
-    )
-
-    result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
-
-    assert result.status == "succeeded"
-    assert result.result_kind == "assembly"
-    assert result.final_shape_count == 1
-    assert result.component_count == 2
-    assert result.leaf_part_count == 2
-    assert result.solid_count == 2
-    assert result.solid_volume is not None and result.solid_volume > 0
-    assert result.scene_parse_result.valid is True
-    assert result.scene_parse_result.geometry_asset_count == 2
-    assert result.artifact_entries == ("model.scene.zip",)
-
-
-def test_cad_execution_accepts_a_single_leaf_assembly(tmp_path: Path) -> None:
-    scaffold = create_model_source(tmp_path)
-    scaffold.model_path.write_text(
-        """import cadflow as cad
-
-def build_model(model: cad.Model):
-    part = cad.make_part_rpart(
-        part_id="seed",
-        body=cad.make_box_rsolid(width=2.0, height=3.0, depth=4.0),
-    )
-    assembly = cad.make_assembly_rassembly(assembly_id="partial")
-    return cad.add_component_rassembly(
-        assembly=assembly,
-        item=part,
-        component_id="seed",
-        placement=cad.identity_placement_rplacement(),
-    )
-""",
-        encoding="utf-8",
-    )
-
-    result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
-
-    assert result.status == "succeeded"
-    assert result.result_kind == "assembly"
-    assert result.component_count == result.leaf_part_count == result.solid_count == 1
-
-
-def test_multi_solid_shape_requires_an_assembly_result(tmp_path: Path) -> None:
-    scaffold = create_model_source(tmp_path)
-    scaffold.model_path.write_text(
-        """import cadflow as cad
-
-def build_model(model: cad.Model):
-    first = model.box(width=2.0, depth=2.0, height=2.0)
-    second = model.translate(
-        model.box(width=2.0, depth=2.0, height=2.0),
-        x=10.0,
-        y=0.0,
-        z=0.0,
-    )
-    return model.union(first, second)
-""",
-        encoding="utf-8",
-    )
-
-    result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
-
-    assert result.status == "failed"
-    assert result.result_kind == "part"
-    assert result.solid_count == 2
-    assert "must return cad.Assembly" in (result.error or "")
-    assert not result.scene_artifact_exists
 
 
 def test_nonzero_model_exit_is_observable(tmp_path: Path) -> None:
@@ -282,8 +179,7 @@ def build_model(model: cad.Model):
     result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
 
     assert result.status == "failed"
-    assert result.result_kind == "part"
-    assert result.final_shape_count == 1
+    assert result.final_shape_count is None
     assert "solid-compatible" in (result.error or "")
 
 

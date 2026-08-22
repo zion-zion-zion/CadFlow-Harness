@@ -24,7 +24,6 @@ type LivePreviewStatus = {
   stdout: string | null;
   stderr: string | null;
   artifact_available: boolean;
-  result_kind: 'part' | 'assembly' | null;
 };
 type Project = {
   project_id: string;
@@ -37,7 +36,6 @@ type Project = {
   harness: AgentHarness;
   scene_available: boolean;
   artifact_version: number | null;
-  result_kind: 'part' | 'assembly' | null;
   turn_count: number;
   diagnostics_available: boolean;
   duration_seconds: number | null;
@@ -564,12 +562,12 @@ async function loadLivePreview(project: Project, version: number): Promise<void>
     latestPreviewRevision = revision;
     const response = await fetch(`/api/projects/${encodeURIComponent(project.project_id)}/preview`, {
       signal: controller.signal,
-      headers: { Accept: 'application/zip' },
+      headers: { Accept: 'model/gltf-binary' },
     });
     if (!response.ok) throw new Error(`Preview request failed (${response.status})`);
-    const payload = await response.blob();
+    const payload = await response.arrayBuffer();
     if (!isCurrentPreview(project.project_id, version, revision)) return;
-    const displayed = await sceneViewer.loadPreviewPackage(
+    const displayed = await sceneViewer.loadPreview(
       payload,
       project.state === 'Running' ? 'Live preview' : 'Last preview',
       () => isCurrentPreview(project.project_id, version, revision),

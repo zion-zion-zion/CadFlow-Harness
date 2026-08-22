@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from .cad_executor import ExecutionResult
-from .model_source import model_source_digest
 
 
 REVIEWER_VERSION = "cad-review-v1"
@@ -271,35 +270,13 @@ def _deterministic_findings(
             )
         )
         return findings
-    result_kind = execution_result.result_kind or "part"
-    if result_kind == "part":
-        if execution_result.solid_count != 1 or execution_result.final_shape_count != 1:
-            findings.append(
-                _finding(
-                    category="geometry",
-                    severity="blocking",
-                    requirement="A part result contains exactly one solid Shape.",
-                    observed=f"shape_count={execution_result.final_shape_count}, solid_count={execution_result.solid_count}",
-                )
-            )
-    elif (
-        execution_result.final_shape_count != 1
-        or execution_result.component_count is None
-        or execution_result.component_count < 1
-        or execution_result.leaf_part_count is None
-        or execution_result.leaf_part_count < 1
-        or execution_result.solid_count != execution_result.leaf_part_count
-    ):
+    if execution_result.solid_count != 1 or execution_result.final_shape_count != 1:
         findings.append(
             _finding(
                 category="geometry",
                 severity="blocking",
-                requirement="An assembly contains valid one-solid leaf Parts.",
-                observed=(
-                    f"component_count={execution_result.component_count}, "
-                    f"leaf_part_count={execution_result.leaf_part_count}, "
-                    f"solid_count={execution_result.solid_count}"
-                ),
+                requirement="The result contains exactly one solid shape.",
+                observed=f"shape_count={execution_result.final_shape_count}, solid_count={execution_result.solid_count}",
             )
         )
     if execution_result.solid_volume is None or execution_result.solid_volume <= 0:
@@ -380,7 +357,7 @@ def _review_prompt(
         "Return JSON with status (pass or fail), summary, findings, and "
         "checked_requirements. Any clear conflict is fail; otherwise pass.\n\n"
         f"USER REQUEST:\n{request_text[:MAX_REQUEST_CHARS]}\n\n"
-        f"MODEL SOURCE:\n{model_source[:MAX_MODEL_SOURCE_CHARS]}\n\n"
+        f"MODEL.PY:\n{model_source[:MAX_MODEL_SOURCE_CHARS]}\n\n"
         f"DETERMINISTIC EVIDENCE:\n{json.dumps(manifest, sort_keys=True)}"
     )
 
@@ -502,31 +479,10 @@ def review_cad(
                 _finding(
                     category="review_infrastructure",
                     severity="blocking",
-                    requirement="Evidence is bound to the current Model Source revision.",
+                    requirement="Evidence is bound to the current model.py revision.",
                     observed="The manifest model hash does not match the execution result.",
                 )
             )
-        try:
-            current_source_digest = model_source_digest(project_path)
-        except OSError as error:
-            evidence_findings.append(
-                _finding(
-                    category="review_infrastructure",
-                    severity="blocking",
-                    requirement="The complete current Model Source can be hashed.",
-                    observed=f"Source hashing failed: {type(error).__name__}.",
-                )
-            )
-        else:
-            if current_source_digest != execution_result.review_model_sha256:
-                evidence_findings.append(
-                    _finding(
-                        category="review_infrastructure",
-                        severity="blocking",
-                        requirement="Evidence covers every current Python source file.",
-                        observed="Project Python sources changed after CAD execution.",
-                    )
-                )
     findings = _deterministic_findings(execution_result, manifest)
     findings.extend(evidence_findings)
     checked = (

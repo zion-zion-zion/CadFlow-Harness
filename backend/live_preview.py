@@ -20,19 +20,18 @@ from pathlib import Path
 from typing import BinaryIO, Callable, Protocol
 
 from .cad_executor import CancellationToken, build_cad_environment, redact_credentials
-from .model_source import SCENE_ARTIFACT_NAME
-from .previews import PreviewError
+from .previews import PreviewError, validate_preview_glb
 from .projects import ProjectState, ProjectStore
-from .scene_validation import validate_scene_artifact
 
 
 PREVIEW_DEBOUNCE_SECONDS = 0.2
 PREVIEW_POLL_SECONDS = 0.1
 PREVIEW_TIMEOUT_SECONDS = 15.0
+PREVIEW_DEFLECTION = 1.0
 PREVIEW_OUTPUT_BYTES = 64 * 1024
 LIVE_PREVIEW_DIRECTORY = "previews/live"
 LIVE_PREVIEW_STATUS_NAME = "status.json"
-LIVE_PREVIEW_MODEL_NAME = SCENE_ARTIFACT_NAME
+LIVE_PREVIEW_MODEL_NAME = "model.glb"
 
 _EXCLUDED_ROOT_NAMES = frozenset(
     {
@@ -66,7 +65,6 @@ class LivePreviewStatus:
     stdout: str | None = None
     stderr: str | None = None
     artifact_available: bool = False
-    result_kind: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -78,7 +76,6 @@ class LivePreviewStatus:
             "stdout": self.stdout,
             "stderr": self.stderr,
             "artifact_available": self.artifact_available,
-            "result_kind": self.result_kind,
         }
 
 
@@ -89,7 +86,6 @@ class LivePreviewResult:
     error: str | None = None
     stdout: str = ""
     stderr: str = ""
-    result_kind: str | None = None
 
 
 class LivePreviewRunner(Protocol):
@@ -129,7 +125,6 @@ class LivePreviewStore:
                     stdout=_optional_text(value.get("stdout")),
                     stderr=_optional_text(value.get("stderr")),
                     artifact_available=self._artifact_available(),
-                    result_kind=_optional_result_kind(value.get("result_kind")),
                 )
             except (OSError, TypeError, ValueError, json.JSONDecodeError):
                 return LivePreviewStatus(
@@ -146,7 +141,6 @@ class LivePreviewStore:
         error: str | None = None,
         stdout: str | None = None,
         stderr: str | None = None,
-        result_kind: str | None = None,
     ) -> LivePreviewStatus:
         with self._lock:
             previous = self.read_status()
@@ -159,36 +153,24 @@ class LivePreviewStore:
                 stdout=_bounded(stdout),
                 stderr=_bounded(stderr),
                 artifact_available=self._artifact_available(),
-                result_kind=result_kind or previous.result_kind,
             )
             self._write_status(status)
             return status
 
-    def publish(
-        self,
-        payload: bytes,
-        source_hash: str,
-        *,
-        result_kind: str | None = None,
-    ) -> LivePreviewStatus:
+    def publish(self, payload: bytes, source_hash: str) -> LivePreviewStatus:
+        validate_preview_glb(payload)
         with self._lock:
             self.root.mkdir(parents=True, exist_ok=True)
             previous = self.read_status()
             temporary = self.root / f".{LIVE_PREVIEW_MODEL_NAME}.{uuid.uuid4().hex}.tmp"
-            try:
-                temporary.write_bytes(payload)
-                _require_valid_scene(temporary)
-                temporary.replace(self.model_path)
-            finally:
-                if temporary.exists():
-                    temporary.unlink()
+            temporary.write_bytes(payload)
+            temporary.replace(self.model_path)
             status = LivePreviewStatus(
                 state="current",
                 revision=previous.revision + 1,
                 source_hash=source_hash,
                 updated_at=_timestamp(),
                 artifact_available=True,
-                result_kind=_optional_result_kind(result_kind),
             )
             self._write_status(status)
             return status
@@ -197,7 +179,7 @@ class LivePreviewStore:
         with self._lock:
             if not self._artifact_available():
                 raise PreviewError("live preview is missing")
-            _require_valid_scene(self.model_path)
+            validate_preview_glb(self.model_path.read_bytes())
             return self.model_path
 
     def clear(self) -> None:
@@ -292,6 +274,7 @@ class LivePreviewExecutor:
                         "response_path": str(response_path),
                         "stdout_path": str(stdout_path),
                         "stderr_path": str(stderr_path),
+                        "deflection": PREVIEW_DEFLECTION,
                     }
                     with self._process_lock:
                         if self._process is not process or process.stdin is None:
@@ -339,14 +322,10 @@ class LivePreviewExecutor:
                         stdout=stdout,
                         stderr=stderr,
                     )
-                _require_valid_scene(output_path)
                 payload = output_path.read_bytes()
+                validate_preview_glb(payload)
                 return LivePreviewResult(
-                    "succeeded",
-                    payload=payload,
-                    stdout=stdout,
-                    stderr=stderr,
-                    result_kind=_optional_result_kind(response.get("result_kind")),
+                    "succeeded", payload=payload, stdout=stdout, stderr=stderr
                 )
         except (OSError, PreviewError, ValueError) as exc:
             return LivePreviewResult("failed", error=redact_credentials(str(exc)))
@@ -638,11 +617,7 @@ class LivePreviewScheduler:
             store = LivePreviewStore(self.store.project_directory(project_id))
             if result.status == "succeeded" and result.payload is not None:
                 try:
-                    status = store.publish(
-                        result.payload,
-                        source_hash,
-                        result_kind=result.result_kind,
-                    )
+                    status = store.publish(result.payload, source_hash)
                 except (OSError, PreviewError) as exc:
                     status = store.write_status("failed", source_hash=source_hash, error=str(exc))
             else:
@@ -787,16 +762,6 @@ def _optional_text(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _optional_result_kind(value: object) -> str | None:
-    return value if value in {"part", "assembly"} else None
-
-
-def _require_valid_scene(path: Path) -> None:
-    result = validate_scene_artifact(path)
-    if not result.valid:
-        raise PreviewError(result.error or "live preview Scene Artifact is invalid")
-
-
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
@@ -808,7 +773,6 @@ import json
 import os
 import runpy
 import sys
-import tempfile
 import traceback
 from pathlib import Path
 
@@ -852,59 +816,17 @@ for line in sys.stdin.buffer:
                 build_model = namespace.get("build_model")
                 if not callable(build_model):
                     raise RuntimeError(
-                        "Model Source must define "
-                        "build_model(model) -> cad.Shape | cad.Assembly"
+                        "Model Source must define build_model(model) -> cad.Shape"
                     )
                 with cad.Model() as model:
-                    final_result = build_model(model)
-                    if isinstance(final_result, cad.Shape):
-                        solid_count = int(final_result.topology.get("solids", 0))
-                        if solid_count != 1:
-                            raise ValueError(
-                                "Model Source cad.Shape must contain exactly one solid; "
-                                "multi-part models must return cad.Assembly"
-                            )
-                        with tempfile.TemporaryDirectory(
-                            prefix="cadflow-preview-bridge-"
-                        ) as bridge_dir:
-                            step_path = Path(bridge_dir) / "model.step"
-                            final_result.export_step(str(step_path))
-                            compat_solid = cad.Solid(
-                                cad.inspection.brep.load_step_rshape(step_path)
-                            )
-                            package = cad.compile_scene(
-                                scene_id="preview",
-                                roots=(
-                                    cad.SceneRoot(
-                                        root_id="main", value=compat_solid
-                                    ),
-                                ),
-                                source=cad.SceneSource(
-                                    kind="manual", source_id="model.py"
-                                ),
-                            )
-                        result_kind = "part"
-                    elif isinstance(final_result, cad.Assembly):
-                        if not final_result.components:
-                            raise ValueError(
-                                "Model Source Assembly must contain at least one component"
-                            )
-                        package = cad.compile_scene(
-                            scene_id="preview",
-                            roots=(
-                                cad.SceneRoot(root_id="main", value=final_result),
-                            ),
-                            source=cad.SceneSource(
-                                kind="manual", source_id="model.py"
-                            ),
-                        )
-                        result_kind = "assembly"
-                    else:
-                        raise TypeError(
-                            "Model Source must return one CadFlow Shape or cad.Assembly"
-                        )
-                    cad.export_scene(package=package, path=output_path)
-                response = {"status": "succeeded", "result_kind": result_kind}
+                    final_shape = build_model(model)
+                    if not isinstance(final_shape, cad.Shape):
+                        raise TypeError("Model Source must return one CadFlow Shape")
+                    payload = final_shape.preview_glb(
+                        deflection=float(request["deflection"])
+                    )
+                    output_path.write_bytes(payload)
+                response = {"status": "succeeded"}
             except BaseException as exc:
                 traceback.print_exc()
                 response = {"status": "failed", "error": str(exc)}

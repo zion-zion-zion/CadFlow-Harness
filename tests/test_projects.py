@@ -188,26 +188,6 @@ def test_success_requires_the_canonical_scene_artifact(tmp_path: Path) -> None:
 
     assert succeeded.state is ProjectState.SUCCEEDED
     assert store.scene_artifact(project.project_id).name == "model.scene.zip"
-    assert store.current_result_kind(project.project_id) == "part"
-
-
-def test_success_persists_the_validated_result_kind(tmp_path: Path) -> None:
-    store = ProjectStore(tmp_path)
-    project = store.create_project("Assembly result")
-    store.submit_prompt(project.project_id, "Create an assembly.")
-    artifact_dir = tmp_path / project.project_id / "artifacts"
-    (artifact_dir / "model.scene.zip").write_bytes(b"validated elsewhere")
-
-    store.mark_succeeded(
-        project.project_id,
-        {"execution_result": {"result_kind": "assembly"}},
-    )
-
-    current = json.loads(
-        (tmp_path / project.project_id / "current.json").read_text(encoding="utf-8")
-    )
-    assert current["result_kind"] == "assembly"
-    assert store.current_result_kind(project.project_id) == "assembly"
 
 
 def test_failed_follow_up_restores_the_previous_source_tree(tmp_path: Path) -> None:
