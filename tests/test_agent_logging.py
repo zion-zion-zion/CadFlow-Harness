@@ -41,9 +41,9 @@ def test_conversation_log_persists_turn_model_and_tool_lifecycle(tmp_path: Path)
     )
     handler.on_tool_start(
         {"name": "write_file"},
-        '{"file_path":"model.py","content":"print(1)"}',
+        '{"file_path":"/code/model.py","content":"print(1)"}',
         run_id="tool-1",
-        inputs={"file_path": "model.py", "content": long_text},
+        inputs={"file_path": "/code/model.py", "content": long_text},
     )
     handler.on_tool_end(
         ToolMessage(
@@ -84,7 +84,7 @@ def test_conversation_log_persists_turn_model_and_tool_lifecycle(tmp_path: Path)
         ),
         run_id="model-1",
     )
-    trace.record_internal_tool("validate_model", "model.py")
+    trace.record_internal_tool("validate_model", "code/model.py")
     trace.finish(
         status="succeeded",
     )

@@ -20,6 +20,8 @@ from .model_source import (
     ARTIFACT_DIRECTORY_NAME,
     MODEL_SOURCE_NAME,
     SCENE_ARTIFACT_NAME,
+    create_model_source,
+    project_code_directory,
 )
 from .scene_validation import SceneParseResult, validate_scene_artifact
 
@@ -238,7 +240,7 @@ class CADExecutor:
         cancellation_token: object | None = None,
         attempt: int = 1,
     ) -> ExecutionResult:
-        """Execute ``model.py`` in the Project's working directory.
+        """Execute ``code/model.py`` in the Project's working directory.
 
         The source is intentionally executed without policy-based AST, import,
         or dangerous-call inspection. The compile/import preflight only reports
@@ -250,7 +252,8 @@ class CADExecutor:
 
         started = time.monotonic()
         root = Path(project_dir).expanduser().resolve()
-        model_path = root / MODEL_SOURCE_NAME
+        code_dir = project_code_directory(root)
+        model_path = code_dir / MODEL_SOURCE_NAME
         artifact_dir = root / ARTIFACT_DIRECTORY_NAME
         scene_path = artifact_dir / SCENE_ARTIFACT_NAME
         process: subprocess.Popen[bytes] | None = None
@@ -265,13 +268,18 @@ class CADExecutor:
         stderr_collector = _OutputCollector(max_output_bytes)
 
         try:
+            # This call also migrates a pre-``code/`` Project once, preserving
+            # the source before the trusted subprocess starts.
+            scaffold = create_model_source(root, overwrite=False)
+            code_dir = scaffold.code_dir
+            model_path = scaffold.model_path
             if timeout_seconds <= 0 or not math.isfinite(timeout_seconds):
                 raise ValueError("timeout_seconds must be finite and positive")
             if max_output_bytes < 0:
                 raise ValueError("max_output_bytes must not be negative")
             if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
                 raise ValueError("attempt must be a positive integer")
-            self._validate_project_paths(root, model_path, artifact_dir)
+            self._validate_project_paths(root, code_dir, model_path, artifact_dir)
             self._clear_artifacts(artifact_dir)
             if _is_cancelled(cancellation_token):
                 forced_status = "cancelled"
@@ -286,6 +294,8 @@ class CADExecutor:
                             "-c",
                             _RUNNER_SOURCE,
                             str(model_path),
+                            str(root),
+                            str(code_dir),
                         ],
                         cwd=root,
                         env=build_cad_environment(),
@@ -470,19 +480,31 @@ class CADExecutor:
 
     @staticmethod
     def _validate_project_paths(
-        root: Path, model_path: Path, artifact_dir: Path
+        root: Path, code_dir: Path, model_path: Path, artifact_dir: Path
     ) -> None:
         if not root.is_dir():
             raise ValueError("Project working directory does not exist")
+        if code_dir.is_symlink():
+            raise ValueError("Project code directory must not be a symlink")
+        if not code_dir.is_dir():
+            raise ValueError("Project code directory does not exist")
+        for source_path in code_dir.rglob("*"):
+            if source_path.is_symlink():
+                raise ValueError("Project code sources must not be symbolic links")
         if model_path.is_symlink():
             raise ValueError("Model Source must not be a symlink")
-        if not _is_under(model_path.resolve(), root):
-            raise ValueError("Model Source is outside the Project")
+        if not _is_under(model_path.resolve(), code_dir):
+            raise ValueError("Model Source is outside Project code")
         if not model_path.is_file():
             raise ValueError("current Project Model Source is missing")
         if artifact_dir.is_symlink():
             raise ValueError("Project artifact directory must not be a symlink")
         artifact_dir.mkdir(parents=True, exist_ok=True)
+        review_dir = root / ".cad-review"
+        if review_dir.is_symlink():
+            raise ValueError("Project CAD review directory must not be a symlink")
+        if review_dir.exists() and not review_dir.is_dir():
+            raise ValueError("Project CAD review path must be a directory")
 
     @staticmethod
     def _clear_artifacts(artifact_dir: Path) -> None:
@@ -760,6 +782,12 @@ import cadflow as cad
 
 
 model_path = Path(sys.argv[1]).resolve()
+project_root = Path(sys.argv[2]).resolve()
+code_root = Path(sys.argv[3]).resolve()
+if not code_root.is_dir() or not project_root.is_dir():
+    raise RuntimeError("Project code or working directory is missing")
+sys.path.insert(0, str(code_root))
+os.chdir(project_root)
 imported_modules = {{"cadflow"}}
 real_import = builtins.__import__
 
@@ -788,9 +816,9 @@ with cad.Model() as model:
     topology = final_shape.topology
     solid_count = int(topology.get("solids", 0))
     solid_volume = float(final_shape.volume)
-    artifact_dir = model_path.parent / "artifacts"
+    artifact_dir = project_root / "artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".cadflow-bridge-", dir=model_path.parent) as bridge_dir:
+    with tempfile.TemporaryDirectory(prefix=".cadflow-bridge-", dir=project_root) as bridge_dir:
         step_path = Path(bridge_dir) / "model.step"
         final_shape.export_step(str(step_path))
         ocp_shape = cad.inspection.brep.load_step_rshape(step_path)
@@ -798,6 +826,8 @@ with cad.Model() as model:
         package = cad.compile_scene(
             scene_id="model",
             roots=(cad.SceneRoot(root_id="main", value=compat_solid),),
+            # `source_id` is a logical Scene identifier; the physical source
+            # path is bound separately by the review manifest.
             source=cad.SceneSource(kind="manual", source_id="model.py"),
         )
         cad.export_scene(
@@ -807,12 +837,21 @@ with cad.Model() as model:
 
         review_artifact_dir = None
         review_manifest_path = None
-        review_model_sha256 = hashlib.sha256(model_path.read_bytes()).hexdigest()
+        review_digest = hashlib.sha256()
+        for source_path in sorted(code_root.rglob("*.py")):
+            if source_path.is_file() and not source_path.is_symlink():
+                relative = source_path.relative_to(code_root).as_posix().encode("utf-8")
+                payload = source_path.read_bytes()
+                review_digest.update(len(relative).to_bytes(4, "big"))
+                review_digest.update(relative)
+                review_digest.update(len(payload).to_bytes(8, "big"))
+                review_digest.update(payload)
+        review_model_sha256 = review_digest.hexdigest()
         review_evidence_error = None
         try:
             from cadflow.inspect import brep
 
-            review_root = model_path.parent / ".cad-review" / review_model_sha256
+            review_root = project_root / ".cad-review" / review_model_sha256
             review_root.mkdir(parents=True, exist_ok=True)
             single_render_path = review_root / "isometric.png"
             contact_sheet_path = review_root / "contact-sheet.png"
@@ -881,8 +920,8 @@ with cad.Model() as model:
                 encoding="utf-8",
             )
             os.replace(temporary_manifest, manifest_path)
-            review_artifact_dir = str(review_root.relative_to(model_path.parent))
-            review_manifest_path = str(manifest_path.relative_to(model_path.parent))
+            review_artifact_dir = str(review_root.relative_to(project_root))
+            review_manifest_path = str(manifest_path.relative_to(project_root))
         except Exception as error:
             review_evidence_error = type(error).__name__ + ": " + str(error)
 

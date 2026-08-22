@@ -30,11 +30,16 @@ def test_cancellation_token_preserves_the_first_cancellation_reason() -> None:
 
 def test_cad_execution_returns_validated_scene_facts(tmp_path: Path) -> None:
     scaffold = create_model_source(tmp_path)
+    (scaffold.code_dir / "dimensions.py").write_text(
+        "BOX_SIZE = 10.0\n",
+        encoding="utf-8",
+    )
     scaffold.model_path.write_text(
-        """import cadflow as cad
+        """from dimensions import BOX_SIZE
+import cadflow as cad
 
 def build_model(model: cad.Model):
-    return model.box(width=10.0, depth=10.0, height=10.0)
+    return model.box(width=BOX_SIZE, depth=BOX_SIZE, height=BOX_SIZE)
 """,
         encoding="utf-8",
     )
@@ -55,6 +60,7 @@ def build_model(model: cad.Model):
     assert result.preflight_status == "passed"
     assert result.error_type is None
     assert "cadflow" in result.imported_modules
+    assert "dimensions" in result.imported_modules
 
 
 def test_nonzero_model_exit_is_observable(tmp_path: Path) -> None:
@@ -189,7 +195,7 @@ def test_unexpected_artifact_member_is_not_a_validated_result(tmp_path: Path) ->
         """from pathlib import Path
 import cadflow as cad
 
-PROJECT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = Path(__file__).resolve().parent.parent
 ARTIFACT_DIR = PROJECT_DIR / "artifacts"
 
 def build_model(model: cad.Model):

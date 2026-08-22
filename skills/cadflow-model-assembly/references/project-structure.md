@@ -18,10 +18,12 @@ product_name/
 `-- collision_probe.py Optional focused verifier for expensive collision runs
 ```
 
-Under the CadFlowAgent single-file entry contract, keep `model.py` as the
-required entry point and place the same responsibilities in local helper
-modules. The active executor contract still decides which final value can be
-returned; module layout does not broaden it.
+Under the CadFlowAgent single-file entry contract, keep `code/model.py` as the
+required entry point and place the same responsibilities in local Python
+helper modules under `code/`. Project logs, previews, review evidence, and CAD
+artifacts are runtime data outside the Agent workspace. The active executor
+contract still decides which final value can be returned; module layout does
+not broaden it.
 
 ## Design contract
 

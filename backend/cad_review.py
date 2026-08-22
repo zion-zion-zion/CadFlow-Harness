@@ -479,7 +479,7 @@ def review_cad(
                 _finding(
                     category="review_infrastructure",
                     severity="blocking",
-                    requirement="Evidence is bound to the current model.py revision.",
+                    requirement="Evidence is bound to the current code/model.py source revision.",
                     observed="The manifest model hash does not match the execution result.",
                 )
             )

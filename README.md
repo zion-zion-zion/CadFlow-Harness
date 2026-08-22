@@ -53,8 +53,8 @@ when needed. The skill files are the source of truth for CadFlow workflows and
 API references.
 
 The current application still has a deliberately narrower output contract:
-each Project starts with a non-passing `model.py` scaffold and keeps this stable
-entry point:
+each Project starts with a non-passing `code/model.py` scaffold and keeps this
+stable entry point:
 
 ```python
 import cadflow as cad
@@ -65,14 +65,16 @@ def build_model(model: cad.Model) -> cad.Shape:
     raise NotImplementedError
 ```
 
-The Agent owns the Project workspace and may add local modules or use any
-already-installed local CadFlow/Python API. The backend does not reject an API
-based on its source. The returned value must still be one valid `cad.Shape` with
-one solid and positive volume. The backend creates `artifacts/model.scene.zip`
-after validating the returned Shape and keeps STEP conversion internal to the
-Scene bridge. Agent runs may read repository Skills as a read-only reference,
-but repository examples are not mounted into the Agent workspace. Their
-alternative inputs or output types do not change this Project contract.
+The Agent's writable workspace is the Project's `code/` directory. It may read
+and write only `*.py` files there, including local helper modules. Project
+metadata, conversation logs, previews, review evidence, and CAD artifacts stay
+outside that workspace. Skills are available through a separate read-only
+reference mount; repository examples are not mounted into the Agent workspace.
+The returned value must still be one valid `cad.Shape` with one solid and
+positive volume. The backend creates `artifacts/model.scene.zip` after
+validating the returned Shape and keeps STEP conversion internal to the Scene
+bridge. These runtime paths and alternative inputs or output types do not
+change the Project contract.
 
 ## Checks
 

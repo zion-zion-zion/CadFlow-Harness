@@ -16,7 +16,12 @@ from typing import Any, Mapping
 
 from .agent_logging import ConversationLog
 from .harnesses import AgentHarness
-from .model_source import ARTIFACT_DIRECTORY_NAME, create_model_source
+from .model_source import (
+    ARTIFACT_DIRECTORY_NAME,
+    CODE_DIRECTORY_NAME,
+    MODEL_SOURCE_NAME,
+    create_model_source,
+)
 
 
 MAX_PROMPT_CHARS = 32_000
@@ -105,6 +110,10 @@ class ProjectStore:
         for project_dir in self.root.iterdir():
             if project_dir.is_dir() and _PROJECT_ID_PATTERN.fullmatch(project_dir.name):
                 try:
+                    # Migrate legacy root-level model.py files while the
+                    # Project is discovered. Runtime files remain outside the
+                    # Agent's source mount.
+                    self._ensure_source_layout(project_dir)
                     ConversationLog(project_dir)
                 except (OSError, ValueError):
                     continue
@@ -142,6 +151,7 @@ class ProjectStore:
                 if not child.is_dir() or not _PROJECT_ID_PATTERN.fullmatch(child.name):
                     continue
                 try:
+                    self._ensure_source_layout(child)
                     projects.append(self._read_project(child))
                 except (OSError, ProjectError, json.JSONDecodeError):
                     continue
@@ -153,7 +163,19 @@ class ProjectStore:
         with self._lock:
             if not project_dir.is_dir():
                 raise ProjectNotFoundError(f"Project does not exist: {project_id}")
+            self._ensure_source_layout(project_dir)
             return self._read_project(project_dir)
+
+    @staticmethod
+    def _ensure_source_layout(project_dir: Path) -> None:
+        """Migrate only an absent or untouched canonical source scaffold."""
+
+        code_model = project_dir / CODE_DIRECTORY_NAME / MODEL_SOURCE_NAME
+        legacy_model = project_dir / MODEL_SOURCE_NAME
+        if not code_model.exists() or (
+            legacy_model.is_file() and code_model.is_file() and not code_model.read_bytes()
+        ):
+            create_model_source(project_dir, overwrite=False)
 
     def delete_project(self, project_id: str) -> None:
         """Permanently remove one Project directory from the Catalog."""
@@ -387,6 +409,7 @@ class ProjectStore:
                     path.unlink()
             for name in (
                 ARTIFACT_DIRECTORY_NAME,
+                CODE_DIRECTORY_NAME,
                 "conversation_history",
                 "large_tool_results",
                 "previews",
@@ -432,21 +455,19 @@ class ProjectStore:
                 shutil.copytree(child, destination)
             elif child.is_file():
                 shutil.copy2(child, destination)
-        excluded_roots = {
-            ARTIFACT_DIRECTORY_NAME,
-            "conversation_history",
-            "large_tool_results",
-            "previews",
-            "__pycache__",
-            ".git",
-        }
-        for source in project_dir.rglob("*.py"):
-            relative = source.relative_to(project_dir)
-            if source.is_symlink() or any(part in excluded_roots for part in relative.parts):
-                continue
-            destination = source_dir / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+        code_dir = project_dir / CODE_DIRECTORY_NAME
+        if code_dir.is_symlink():
+            raise ProjectError("Project code directory must not be a symlink")
+        if code_dir.exists() and not code_dir.is_dir():
+            raise ProjectError("Project code directory must be a directory")
+        if code_dir.is_dir():
+            for source in code_dir.rglob("*.py"):
+                relative = source.relative_to(code_dir)
+                if source.is_symlink():
+                    continue
+                destination = source_dir / CODE_DIRECTORY_NAME / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
         manifest = {
             "version": version,
             "created_at": _timestamp(),
@@ -475,30 +496,27 @@ class ProjectStore:
                 else:
                     shutil.copy2(source, destination)
         if source_dir.is_dir():
+            saved_code_dir = source_dir / CODE_DIRECTORY_NAME
+            # Versions written before the code/ layout stored model.py
+            # directly under source/. Treat those files as legacy source and
+            # restore them into the canonical code/ directory.
+            source_root = saved_code_dir if saved_code_dir.is_dir() else source_dir
             saved_sources = {
-                source.relative_to(source_dir)
-                for source in source_dir.rglob("*.py")
+                source.relative_to(source_root)
+                for source in source_root.rglob("*.py")
                 if source.is_file() and not source.is_symlink()
             }
-            excluded_roots = {
-                ARTIFACT_DIRECTORY_NAME,
-                "conversation_history",
-                "large_tool_results",
-                "previews",
-                "__pycache__",
-                ".git",
-            }
-            for source in project_dir.rglob("*.py"):
-                relative = source.relative_to(project_dir)
-                if source.is_symlink() or any(
-                    part in excluded_roots for part in relative.parts
-                ):
-                    continue
-                if relative not in saved_sources:
+            current_code_dir = project_dir / CODE_DIRECTORY_NAME
+            if current_code_dir.is_symlink():
+                current_code_dir.unlink()
+            current_code_dir.mkdir(parents=True, exist_ok=True)
+            for source in current_code_dir.rglob("*.py"):
+                relative = source.relative_to(current_code_dir)
+                if source.is_symlink() or relative not in saved_sources:
                     source.unlink()
-            for source in source_dir.rglob("*.py"):
-                relative = source.relative_to(source_dir)
-                destination = project_dir / relative
+            for source in source_root.rglob("*.py"):
+                relative = source.relative_to(source_root)
+                destination = current_code_dir / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
 

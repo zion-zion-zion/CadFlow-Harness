@@ -72,7 +72,7 @@ def test_trace_api_lists_projects_reads_incrementally_and_redacts(
         "payload": {
             "tool_name": "read_file",
             "call_id": "tool-1",
-            "arguments": {"authorization": "Bearer abcdefghijklmnop", "path": "model.py"},
+            "arguments": {"authorization": "Bearer abcdefghijklmnop", "path": "/code/model.py"},
         },
     }
     incomplete = json.dumps(

@@ -7,7 +7,7 @@ main README (3.12 on Linux or 3.13 on macOS). Generated files are written under
 ## Python-first Model/Shape examples
 
 These are the closest references for the Agent application's current
-single-rigid-part `model.py` contract:
+single-rigid-part `code/model.py` contract:
 
 - `cadflow_complex_mounting_bracket.py`
 - `cadflow_sketch_support_bracket.py`

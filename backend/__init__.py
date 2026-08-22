@@ -44,10 +44,14 @@ from .agent import (
 )
 from .model_source import (
     ARTIFACT_DIRECTORY_NAME,
+    CODE_DIRECTORY_NAME,
     MODEL_SOURCE_NAME,
     SCENE_ARTIFACT_NAME,
     ModelSourceScaffold,
     create_model_source,
+    migrate_legacy_sources,
+    model_source_path,
+    project_code_directory,
 )
 from .live_preview import (
     LivePreviewExecutor,
@@ -79,6 +83,7 @@ from .scene_validation import SceneParseResult, validate_scene_artifact
 
 __all__ = [
     "ARTIFACT_DIRECTORY_NAME",
+    "CODE_DIRECTORY_NAME",
     "AGENT_RUN_TIMEOUT_SECONDS",
     "AgentConfigurationError",
     "AgentHarness",
@@ -139,6 +144,9 @@ __all__ = [
     "build_chat_model",
     "build_deep_agent",
     "create_model_source",
+    "migrate_legacy_sources",
+    "model_source_path",
+    "project_code_directory",
     "create_agent_tools",
     "redact_credentials",
     "review_cad",

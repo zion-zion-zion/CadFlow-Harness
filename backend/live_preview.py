@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import BinaryIO, Callable, Protocol
 
 from .cad_executor import CancellationToken, build_cad_environment, redact_credentials
+from .model_source import CODE_DIRECTORY_NAME, MODEL_SOURCE_NAME, migrate_legacy_sources
 from .previews import PreviewError, validate_preview_glb
 from .projects import ProjectState, ProjectStore
 
@@ -44,17 +45,6 @@ _EXCLUDED_ROOT_NAMES = frozenset(
         "previews",
     }
 )
-_EXCLUDED_FILES = frozenset(
-    {
-        "diagnostics.json",
-        "events.jsonl",
-        "project.json",
-        "prompt.txt",
-        "trace.jsonl",
-    }
-)
-
-
 @dataclass(frozen=True)
 class LivePreviewStatus:
     state: str = "waiting"
@@ -252,12 +242,16 @@ class LivePreviewExecutor:
         token = cancellation_token or CancellationToken()
         process: subprocess.Popen[bytes] | None = None
         try:
+            try:
+                _prepare_preview_source(root)
+            except (OSError, ValueError) as exc:
+                return LivePreviewResult("failed", error=redact_credentials(str(exc)))
             with tempfile.TemporaryDirectory(prefix="cadflow-live-preview-") as temporary:
                 snapshot = Path(temporary) / "project"
                 _copy_preview_inputs(root, snapshot)
-                model_path = snapshot / "model.py"
+                model_path = snapshot / CODE_DIRECTORY_NAME / MODEL_SOURCE_NAME
                 if not model_path.is_file():
-                    return LivePreviewResult("failed", error="model.py is missing")
+                    return LivePreviewResult("failed", error="code/model.py is missing")
                 output_path = Path(temporary) / LIVE_PREVIEW_MODEL_NAME
                 response_path = Path(temporary) / "response.json"
                 stdout_path = Path(temporary) / "stdout.log"
@@ -270,6 +264,8 @@ class LivePreviewExecutor:
                 try:
                     request = {
                         "model_path": str(model_path),
+                        "project_root": str(snapshot),
+                        "code_root": str(snapshot / CODE_DIRECTORY_NAME),
                         "output_path": str(output_path),
                         "response_path": str(response_path),
                         "stdout_path": str(stdout_path),
@@ -658,12 +654,16 @@ class LivePreviewScheduler:
 
 def _source_hash(project_dir: Path) -> str:
     digest = hashlib.sha256()
+    source_root = _source_root(project_dir)
     paths = sorted(
         path
-        for path in project_dir.rglob("*.py")
+        for path in source_root.rglob("*.py")
         if path.is_file()
         and not path.is_symlink()
-        and not any(part in _EXCLUDED_ROOT_NAMES for part in path.relative_to(project_dir).parts)
+        and not any(
+            part in _EXCLUDED_ROOT_NAMES
+            for part in path.relative_to(source_root).parts
+        )
     )
     for path in paths:
         relative = path.relative_to(project_dir).as_posix().encode("utf-8")
@@ -676,7 +676,7 @@ def _source_hash(project_dir: Path) -> str:
 
 
 def _preview_source_ready(project_dir: Path) -> bool:
-    model_path = project_dir / "model.py"
+    model_path = _source_root(project_dir) / MODEL_SOURCE_NAME
     try:
         source = model_path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(model_path))
@@ -689,18 +689,65 @@ def _preview_source_ready(project_dir: Path) -> bool:
 
 
 def _copy_preview_inputs(source: Path, destination: Path) -> None:
+    # Preview workers receive only the Python source tree. Runtime logs,
+    # artifacts, and metadata never enter the temporary snapshot.
+    source_root = _source_root(source)
+    destination.mkdir(parents=True, exist_ok=True)
+    code_destination = destination / CODE_DIRECTORY_NAME
+
     def ignore(directory: str, names: list[str]) -> set[str]:
         root = Path(directory)
         ignored: set[str] = set()
         for name in names:
             candidate = root / name
-            if name in _EXCLUDED_ROOT_NAMES or name in _EXCLUDED_FILES:
+            if (
+                candidate.is_symlink()
+                or name.startswith(".env")
+                or name in _EXCLUDED_ROOT_NAMES
+            ):
                 ignored.add(name)
-            elif name.startswith(".env") or candidate.is_symlink():
+            elif candidate.is_file() and candidate.suffix != ".py":
                 ignored.add(name)
         return ignored
 
-    shutil.copytree(source, destination, ignore=ignore)
+    if source_root == source / CODE_DIRECTORY_NAME:
+        shutil.copytree(source_root, code_destination, ignore=ignore)
+        return
+
+    # Compatibility for a legacy Project that has not been opened through the
+    # ProjectStore yet: copy Python files without recursively copying the new
+    # destination into itself.
+    code_destination.mkdir(parents=True, exist_ok=True)
+    for path in source_root.rglob("*.py"):
+        if path.is_symlink() or path.is_relative_to(code_destination):
+            continue
+        relative = path.relative_to(source_root)
+        if any(part in _EXCLUDED_ROOT_NAMES for part in relative.parts):
+            continue
+        target = code_destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+
+
+def _source_root(project_dir: Path) -> Path:
+    """Return canonical `code/`, with a read-only legacy fallback."""
+
+    code_dir = project_dir / CODE_DIRECTORY_NAME
+    if code_dir.is_dir() and not code_dir.is_symlink():
+        return code_dir
+    return project_dir
+
+
+def _prepare_preview_source(project_dir: Path) -> Path:
+    """Resolve the canonical preview source without creating runtime output dirs."""
+
+    code_dir = migrate_legacy_sources(project_dir)
+    model_path = code_dir / MODEL_SOURCE_NAME
+    if model_path.is_symlink():
+        raise ValueError("Model Source must not be a symlink")
+    if model_path.exists() and not model_path.is_file():
+        raise ValueError("Model Source must be a regular file")
+    return code_dir
 
 
 def _lower_process_priority() -> None:
@@ -794,7 +841,8 @@ def clear_snapshot_modules(snapshot):
 for line in sys.stdin.buffer:
     request = json.loads(line)
     model_path = Path(request["model_path"]).resolve()
-    snapshot = model_path.parent
+    snapshot = Path(request["project_root"]).resolve()
+    code_root = Path(request["code_root"]).resolve()
     output_path = Path(request["output_path"])
     response_path = Path(request["response_path"])
     stdout_path = Path(request["stdout_path"])
@@ -802,6 +850,7 @@ for line in sys.stdin.buffer:
     response = {"status": "failed"}
     previous_cwd = Path.cwd()
     try:
+        sys.path.insert(0, str(code_root))
         os.chdir(snapshot)
         with (
             stdout_path.open("w", encoding="utf-8") as stdout,
@@ -832,7 +881,7 @@ for line in sys.stdin.buffer:
                 response = {"status": "failed", "error": str(exc)}
     finally:
         os.chdir(previous_cwd)
-        clear_snapshot_modules(snapshot)
+        clear_snapshot_modules(code_root)
         temporary_response = response_path.with_suffix(".tmp")
         temporary_response.write_text(json.dumps(response), encoding="utf-8")
         temporary_response.replace(response_path)

@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .contracts import ToolUseRecord
-from .model_source import ModelSourceScaffold, create_model_source
+from .model_source import (
+    ModelSourceScaffold,
+    create_model_source,
+    model_source_path,
+    project_code_directory,
+)
 
 
 class AgentModelValidator:
@@ -35,6 +40,18 @@ class AgentModelValidator:
     def project_dir(self) -> Path:
         return self._project_dir
 
+    @property
+    def code_dir(self) -> Path:
+        """Return the Agent-owned Python source directory."""
+
+        return project_code_directory(self._project_dir)
+
+    @property
+    def model_path(self) -> Path:
+        """Return the canonical Model Source path inside ``code/``."""
+
+        return model_source_path(self._project_dir)
+
     def record_tool_use(self, tool_name: str, target: str) -> None:
         """Record a host-side CAD tool invocation for the run audit."""
 
@@ -42,7 +59,7 @@ class AgentModelValidator:
 
     def begin_run(self) -> ModelSourceScaffold:
         scaffold = create_model_source(self._project_dir, overwrite=False)
-        self._record("prepare_model_source", "model.py")
+        self._record("prepare_model_source", "code/model.py")
         return scaffold
 
     def validate_model(
@@ -58,7 +75,7 @@ class AgentModelValidator:
 
             executor = CADExecutor()
             self._executor = executor
-        self._record("validate_model", "model.py")
+        self._record("validate_model", "code/model.py")
         kwargs: dict[str, Any] = {"cancellation_token": cancellation_token}
         if timeout_seconds is not None:
             kwargs["timeout_seconds"] = timeout_seconds

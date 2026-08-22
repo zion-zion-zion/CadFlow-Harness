@@ -70,7 +70,7 @@ def test_review_passes_with_independent_structured_reviewer(tmp_path: Path) -> N
     result = review_cad(
         project_dir=tmp_path,
         request_text="A rectangular block.",
-        model_source=(tmp_path / "model.py").read_text(encoding="utf-8"),
+        model_source=(tmp_path / "code" / "model.py").read_text(encoding="utf-8"),
         execution_result=execution,
         settings=object(),
         reviewer_factory=lambda _settings: _FakeReviewer(
@@ -195,7 +195,7 @@ def test_reviewer_usage_is_added_to_the_conversation_log(tmp_path: Path) -> None
     result = review_cad(
         project_dir=tmp_path,
         request_text="A rectangular block.",
-        model_source=(tmp_path / "model.py").read_text(encoding="utf-8"),
+        model_source=(tmp_path / "code" / "model.py").read_text(encoding="utf-8"),
         execution_result=execution,
         settings=object(),
         reviewer_factory=lambda _settings: _UsageReviewer(),

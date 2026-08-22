@@ -319,14 +319,16 @@ def test_agent_prompt_confines_writes_and_exposes_read_only_references(
         skill_root=repo_root / "skills",
     )
 
-    assert f"The current Project workspace is exactly:\n`{project_dir}`" in prompt
-    assert f"The required Model Source is `{project_dir / 'model.py'}`" in prompt
-    assert f"- `{repo_root / 'skills'}`" in prompt
+    assert "The Agent has exactly two useful virtual routes" in prompt
+    assert "`/code/model.py`" in prompt
+    assert "`/skills/`" in prompt
+    assert str(project_dir) not in prompt
+    assert str(repo_root / "skills") not in prompt
     assert "read-only Skill reference" in prompt
     assert "examples" not in prompt
     assert "must never" in prompt
     assert "create, edit, rename, or delete anything there" in prompt
-    assert "create or edit only model.py and local\nPython helper modules" in prompt
+    assert "Read and write only\n  `/code/**/*.py`" in prompt
     assert "Do not search parent directories, sibling" in prompt
     assert "directories, or other Projects" in prompt
 
@@ -396,7 +398,7 @@ def test_agent_prompt_requires_todo_plan_before_source_edits(tmp_path: Path) -> 
         skill_root=None,
     )
 
-    assert "Before making any change to `model.py`" in prompt
+    assert "Before making any change to `/code/model.py`" in prompt
     assert "you\nmust call `write_todos`" in prompt
     assert "required even when the request appears simple" in prompt
     assert "Do not write or edit Project\nsource before the initial todo plan exists." in prompt

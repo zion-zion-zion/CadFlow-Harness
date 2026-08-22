@@ -266,7 +266,7 @@ type, topology, required holes, major dimensions, or requested features.
 Use only the tools exposed for this run. Their actual permissions and
 filesystem boundaries are authoritative.
 
-First inspect the current `model.py`. It may be empty or may contain an
+First inspect the current `/code/model.py`. It may be empty or may contain an
 existing implementation. Create, preserve, or repair the required
 `build_model(model: cad.Model) -> cad.Shape` entry point.
 
@@ -277,7 +277,7 @@ current run contract and choose the narrowest compatible guidance.
 Use only public CadFlow and Python APIs. Do not import private CadFlow engine
 modules, OCP types, native handles, or private shared-library symbols.
 
-Before making any change to `model.py` or a local Python helper module, you
+Before making any change to `/code/model.py` or a local Python helper module, you
 must call `write_todos` and create a concise plan for this run. This is
 required even when the request appears simple. Keep the plan current as the
 work progresses: mark the active step, complete finished steps, and add or
@@ -346,37 +346,26 @@ def _build_agent_system_prompt(
 ) -> str:
     """Add the concrete run-local filesystem boundaries to the Agent prompt."""
 
-    project_dir = Path(workspace_root).expanduser().resolve()
-    read_only_roots = (
-        [Path(skill_root).expanduser().resolve()] if skill_root is not None else []
-    )
-    read_only_lines = "\n".join(f"- `{root}`" for root in read_only_roots)
-    if not read_only_lines:
-        read_only_lines = "- None"
+    # Physical roots are intentionally omitted from the prompt.  The model
+    # sees only the stable virtual routes supplied by CompositeBackend.
+    del workspace_root, skill_root
     return (
         _SYSTEM_PROMPT
-        + f"""
+        + """
 
 ## Filesystem boundaries for this run
 
-The current Project workspace is exactly:
-`{project_dir}`
+The Agent has exactly two useful virtual routes:
 
-Treat that directory as the working directory and the base for every relative
-path. You may read Project files, but create or edit only model.py and local
-Python helper modules inside that directory.
-The required Model Source is `{project_dir / "model.py"}`.
-Do not search parent directories, sibling directories, or other Projects to
-locate it.
+- `/code/` is the Project's Python source workspace. Read and write only
+  `/code/**/*.py`; the required Model Source is `/code/model.py`.
+- `/skills/` is a read-only Skill reference mount. You may list, search, and read
+  relevant Skill files there. You must never create, edit, rename, or delete anything there.
 
-The following directory is a read-only Skill reference outside the Project
-workspace:
-{read_only_lines}
-
-You may list, search, and read files under that Skill reference, but must never
-create, edit, rename, or delete anything there. Do not inspect or modify files
-elsewhere. File tools are the only workspace mutation interface; use them only
-with the Project or the read-only Skill reference above.
+Project logs, metadata, previews, review evidence, and CAD artifacts are not
+mounted and must not be searched by guessing host paths. Do not search parent directories, sibling
+directories, or other Projects, or any path outside these
+virtual routes. File tools are the only workspace mutation interface.
 """
     )
 
@@ -434,7 +423,7 @@ def create_agent_tools(
 
     @tool("validate_model")
     def validate_model() -> dict[str, Any]:
-        """Run and structurally validate the current model.py and Scene Artifact."""
+        """Run and structurally validate `/code/model.py` and its Scene Artifact."""
 
         nonlocal execution_attempts, latest_execution
         remaining = require_time_remaining()
@@ -485,7 +474,7 @@ def create_agent_tools(
         This tool is mandatory after the complete requested geometry passes
         its final validate_model call. Do not call it for successful
         intermediate checkpoints in a staged build. It returns a bounded
-        pass/fail result with structured findings; it never edits model.py or
+        pass/fail result with structured findings; it never edits `/code` or
         runs a repair loop.
         """
 
@@ -498,13 +487,13 @@ def create_agent_tools(
                 findings=(),
             )
         else:
-            validator.record_tool_use("cad_review", "model.py and .cad-review")
+            validator.record_tool_use("cad_review", "code/model.py and .cad-review")
             try:
-                source = (validator.project_dir / "model.py").read_text(encoding="utf-8")
+                source = validator.model_path.read_text(encoding="utf-8")
             except (OSError, UnicodeError) as error:
                 result = ReviewResult(
                     status="fail",
-                    summary="CAD review could not read model.py.",
+                    summary="CAD review could not read code/model.py.",
                     findings=(),
                 )
             else:
@@ -579,7 +568,7 @@ def build_deep_agent(
             ),
         ),
         subagents=(),
-        skills=[str(resolved_skill_root)] if resolved_skill_root is not None else None,
+        skills=["/skills/"] if resolved_skill_root is not None else None,
         backend=backend,
         memory=None,
         checkpointer=None,
@@ -693,7 +682,7 @@ class ReferenceGroundedAgent:
                 self.settings,
                 agent_tools,
                 model=self.model,
-                workspace_root=self.project_dir,
+                workspace_root=validator.project_dir,
                 skill_root=Path(self.repo_root) / "skills",
             )
             agent_error, timed_out = _invoke_agent_with_deadline(

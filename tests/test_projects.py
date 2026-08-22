@@ -19,7 +19,7 @@ def test_prompt_submission_is_persisted_across_multiple_turns(tmp_path: Path) ->
     store = ProjectStore(tmp_path)
     project = store.create_project("Flange")
 
-    assert (tmp_path / project.project_id / "model.py").is_file()
+    assert (tmp_path / project.project_id / "code" / "model.py").is_file()
     assert (tmp_path / project.project_id / "artifacts").is_dir()
 
     running = store.submit_prompt(project.project_id, "Create a round flange.")
@@ -194,15 +194,21 @@ def test_failed_follow_up_restores_the_previous_source_tree(tmp_path: Path) -> N
     store = ProjectStore(tmp_path)
     project = store.create_project("Versioned source")
     project_dir = tmp_path / project.project_id
-    model_path = project_dir / "model.py"
+    model_path = project_dir / "code" / "model.py"
     model_path.write_text("FIRST = True\n", encoding="utf-8")
+    (project_dir / "code" / "helper.py").write_text("HELPER = True\n", encoding="utf-8")
     store.submit_prompt(project.project_id, "Create the first model.")
     (project_dir / "artifacts" / "model.scene.zip").write_bytes(b"first")
     store.mark_succeeded(project.project_id)
 
+    version_root = project_dir / "artifacts" / "v0001"
+    assert (version_root / "source" / "code" / "model.py").is_file()
+    assert (version_root / "source" / "code" / "helper.py").is_file()
+    assert not (version_root / "source" / "model.py").exists()
+
     store.submit_prompt(project.project_id, "Try a follow-up.")
     model_path.write_text("BROKEN = True\n", encoding="utf-8")
-    added_source = project_dir / "new_helper.py"
+    added_source = project_dir / "code" / "new_helper.py"
     added_source.write_text("BROKEN_HELPER = True\n", encoding="utf-8")
     store.mark_failed(project.project_id, "follow-up failed")
 
