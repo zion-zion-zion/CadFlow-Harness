@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import importlib.metadata
-import math
 import os
 import time
 import uuid
@@ -45,7 +44,7 @@ class AgentRunCancelled(AgentRunError):
     """Raised inside a tool when the user has stopped the current Agent Run."""
 
 
-MAX_AGENT_RUN_SECONDS = 10 * 60.0
+MAX_AGENT_RUN_SECONDS = 20 * 60.0
 AGENT_RUN_TIMEOUT_SECONDS = MAX_AGENT_RUN_SECONDS
 MAX_PROVIDER_RETRIES = 2
 
@@ -54,12 +53,13 @@ try:
 except importlib.metadata.PackageNotFoundError:
     DEEPAGENTS_IMPLEMENTATION_VERSION = "unknown"
 
-_AGENT_RUN_TIMEOUT_MESSAGE = "Agent Run exceeded the ten-minute wall-clock limit"
-AGENT_EXCLUDED_TOOLS = frozenset({"execute", "delete", "task"})
+_AGENT_RUN_TIMEOUT_MESSAGE = "Agent Run exceeded the twenty-minute wall-clock limit"
+AGENT_EXCLUDED_TOOLS = frozenset({"execute", "task"})
 AGENT_FILESYSTEM_TOOLS = (
     "read_file",
     "write_file",
     "edit_file",
+    "delete",
     "ls",
     "glob",
     "grep",
@@ -241,10 +241,33 @@ _SYSTEM_PROMPT = """You are the primary Text-to-CAD Agent for this run.
 
 ## Current run contract
 
-The current executor accepts one final `cad.Shape` containing exactly one
-positive-volume solid and creates the canonical `artifacts/model.scene.zip`.
-This is the contract for the current run, not a general limitation of CadFlow
-or of future CadFlowAgent capabilities.
+The stable entry point is
+`build_model(model: cad.Model) -> cad.Shape | cad.Assembly`.
+
+Return a `cad.Shape` only when the requested product is one separately
+manufactured rigid part. It must contain exactly one valid positive-volume
+solid. Return a semantic `cad.Assembly` when the product has multiple
+separately manufactured parts, repeated instances, or nested subassemblies.
+Every Assembly leaf must be a valid one-solid `cad.Part`; preserve reusable
+Part identity, unique component IDs, connectors, constraints, and nesting.
+Never fuse multiple parts into a Shape as a substitute for an Assembly.
+
+The executor creates a complete Draft product bundle after the returned value
+passes the early Assembly gates. It checks the semantic structure, strict constraint solve and every residual,
+STEP replay, Scene parsing, product envelope, and current-pose collision at a
+maximum allowed penetration of 0.02 mm. The host promotes a deterministically
+Passed Draft to Accepted only after independent `cad_review` also passes.
+When an early Assembly gate fails, `validate_model` returns a diagnostic Draft
+with `validation_short_circuited=true`. Its missing product bundle, Scene, and
+review evidence are intentional because downstream export work was skipped.
+Repair the reported failed check; do not treat those absent downstream
+artifacts as another source defect. The next early-gate pass performs the full
+export and replay checks.
+Write Python source only; the executor owns Scene, STEP, BOM, validation,
+assumption, semantic-model, and source-snapshot artifacts.
+Use `product_validation_checks` for solve diagnosis. Return the semantic product
+normally; do not leave temporary solve, inspection, or debug-print probes in
+the final source merely to repeat host validation.
 
 The user's request defines the desired geometry. Skills provide implementation
 guidance. Skills and Agent preferences must not change the current executor
@@ -252,11 +275,12 @@ contract.
 
 ## Request policy
 
-Treat the user's request as complete and do not wait for another turn.
+Treat the user's request as complete. Work autonomously and do not wait for
+human approval between planning, implementation, validation, and repair. The
+whole run has a twenty-minute wall-clock budget.
 
 Infer non-critical parameters when needed, use millimetres when no length unit
-is given, and record important inferred assumptions near the top of the Model
-Source.
+is given, and record important inferred assumptions in `PRODUCT_SPEC`.
 
 Do not invent, remove, or alter user-critical requirements such as the part
 type, topology, required holes, major dimensions, or requested features.
@@ -267,8 +291,15 @@ Use only the tools exposed for this run. Their actual permissions and
 filesystem boundaries are authoritative.
 
 First inspect the current `/code/model.py`. It may be empty or may contain an
-existing implementation. Create, preserve, or repair the required
-`build_model(model: cad.Model) -> cad.Shape` entry point.
+existing implementation. Inspect relevant local helper modules too, then
+create, preserve, or repair the stable `build_model` entry point.
+
+For a complex product, split `/code/` into focused Python modules. Keep shared
+dimensions and physical equations in one source of truth, Part families in
+component modules, Assembly construction and constraints in an assembly
+module, and `model.py` as the small orchestration entry point. Reuse one Part
+definition for repeated instances. Remove obsolete helper modules when a
+repair makes them misleading or unreachable.
 
 Read any relevant CadFlow Skills and their references when they help with the
 request. You may choose more than one Skill. If Skills disagree, preserve the
@@ -276,6 +307,33 @@ current run contract and choose the narrowest compatible guidance.
 
 Use only public CadFlow and Python APIs. Do not import private CadFlow engine
 modules, OCP types, native handles, or private shared-library symbols.
+
+For Assembly Part bodies, use replayable constructors and booleans consistently:
+`cad.make_*_rsolid`, `cad.union_rsolid`, and `cad.cut_rsolid` produce or consume
+`cad.Solid`. Keep each result connected and position occurrences with Assembly
+placements. The separate `cad.Model` DSL returns `cad.Shape`; do not pass a
+`model.box`, `model.cylinder`, or `model.translate` result to `make_part_rpart`
+or replayable solid booleans.
+
+Every Assembly source must define a JSON-compatible product contract like:
+
+```python
+PRODUCT_SPEC = {
+    "assumptions": ["Named non-critical assumption"],
+    "envelope": {"max_size_mm": [200.0, 160.0, 120.0]},
+    "collision_exclusions": [
+        {
+            "component_a": "assembly/component_a",
+            "component_b": "assembly/component_b",
+            "reason": "Pair-specific physical reason",
+        }
+    ],
+}
+```
+
+Use the actual full leaf component paths reported by validation. An exclusion
+applies to one pair only and requires a concrete physical justification. An
+empty exclusion list is preferred when no intentional contact or fit exists.
 
 Before making any change to `/code/model.py` or a local Python helper module, you
 must call `write_todos` and create a concise plan for this run. This is
@@ -290,6 +348,8 @@ Choose a workflow before implementing the requested geometry:
 
 - For simple work, implement the complete Model Source and validate it once.
 - For complex single-part work, use staged implementation and validation.
+- For complex Assembly work, stage shared dimensions, unique Part families,
+  subassemblies, and the final constrained product.
 
 Use judgment rather than a fixed feature-count threshold. Multiple dependent
 boolean feature groups, repeated features, and topology-sensitive finishing
@@ -297,14 +357,13 @@ operations such as fillets, chamfers, or shells are signals that staged work
 will reduce risk.
 
 For complex work, normally plan two to four materially distinct validation
-stages in the todo list. Every stage must leave a runnable Model Source whose
-`build_model` entry point returns exactly one positive-volume solid that is a
-meaningful precursor of the requested final part. For a new part, progress
-from the base solid through major additive or subtractive feature groups and
-then topology-sensitive finishing features. For a complex change to an
-existing implementation, preserve the current model and add requested feature
-groups incrementally instead of rebuilding it without cause. Do not turn a
-requested single part into an assembly merely to split the work into stages.
+stages in the todo list. Every stage must leave a runnable, deterministically
+valid product candidate. A single-part stage returns one meaningful
+positive-volume precursor Shape. An Assembly stage returns a coherent partial
+semantic Assembly whose current leaf Parts, IDs, solve, envelope, and collision
+checks pass. Preserve a requested single part as a Shape; staging alone is not
+a reason to create an Assembly. For changes to existing source, retain working
+behavior and add requested feature or component groups incrementally.
 
 Call `validate_model` after each planned stage. A successful intermediate
 validation is only a checkpoint: continue to the next planned stage without
@@ -312,10 +371,23 @@ calling `cad_review`. If an intermediate validation fails, repair that stage
 and validate the material source change before adding later feature groups.
 Never stack more features on a failed stage.
 
+A passing candidate is intermediate only when at least one explicit user
+requirement is still absent from its source. When every explicit requirement is
+implemented, treat the first deterministic pass as final: stop polishing,
+comment-only cleanup, and unrequested detail, then call `cad_review` in the same
+turn. Reserve at least 120 seconds of the reported run budget for review.
+
 For every validation, treat the structured result as the source of truth.
 Inspect the reported status, failure type, location, preflight result,
 imported modules, geometry facts, Scene Artifact status, and diagnostic
-output.
+output. For product validation, also inspect `result_kind`, component and Part
+counts, `product_status`, `product_validation_status`, and every
+`product_validation_failure`. Inspect `product_validation_checks` for the
+failed check's solve error, residual IDs, collision pairs and contacts, or
+envelope measurements before choosing a repair.
+A successful subprocess can still be a Draft with blocking validation failures.
+For a short-circuited diagnostic Draft, prioritize its failed validation check
+and ignore the intentionally absent downstream artifacts.
 
 When validation fails:
 
@@ -324,18 +396,26 @@ When validation fails:
 3. Preserve the user's requirements and the current run contract.
 4. Call `validate_model` again only after the source has materially changed.
 
+For a timeout, use `execution_phase` and the phase named in `error`. The next
+source revision must reduce work in that phase rather than add unrelated
+detail. When changing shared helpers across files, finish provider definitions
+and reconcile every importer before validating the candidate.
+
 Never retry an unchanged or semantically equivalent Model Source. Do not make
 unrelated changes merely to continue the run.
 
-If the requested result cannot satisfy the current run contract, stop with a
-failure rather than silently changing the requested geometry or output type.
+If the requested result cannot satisfy the current run contract, report the
+specific blocker rather than silently changing the requested geometry or
+output type.
 
-When the complete requested geometry passes final validation, call
-`cad_review` immediately. The review tool is a read-only quality gate and must
-be called before you claim completion. If it returns `fail`, use its
-structured findings to make a material Model Source change, then call
-`validate_model` and `cad_review` again. Stop only after `cad_review` returns
-`pass` or the request cannot be satisfied.
+When the complete requested product has `product_validation_status ==
+"Passed"` with no blocking failures, call `cad_review` immediately. The review
+tool is a read-only quality gate and must be called before completion. If it
+fails only with `review_infrastructure` findings, retry `cad_review` without
+editing or revalidating the product; infrastructure failures are not CAD
+defects. For substantive findings, make a material Python source change, then
+call `validate_model` and `cad_review` again. Finish only after `cad_review`
+returns `pass`; the host then performs the Accepted promotion.
 """
 
 
@@ -358,7 +438,8 @@ def _build_agent_system_prompt(
 The Agent has exactly two useful virtual routes:
 
 - `/code/` is the Project's Python source workspace. Read and write only
-  `/code/**/*.py`; the required Model Source is `/code/model.py`.
+  `/code/**/*.py`; `/code/model.py` is the required stable entry point and
+  additional focused helper modules are supported.
 - `/skills/` is a read-only Skill reference mount. You may list, search, and read
   relevant Skill files there. You must never create, edit, rename, or delete anything there.
 
@@ -410,6 +491,7 @@ def create_agent_tools(
 
     execution_attempts = 0
     latest_execution: ExecutionResult | None = None
+    last_executed_source_revision: str | None = None
 
     def require_time_remaining() -> float | None:
         if _is_cancellation_requested(cancellation_token):
@@ -423,12 +505,19 @@ def create_agent_tools(
 
     @tool("validate_model")
     def validate_model() -> dict[str, Any]:
-        """Run and structurally validate `/code/model.py` and its Scene Artifact."""
+        """Validate the product and return bounded, structured failure evidence."""
 
-        nonlocal execution_attempts, latest_execution
+        nonlocal execution_attempts, latest_execution, last_executed_source_revision
         remaining = require_time_remaining()
+        source_revision = validator.source_revision()
+        if source_revision == last_executed_source_revision:
+            raise AgentRunError(
+                "CAD source has not changed since the previous validate_model call. "
+                "Repair the Python source before validating again."
+            )
         execution_attempts += 1
         execution_recorded = False
+        structured_result_received = False
 
         try:
             result = validator.validate_model(
@@ -440,6 +529,7 @@ def create_agent_tools(
                 ),
                 attempt=execution_attempts,
             )
+            structured_result_received = isinstance(result, ExecutionResult)
         except Exception as exc:
             if on_execution_error is None:
                 raise
@@ -453,6 +543,8 @@ def create_agent_tools(
             result = _execution_failure_result(error)
             on_execution_error(result)
             execution_recorded = True
+        if structured_result_received:
+            last_executed_source_revision = source_revision
         if on_execution is not None and not execution_recorded:
             on_execution(result)
         latest_execution = result
@@ -465,7 +557,15 @@ def create_agent_tools(
                     result=_execution_progress_result(result),
                 )
             )
-        return result.to_dict()
+        payload = result.to_dict()
+        if run_deadline is not None:
+            payload["run_time_remaining_seconds"] = max(
+                0.0,
+                round(run_deadline - clock(), 3),
+            )
+        if result.product_validation_status == "Passed":
+            payload["next_action"] = "cad_review_if_complete"
+        return payload
 
     @tool("cad_review")
     def cad_review() -> dict[str, Any]:
@@ -995,18 +1095,7 @@ def _finish_conversation_turn(
 
 
 def _is_validated_result(result: ExecutionResult) -> bool:
-    return bool(
-        result.status == "succeeded"
-        and result.exit_code == 0
-        and result.final_shape_count == 1
-        and result.solid_count == 1
-        and result.solid_volume is not None
-        and math.isfinite(result.solid_volume)
-        and result.solid_volume > 0
-        and result.scene_artifact_exists
-        and result.scene_parse_result.valid
-        and result.artifact_entries == ("model.scene.zip",)
-    )
+    return result.is_validated_product
 
 
 def _is_cancellation_requested(token: object | None) -> bool:
@@ -1036,7 +1125,10 @@ def _cancelled_outcome(
 
 def _execution_progress_result(result: ExecutionResult) -> str:
     if result.status == "succeeded":
-        return "CAD execution completed; validating Scene Artifact"
+        if result.product_validation_status == "Passed":
+            return "CAD product passed deterministic validation; review is ready"
+        failures = "; ".join(result.product_validation_failures[:3])
+        return "CAD product remains Draft" + (f": {failures}" if failures else "")
     if result.status == "cancelled":
         return "CAD execution cancelled"
     return "CAD execution failed: " + (

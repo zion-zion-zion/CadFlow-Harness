@@ -17,18 +17,60 @@ from backend.agent import (
     AgentSettings,
     AgentRunService,
     MAX_AGENT_RUN_SECONDS,
+    _is_validated_result,
     _invoke_agent_with_deadline,
     build_chat_model,
     build_deep_agent,
     create_agent_tools,
 )
 from backend.projects import ProjectState, ProjectStore
-from backend.cad_executor import CancellationToken
+from backend.cad_executor import CancellationToken, ExecutionResult
 from backend.restricted_tools import RestrictedAgentTools
+from backend.scene_validation import SceneParseResult
 
 
-def test_agent_run_timeout_is_ten_minutes() -> None:
-    assert MAX_AGENT_RUN_SECONDS == 600.0
+def test_agent_run_timeout_is_twenty_minutes() -> None:
+    assert MAX_AGENT_RUN_SECONDS == 1200.0
+
+
+def test_agent_accepts_a_deterministically_passed_assembly_candidate() -> None:
+    result = ExecutionResult(
+        status="succeeded",
+        exit_code=0,
+        error=None,
+        stdout="",
+        stderr="",
+        stdout_truncated=False,
+        stderr_truncated=False,
+        final_shape_count=1,
+        solid_count=2,
+        solid_volume=16.0,
+        scene_artifact_exists=True,
+        scene_parse_result=SceneParseResult(valid=True),
+        artifact_entries=(
+            "assumptions.json",
+            "bom.json",
+            "model.scene.zip",
+            "model.semantic.json",
+            "model.step",
+            "parts/housing.step",
+            "parts/shaft.step",
+            "product.json",
+            "source.zip",
+            "validation.json",
+        ),
+        duration_seconds=1.0,
+        result_kind="assembly",
+        component_count=2,
+        leaf_part_count=2,
+        unique_part_count=2,
+        product_manifest_path="artifacts/product.json",
+        product_status="Draft",
+        product_validation_status="Passed",
+        product_validation_failures=(),
+    )
+
+    assert _is_validated_result(result) is True
 
 
 def test_agent_invocation_is_cancelled_before_stop_returns() -> None:
@@ -152,6 +194,8 @@ def test_agent_tools_include_the_cad_specific_surface(
     tools = create_agent_tools(restricted)
 
     assert {tool.name for tool in tools} == {"validate_model", "cad_review"}
+    validate_tool = next(tool for tool in tools if tool.name == "validate_model")
+    assert "bounded, structured failure evidence" in validate_tool.description
     review_tool = next(tool for tool in tools if tool.name == "cad_review")
     review_description = " ".join(review_tool.description.split())
     assert "complete requested geometry" in review_description
@@ -233,6 +277,7 @@ def test_deep_agent_can_be_compiled_without_network_call(tmp_path: Path) -> None
         "read_file",
         "write_file",
         "edit_file",
+        "delete",
         "glob",
         "grep",
     }.issubset(graph_tools)
@@ -297,11 +342,12 @@ def test_deep_agent_model_sees_only_the_confirmed_tool_surface(
         "ls",
         "glob",
         "grep",
+        "delete",
         "write_todos",
         "validate_model",
         "cad_review",
     }
-    assert {"execute", "delete", "task"}.isdisjoint(model.bound_tool_names)
+    assert {"execute", "task"}.isdisjoint(model.bound_tool_names)
     assert "execute" not in model.bound_tool_descriptions["grep"].lower()
     assert "Shell paths vs. virtual paths" not in model.model_request_text
     assert "Host path mappings" not in model.model_request_text
@@ -333,7 +379,7 @@ def test_agent_prompt_confines_writes_and_exposes_read_only_references(
     assert "directories, or other Projects" in prompt
 
 
-def test_agent_prompt_routes_through_applicable_skills_without_widening_contract(
+def test_agent_prompt_routes_shape_and_assembly_through_applicable_skills(
     tmp_path: Path,
 ) -> None:
     prompt = _build_agent_system_prompt(
@@ -341,8 +387,17 @@ def test_agent_prompt_routes_through_applicable_skills_without_widening_contract
         skill_root=Path(__file__).parents[1] / "skills",
     )
 
-    assert "The current executor accepts one final `cad.Shape`" in prompt
-    assert "not a general limitation of CadFlow" in prompt
+    assert "`build_model(model: cad.Model) -> cad.Shape | cad.Assembly`" in prompt
+    assert "Return a `cad.Shape` only when" in prompt
+    assert "Return a semantic `cad.Assembly`" in prompt
+    assert "Never fuse multiple parts" in prompt
+    assert "strict constraint solve and every residual" in prompt
+    assert "maximum allowed penetration of 0.02 mm" in prompt
+    assert "Passed Draft to Accepted" in prompt
+    assert "Use `product_validation_checks` for solve diagnosis" in prompt
+    assert "`validation_short_circuited=true`" in prompt
+    assert "absent downstream\nartifacts as another source defect" in prompt
+    assert "do not leave temporary solve, inspection, or debug-print probes" in prompt
     assert "Read any relevant CadFlow Skills" in prompt
     assert "You may choose more than one Skill" in prompt
     assert "If Skills disagree, preserve the" in prompt
@@ -367,14 +422,20 @@ def test_agent_prompt_requires_diagnostic_repairs_before_retry(tmp_path: Path) -
     assert "When validation fails:" in prompt
     assert "Identify the reported failure and its likely cause." in prompt
     assert "Make a concrete, material source change" in prompt
+    assert "Inspect `product_validation_checks`" in prompt
+    assert "residual IDs, collision pairs and contacts" in prompt
     assert "Call `validate_model` again only after the source has materially changed." in prompt
     assert "Never retry an unchanged or semantically equivalent Model Source." in prompt
     assert "unrelated changes merely to continue the run." in prompt
-    assert "complete requested geometry passes final validation" in prompt
+    assert "complete requested product has `product_validation_status ==" in prompt
+    assert '"Passed"` with no blocking failures' in prompt
     assert "`cad_review` immediately" in prompt
+    assert "fails only with `review_infrastructure` findings" in prompt
+    assert "retry `cad_review` without\nediting or revalidating" in prompt
+    assert "infrastructure failures are not CAD\ndefects" in prompt
 
 
-def test_agent_prompt_stages_complex_single_part_work(tmp_path: Path) -> None:
+def test_agent_prompt_stages_complex_part_and_assembly_work(tmp_path: Path) -> None:
     prompt = _build_agent_system_prompt(
         workspace_root=tmp_path,
         skill_root=None,
@@ -382,14 +443,34 @@ def test_agent_prompt_stages_complex_single_part_work(tmp_path: Path) -> None:
 
     assert "For simple work, implement the complete Model Source" in prompt
     assert "For complex single-part work, use staged implementation" in prompt
+    assert "For complex Assembly work, stage shared dimensions" in prompt
     assert "Use judgment rather than a fixed feature-count threshold." in prompt
     assert "normally plan two to four materially distinct validation" in prompt
-    assert "returns exactly one positive-volume solid" in prompt
-    assert "preserve the current model and add requested feature" in prompt
-    assert "Do not turn a\nrequested single part into an assembly" in prompt
+    assert "A single-part stage returns one meaningful" in prompt
+    assert "An Assembly stage returns a coherent partial" in prompt
+    assert "Preserve a requested single part as a Shape" in prompt
+    assert "retain working\nbehavior and add requested feature" in prompt
     assert "Call `validate_model` after each planned stage." in prompt
     assert "continue to the next planned stage without\ncalling `cad_review`" in prompt
     assert "Never stack more features on a failed stage." in prompt
+    assert "passing candidate is intermediate only when at least one explicit" in prompt
+    assert "Reserve at least 120 seconds" in prompt
+
+
+def test_agent_prompt_defines_multi_file_product_contract(tmp_path: Path) -> None:
+    prompt = _build_agent_system_prompt(
+        workspace_root=tmp_path,
+        skill_root=Path(__file__).parents[1] / "skills",
+    )
+
+    assert "split `/code/` into focused Python modules" in prompt
+    assert "`model.py` as the small orchestration entry point" in prompt
+    assert '"envelope": {"max_size_mm":' in prompt
+    assert '"collision_exclusions"' in prompt
+    assert "actual full leaf component paths" in prompt
+    assert "A successful subprocess can still be a Draft" in prompt
+    assert "twenty-minute wall-clock budget" in prompt
+    assert "do not wait for\nhuman approval" in prompt
 
 
 def test_agent_prompt_requires_todo_plan_before_source_edits(tmp_path: Path) -> None:

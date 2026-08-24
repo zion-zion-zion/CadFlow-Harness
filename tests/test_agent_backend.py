@@ -27,6 +27,9 @@ def test_agent_backend_mounts_project_and_read_only_skills(tmp_path: Path) -> No
     project_write = backend.write("/code/helper.py", "helper = 1\n")
     assert project_write.error is None
     assert (code / "helper.py").read_text(encoding="utf-8") == "helper = 1\n"
+    project_delete = backend.delete("/code/helper.py")
+    assert project_delete.error is None
+    assert not (code / "helper.py").exists()
 
     reference_write = backend.write("/skills/SKILL.md", "mutated\n")
     assert reference_write.error == "This reference directory is read-only"
@@ -55,7 +58,7 @@ def test_agent_backend_rejects_reserved_and_outside_paths(tmp_path: Path) -> Non
     assert backend.read(str(outside)).error is not None
     assert backend.read("/conversation.jsonl").error is not None
     assert backend.delete("/code/model.py").error == (
-        "delete is not available to the Agent"
+        "The required /code/model.py entry point cannot be deleted"
     )
 
 

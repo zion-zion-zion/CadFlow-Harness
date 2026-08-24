@@ -865,13 +865,36 @@ for line in sys.stdin.buffer:
                 build_model = namespace.get("build_model")
                 if not callable(build_model):
                     raise RuntimeError(
-                        "Model Source must define build_model(model) -> cad.Shape"
+                        "Model Source must define "
+                        "build_model(model) -> cad.Shape | cad.Assembly"
                     )
                 with cad.Model() as model:
-                    final_shape = build_model(model)
-                    if not isinstance(final_shape, cad.Shape):
-                        raise TypeError("Model Source must return one CadFlow Shape")
-                    payload = final_shape.preview_glb(
+                    final_result = build_model(model)
+                    if isinstance(final_result, cad.Shape):
+                        preview_shape = final_result
+                    elif isinstance(final_result, cad.Assembly):
+                        preview_assembly = final_result
+                        try:
+                            preview_assembly = cad.solve_assembly_constraints_rassembly(
+                                assembly=final_result,
+                                strict=False,
+                            )
+                        except Exception:
+                            pass
+                        preview_compound = cad.make_compound_from_assembly_rcompound(
+                            assembly=preview_assembly
+                        )
+                        preview_step = output_path.with_suffix(".step")
+                        cad.export_step(
+                            shapes=preview_compound,
+                            filename=str(preview_step),
+                        )
+                        preview_shape = model.import_step(str(preview_step))
+                    else:
+                        raise TypeError(
+                            "Model Source must return one CadFlow Shape or cad.Assembly"
+                        )
+                    payload = preview_shape.preview_glb(
                         deflection=float(request["deflection"])
                     )
                     output_path.write_bytes(payload)

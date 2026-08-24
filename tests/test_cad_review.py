@@ -8,7 +8,7 @@ from langchain_core.outputs import ChatGeneration, LLMResult
 
 from backend.agent_logging import ConversationLog
 from backend.cad_executor import CADExecutor, ExecutionResult
-from backend.cad_review import _default_reviewer_factory, review_cad
+from backend.cad_review import _default_reviewer_factory, _review_prompt, review_cad
 from backend.agent import create_agent_tools
 from backend.model_source import create_model_source
 from backend.restricted_tools import AgentModelValidator
@@ -24,7 +24,7 @@ class _FakeReviewer:
         return self.payload
 
 
-def test_default_reviewer_uses_responses_api_for_reasoning() -> None:
+def test_default_reviewer_uses_bounded_low_effort_responses_reasoning() -> None:
     class _Settings:
         model_id = "cad-model"
         api_key = "test-key"
@@ -36,7 +36,8 @@ def test_default_reviewer_uses_responses_api_for_reasoning() -> None:
     reviewer = _default_reviewer_factory(_Settings())
 
     assert reviewer.reasoning_effort is None
-    assert reviewer.reasoning == {"effort": "high", "summary": "detailed"}
+    assert reviewer.reasoning == {"effort": "low"}
+    assert reviewer.request_timeout == 90
     assert reviewer.use_responses_api is True
 
 
@@ -86,6 +87,129 @@ def test_review_passes_with_independent_structured_reviewer(tmp_path: Path) -> N
     assert result.status == "pass"
     assert result.checked_requirements == ("rectangular block",)
     assert (tmp_path / execution.review_artifact_dir / "result.json").is_file()
+
+
+def test_reviewer_receives_every_hash_bound_python_source(tmp_path: Path) -> None:
+    scaffold = create_model_source(tmp_path)
+    (scaffold.code_dir / "dimensions.py").write_text(
+        "REVIEW_SIDE_LENGTH = 17.0\n",
+        encoding="utf-8",
+    )
+    scaffold.model_path.write_text(
+        "from dimensions import REVIEW_SIDE_LENGTH\n"
+        "import cadflow as cad\n\n"
+        "def build_model(model: cad.Model):\n"
+        "    return model.box(\n"
+        "        width=REVIEW_SIDE_LENGTH,\n"
+        "        depth=REVIEW_SIDE_LENGTH,\n"
+        "        height=REVIEW_SIDE_LENGTH,\n"
+        "    )\n",
+        encoding="utf-8",
+    )
+    execution = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
+
+    class _CapturingReviewer:
+        request_text = ""
+
+        def invoke(self, messages: object, config: object = None) -> object:
+            del config
+            type(self).request_text = str(messages)
+            return {
+                "status": "pass",
+                "summary": "All requested geometry is present.",
+                "findings": [],
+                "checked_requirements": ["cube"],
+            }
+
+    result = review_cad(
+        project_dir=tmp_path,
+        request_text="A 17 mm cube.",
+        model_source=scaffold.model_path.read_text(encoding="utf-8"),
+        execution_result=execution,
+        settings=object(),
+        reviewer_factory=lambda _settings: _CapturingReviewer(),
+    )
+
+    assert result.status == "pass"
+    assert "code/dimensions.py" in _CapturingReviewer.request_text
+    assert "REVIEW_SIDE_LENGTH = 17.0" in _CapturingReviewer.request_text
+
+
+def test_review_accepts_a_deterministically_passed_assembly(tmp_path: Path) -> None:
+    scaffold = create_model_source(tmp_path)
+    scaffold.model_path.write_text(
+        """import cadflow as cad
+
+PRODUCT_SPEC = {
+    "assumptions": [],
+    "envelope": {"max_size_mm": [20.0, 5.0, 5.0]},
+    "collision_exclusions": [],
+}
+
+def build_model(model: cad.Model):
+    housing = cad.make_part_rpart(
+        part_id="housing",
+        body=cad.make_box_rsolid(width=2.0, height=2.0, depth=2.0),
+    )
+    shaft = cad.make_part_rpart(
+        part_id="shaft",
+        body=cad.make_box_rsolid(width=2.0, height=2.0, depth=2.0),
+    )
+    assembly = cad.make_assembly_rassembly(assembly_id="drive")
+    assembly = cad.add_component_rassembly(
+        assembly=assembly,
+        item=housing,
+        component_id="housing",
+        placement=cad.identity_placement_rplacement(),
+    )
+    return cad.add_component_rassembly(
+        assembly=assembly,
+        item=shaft,
+        component_id="shaft",
+        placement=cad.make_placement_rplacement(origin=(10.0, 0.0, 0.0)),
+    )
+""",
+        encoding="utf-8",
+    )
+    execution = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
+    assert execution.product_validation_status == "Passed"
+
+    result = review_cad(
+        project_dir=tmp_path,
+        request_text="Two separated parts in one assembly.",
+        model_source=scaffold.model_path.read_text(encoding="utf-8"),
+        execution_result=execution,
+        settings=object(),
+        reviewer_factory=lambda _settings: _FakeReviewer(
+            {
+                "status": "pass",
+                "summary": "Both requested components are present.",
+                "findings": [],
+                "checked_requirements": ["two-part assembly"],
+            }
+        ),
+    )
+
+    assert result.status == "pass"
+    assert not any("exactly one solid" in finding.requirement for finding in result.findings)
+
+
+def test_reviewer_treats_host_validation_as_authoritative(tmp_path: Path) -> None:
+    execution = _build_project(tmp_path)
+    manifest = json.loads(
+        (tmp_path / execution.review_manifest_path).read_text(encoding="utf-8")
+    )
+
+    prompt = _review_prompt(
+        "A rectangular block.",
+        (tmp_path / "code" / "model.py").read_text(encoding="utf-8"),
+        manifest,
+        execution,
+    )
+
+    assert "trusted host executor owns strict Assembly solving" in prompt
+    assert "Model Source is not required to call solve" in prompt
+    assert '"product_validation_status": "Passed"' in prompt
 
 
 def test_review_infrastructure_failure_is_a_structured_fail(tmp_path: Path) -> None:

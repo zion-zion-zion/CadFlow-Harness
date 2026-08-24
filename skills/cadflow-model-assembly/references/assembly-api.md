@@ -3,6 +3,47 @@
 Use these public functions inside an active CadFlow model session. All
 assembly mutators return a new value; retain the returned `Assembly`.
 
+## Geometry API boundary
+
+Assembly Part bodies use the replayable geometry family from primitive through
+boolean:
+
+```python
+plate = cad.make_box_rsolid(
+    width=40.0,
+    height=24.0,
+    depth=4.0,
+    bottom_face_center=(0.0, 0.0, 0.0),
+)
+boss = cad.make_cylinder_rsolid(
+    radius=6.0,
+    height=8.0,
+    bottom_face_center=(0.0, 0.0, 0.0),
+    axis=(0.0, 0.0, 1.0),
+)
+body = cad.union_rsolid(plate, boss)
+assert isinstance(body, cad.Solid)
+```
+
+`make_box_rsolid` and `make_cylinder_rsolid` return `cad.Solid`.
+`union_rsolid` and `cut_rsolid` consume replayable solids; every intended union
+member must overlap so the result stays one connected solid. Position these
+primitives with `bottom_face_center` and orient cylinders with `axis`. Keep the
+definition in a coherent local frame, then position each occurrence with its
+component `placement`.
+
+Diagnose replayable Part placement from shared dimensions, constructor
+arguments, connector frames, and structured `validate_model` results. The
+documented `cad.Solid` workflow here provides `get_volume()` but no
+`bbox`/`describe` introspection method; derive primitive axial and radial
+intervals in the dimension module instead of guessing extra methods.
+
+The `cad.Model` DSL is the separate single-Part frontend: `model.box(...)` and
+`model.translate(shape, x, y, z)` return `cad.Shape`. A frontend Shape is not a
+valid `make_part_rpart(..., body=...)` body and cannot enter replayable solid
+booleans. For an Assembly Part, stay in the replayable family; use component
+placements rather than `model.translate` to position occurrences.
+
 ## Parts and connectors
 
 ```python
@@ -110,6 +151,13 @@ Motion couplings are:
 - `add_rack_pinion_constraint_rassembly(..., rack_connector,
   pinion_connector, pitch_radius, phase_offset=None, name=None)`.
 
+Couple the components that own the established joint degrees of freedom. For
+example, when a gear is fixed to a revolute shaft, reference the shaft's axis
+connector in the gear constraint rather than a connector on the fixed gear
+Part. Add the revolute/prismatic joints before their couplings. Leave
+`phase_offset=None` to capture the current joint pose unless the design has an
+explicit phase equation.
+
 Couplings represent kinematics between joint axes. They do not construct gear
 teeth, establish physical contact, or calculate backlash and load capacity.
 
@@ -132,6 +180,7 @@ worst_angle = max(
 )
 assert report.solved
 assert not report.unsolved_component_ids
+assert all(item.within_tolerance for item in report.residuals)
 print(
     "assembly",
     assembly.assembly_id,
@@ -146,62 +195,58 @@ print(
 )
 ```
 
+The runtime performs this strict solve and residual check on the returned
+Assembly even when `build_model` returns the authored, unsolved value. Solving
+inside source can still be useful while constructing or diagnosing a large
+constraint graph.
+
 Inspect residuals rather than relying only on `report.solved`. When driving a
 motion pose, rebuild or update the relevant driven constraint through supported
 public functions, solve again, then rerun envelope and collision checks.
 
-## Replayable build and exports
+## Runtime entry and product contract
 
 ```python
-from pathlib import Path
 import cadflow as cad
 
-OUT = Path("outputs/drive_module")
+from assembly import make_drive_module_rassembly
+from dimensions import validate_design_dimensions
 
-@cad.model(graph_id="drive_module")
-def build_drive_module():
+PRODUCT_SPEC = {
+    "assumptions": ["Rated-load calculations require separate analysis."],
+    "envelope": {"max_size_mm": [80.0, 80.0, 120.0]},
+    "collision_exclusions": [],
+}
+
+def build_model(model: cad.Model) -> cad.Assembly:
     validate_design_dimensions()
-    assembly = make_drive_module_rassembly()
-    preview = cad.make_compound_from_assembly_rcompound(assembly=assembly)
-    cad.capture_result(value=(assembly, preview))
-    return assembly, preview
-
-result = build_drive_module()
-assembly, preview = result.value
-OUT.mkdir(parents=True, exist_ok=True)
-(OUT / "drive_module.model.json").write_text(result.model_json, encoding="utf-8")
-(OUT / "drive_module.session.json").write_text(result.session_json, encoding="utf-8")
-cad.export_step(shapes=preview, filename=str(OUT / "drive_module.step"))
+    return make_drive_module_rassembly()
 ```
 
-The `Compound` is a flattened geometry projection for inspection/export. Keep
-the `Assembly` as the semantic source of component IDs, connectors, materials,
-constraints, and motion relationships. Replay model JSON independently when
-reproducibility is a requested deliverable.
+Keep `PRODUCT_SPEC` available in `model.py`'s global namespace. Its values must
+be JSON-compatible. The executor owns strict solving, flattened Scene
+projection, semantic serialization, STEP export and replay, unique-Part STEP
+export, BOM, validation, assumptions, and the complete source snapshot.
 
-## Static collision verification
+## Automatic collision verification
+
+The executor checks every current-pose leaf pair at 0.02 mm maximum
+penetration. For one intentional contact or interference fit, declare the
+single excluded pair in `PRODUCT_SPEC`:
 
 ```python
-report = cad.verifier.check_collision_rcollisionreport(
-    assembly=assembly,
-    config=cad.verifier.CollisionCheckConfig(
-        max_allowed_penetration=0.02,
-        scope=cad.verifier.CollisionScope(
-            exclude_pairs=(
-                cad.verifier.ComponentPair("housing", "press_fit_ring"),
-            ),
-        ),
-        max_contacts_per_pair=16,
-    ),
-)
-assert report.completed
+PRODUCT_SPEC["collision_exclusions"] = [
+    {
+        "component_a": "drive_module/housing",
+        "component_b": "drive_module/press_fit_ring",
+        "reason": "Specified diametral press fit",
+    }
+]
 ```
 
-`CollisionScope` accepts `component_paths`, `include_pairs`, and
-`exclude_pairs`; build included or excluded pairs with
-`cad.verifier.ComponentPair(component_a, component_b)`. An exclusion skips the
-whole pair, so keep it pair-specific and justify it from the interface
-contract. The verifier checks FCL mesh penetration only at the
-current pose. It does not solve constraints, sweep motion, or reliably detect
-complete containment without surface contact. A useful report records checked
-pair count, failed pair count, warnings, component paths, and penetration depth.
+Paths may include the root Assembly ID; nested paths include every component
+segment. Validation reports normalized paths when an entry is wrong. An
+exclusion skips the whole pair, so it must be unique, pair-specific, and
+physically justified. The verifier checks mesh penetration only at the current
+pose. It does not sweep motion or reliably detect complete containment without
+surface contact.

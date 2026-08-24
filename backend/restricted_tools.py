@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any, Callable
 
@@ -51,6 +52,19 @@ class AgentModelValidator:
         """Return the canonical Model Source path inside ``code/``."""
 
         return model_source_path(self._project_dir)
+
+    def source_revision(self) -> str:
+        """Return a deterministic revision for every Python source in ``code/``."""
+
+        digest = hashlib.sha256()
+        for source_path in sorted(self.code_dir.rglob("*.py")):
+            relative_path = source_path.relative_to(self.code_dir).as_posix().encode()
+            contents = source_path.read_bytes()
+            digest.update(len(relative_path).to_bytes(8, "big"))
+            digest.update(relative_path)
+            digest.update(len(contents).to_bytes(8, "big"))
+            digest.update(contents)
+        return digest.hexdigest()
 
     def record_tool_use(self, tool_name: str, target: str) -> None:
         """Record a host-side CAD tool invocation for the run audit."""

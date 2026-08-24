@@ -10,11 +10,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import stat
+import zipfile
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
 
 from .cad_executor import ExecutionResult
+from .product_artifact import ProductArtifactError, load_product_artifact
 
 
 REVIEWER_VERSION = "cad-review-v1"
@@ -32,6 +35,9 @@ ALLOWED_SEVERITIES = frozenset({"blocking", "major", "minor"})
 MAX_FINDINGS = 32
 MAX_MODEL_SOURCE_CHARS = 120_000
 MAX_REQUEST_CHARS = 32_000
+MAX_SOURCE_SNAPSHOT_BYTES = 2 * 1024 * 1024
+REVIEWER_REASONING_EFFORT = "low"
+REVIEWER_TIMEOUT_SECONDS = 90
 REVIEW_JSON_SCHEMA: dict[str, Any] = {
     "title": "cad_review",
     "type": "object",
@@ -254,6 +260,87 @@ def _verify_images(
     return hashes, findings
 
 
+def _read_source_snapshot(
+    project_dir: Path,
+    manifest: Mapping[str, Any],
+) -> tuple[str | None, list[ReviewFinding]]:
+    try:
+        product = load_product_artifact(project_dir / "artifacts")
+        snapshot_path = product.file_path("source_snapshot")
+        raw_records = manifest.get("source_files")
+        if not isinstance(raw_records, list) or not raw_records:
+            raise ValueError("review manifest source_files are missing")
+        expected: dict[str, str] = {}
+        for record in raw_records:
+            if not isinstance(record, Mapping):
+                raise ValueError("review manifest source file record is invalid")
+            relative = record.get("path")
+            digest = record.get("sha256")
+            if (
+                not isinstance(relative, str)
+                or not relative
+                or relative in expected
+                or not isinstance(digest, str)
+                or len(digest) != 64
+            ):
+                raise ValueError("review manifest source file identity is invalid")
+            expected[relative] = digest
+
+        observed: dict[str, str] = {}
+        source_text: dict[str, str] = {}
+        total_bytes = 0
+        with zipfile.ZipFile(snapshot_path) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                mode = (info.external_attr >> 16) & 0o170000
+                if mode == stat.S_IFLNK:
+                    raise ValueError("source snapshot contains a symbolic link")
+                pure_path = PurePosixPath(info.filename)
+                if (
+                    pure_path.is_absolute()
+                    or len(pure_path.parts) < 2
+                    or pure_path.parts[0] != "code"
+                    or any(part in {"", ".", ".."} for part in pure_path.parts)
+                ):
+                    raise ValueError("source snapshot contains an unsafe path")
+                relative = PurePosixPath(*pure_path.parts[1:]).as_posix()
+                if relative in observed:
+                    raise ValueError("source snapshot contains a duplicate path")
+                total_bytes += info.file_size
+                if total_bytes > MAX_SOURCE_SNAPSHOT_BYTES:
+                    raise ValueError("source snapshot exceeds the review size limit")
+                content = archive.read(info)
+                observed[relative] = hashlib.sha256(content).hexdigest()
+                source_text[relative] = content.decode("utf-8")
+        if observed != expected:
+            raise ValueError("source snapshot does not match review source hashes")
+        bundled_source = "\n\n".join(
+            f"===== code/{relative} =====\n{source_text[relative]}"
+            for relative in sorted(source_text)
+        )
+        return bundled_source, []
+    except (
+        OSError,
+        UnicodeError,
+        ValueError,
+        zipfile.BadZipFile,
+        ProductArtifactError,
+    ) as error:
+        return None, [
+            _finding(
+                category="review_infrastructure",
+                severity="blocking",
+                requirement="Every executed Python source is hash-bound and reviewable.",
+                observed=(
+                    "The source snapshot could not be verified: "
+                    f"{type(error).__name__}: {error}"
+                ),
+                recommendation="Run validate_model again to rebuild the source snapshot.",
+            )
+        ]
+
+
 def _deterministic_findings(
     execution_result: ExecutionResult,
     manifest: Mapping[str, Any] | None,
@@ -270,13 +357,24 @@ def _deterministic_findings(
             )
         )
         return findings
-    if execution_result.solid_count != 1 or execution_result.final_shape_count != 1:
+    if not execution_result.is_validated_product:
         findings.append(
             _finding(
                 category="geometry",
                 severity="blocking",
-                requirement="The result contains exactly one solid shape.",
-                observed=f"shape_count={execution_result.final_shape_count}, solid_count={execution_result.solid_count}",
+                requirement="The semantic CAD product passes deterministic validation.",
+                observed=(
+                    f"result_kind={execution_result.result_kind}, "
+                    f"component_count={execution_result.component_count}, "
+                    f"leaf_part_count={execution_result.leaf_part_count}, "
+                    f"solid_count={execution_result.solid_count}, "
+                    f"validation_status={execution_result.product_validation_status}"
+                ),
+                evidence={
+                    "blocking_failures": list(
+                        execution_result.product_validation_failures
+                    )
+                },
             )
         )
     if execution_result.solid_volume is None or execution_result.solid_volume <= 0:
@@ -318,25 +416,13 @@ def _default_reviewer_factory(settings: Any) -> Any:
         "model": settings.model_id,
         "api_key": settings.api_key,
         "max_retries": 1,
-        "timeout": 120,
+        "timeout": REVIEWER_TIMEOUT_SECONDS,
         "use_responses_api": settings.use_responses_api,
     }
     if getattr(settings, "base_url", None):
         arguments["base_url"] = settings.base_url
-    reasoning_parameters = getattr(settings, "reasoning_parameters", None)
-    if reasoning_parameters is None and getattr(settings, "use_responses_api", False):
-        reasoning_parameters = {
-            key: value
-            for key, value in {
-                "effort": getattr(settings, "reasoning_effort", None),
-                "summary": getattr(settings, "reasoning_summary", None),
-            }.items()
-            if value is not None
-        }
-    if reasoning_parameters:
-        arguments["reasoning"] = reasoning_parameters
-    elif getattr(settings, "reasoning_effort", None):
-        arguments["reasoning_effort"] = settings.reasoning_effort
+    if getattr(settings, "use_responses_api", False):
+        arguments["reasoning"] = {"effort": REVIEWER_REASONING_EFFORT}
     return ChatOpenAI(**arguments)
 
 
@@ -349,16 +435,39 @@ def _review_prompt(
     request_text: str,
     model_source: str,
     manifest: Mapping[str, Any],
+    execution_result: ExecutionResult,
 ) -> str:
+    execution_evidence = {
+        "result_kind": execution_result.result_kind,
+        "component_count": execution_result.component_count,
+        "leaf_part_count": execution_result.leaf_part_count,
+        "unique_part_count": execution_result.unique_part_count,
+        "solid_count": execution_result.solid_count,
+        "product_validation_status": execution_result.product_validation_status,
+        "product_validation_failures": list(
+            execution_result.product_validation_failures
+        ),
+        "product_validation_checks": list(execution_result.product_validation_checks),
+        "scene_parse_result": execution_result.scene_parse_result.to_dict(),
+    }
     return (
         "Review the generated CAD model against the user's request. "
         "Only report explicit missing features, visible dimensions, alignment, "
         "geometry, or manufacturability conflicts. Do not invent requirements. "
+        "The trusted host executor owns strict Assembly solving, residual checks, "
+        "collision, envelope, STEP replay, Scene parsing, and artifact export. "
+        "A Passed product_validation_status is authoritative evidence that those "
+        "gates passed. Model Source is not required to call solve, validate, render, "
+        "or export APIs itself; absence of those calls is not a finding. "
         "Return JSON with status (pass or fail), summary, findings, and "
         "checked_requirements. Any clear conflict is fail; otherwise pass.\n\n"
         f"USER REQUEST:\n{request_text[:MAX_REQUEST_CHARS]}\n\n"
-        f"MODEL.PY:\n{model_source[:MAX_MODEL_SOURCE_CHARS]}\n\n"
-        f"DETERMINISTIC EVIDENCE:\n{json.dumps(manifest, sort_keys=True)}"
+        f"MODEL SOURCES:\n{model_source[:MAX_MODEL_SOURCE_CHARS]}\n\n"
+        "DETERMINISTIC EVIDENCE:\n"
+        + json.dumps(
+            {"execution": execution_evidence, "review_manifest": manifest},
+            sort_keys=True,
+        )
     )
 
 
@@ -409,6 +518,7 @@ def _model_findings(
     request_text: str,
     model_source: str,
     manifest: Mapping[str, Any],
+    execution_result: ExecutionResult,
     review_root: Path,
     reviewer_factory: Callable[[Any], Any] | None,
     reviewer_callbacks: Sequence[Any] | None,
@@ -428,7 +538,15 @@ def _model_findings(
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": _review_prompt(request_text, model_source, manifest)},
+                {
+                    "type": "text",
+                    "text": _review_prompt(
+                        request_text,
+                        model_source,
+                        manifest,
+                        execution_result,
+                    ),
+                },
                 {"type": "text", "text": "Single isometric evidence:"},
                 {"type": "image_url", "image_url": {"url": _image_data_uri(review_root / manifest["single_render"]["path"])}},
                 {"type": "text", "text": "Eight-view contact-sheet evidence:"},
@@ -479,10 +597,14 @@ def review_cad(
                 _finding(
                     category="review_infrastructure",
                     severity="blocking",
-                    requirement="Evidence is bound to the current code/model.py source revision.",
+                    requirement="Evidence is bound to the complete executed source revision.",
                     observed="The manifest model hash does not match the execution result.",
                 )
             )
+        bundled_source, source_findings = _read_source_snapshot(project_path, manifest)
+        evidence_findings.extend(source_findings)
+    else:
+        bundled_source = None
     findings = _deterministic_findings(execution_result, manifest)
     findings.extend(evidence_findings)
     checked = (
@@ -497,8 +619,9 @@ def review_cad(
             status, summary, model_findings, model_checked = _model_findings(
                 settings=settings,
                 request_text=request_text,
-                model_source=model_source,
+                model_source=bundled_source or model_source,
                 manifest=manifest,
+                execution_result=execution_result,
                 review_root=review_root,
                 reviewer_factory=reviewer_factory,
                 reviewer_callbacks=reviewer_callbacks,

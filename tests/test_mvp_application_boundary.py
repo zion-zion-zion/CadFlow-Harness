@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from backend.agent import AgentRunOutcome
 from backend.app import create_app
 from backend.cad_executor import CADExecutor, CancellationToken
+from backend.cad_review import ReviewResult
 from backend.events import ProgressUpdate
 from backend.model_source import create_model_source
 from backend.projects import ProjectState, ProjectStore
@@ -116,11 +117,19 @@ def build_model(model: cad.Model):
             )
         )
         assert scaffold.scene_path == project_dir / "artifacts" / "model.scene.zip"
+        assert result.is_validated_product
+        review = ReviewResult(
+            status="pass",
+            summary="The deterministic test block matches the request.",
+            checked_requirements=("deterministic test block",),
+            model_sha256=result.review_model_sha256,
+        )
         return AgentRunOutcome(
-            validated=result.status == "succeeded",
+            validated=True,
             failure_reason=result.error,
             execution_result=result,
             execution_results=(result,),
+            review_result=review,
         )
 
 
@@ -359,7 +368,14 @@ def test_http_boundary_persists_success_events_and_scene_artifact(
     succeeded = _wait_for_state(client, project_id, ProjectState.SUCCEEDED.value)
     assert succeeded["prompt"] == "Create a deterministic test part."
     assert succeeded["scene_available"] is True
+    assert succeeded["product_available"] is True
+    assert succeeded["result_kind"] == "part"
+    assert succeeded["product_status"] == "Accepted"
     assert succeeded["diagnostics_available"] is True
+
+    product_response = client.get(f"/api/projects/{project_id}/product")
+    assert product_response.status_code == 200
+    assert product_response.json()["status"] == "Accepted"
 
     scene_response = client.get(f"/api/projects/{project_id}/scene")
     assert scene_response.status_code == 200
@@ -476,7 +492,7 @@ def test_message_turn_fails_when_a_validated_run_has_no_artifact(tmp_path: Path)
     assert response.status_code == 200
     turn = response.json()["turn"]
     assert turn["status"] == "failed"
-    assert "canonical Scene Artifact" in turn["error"]
+    assert "complete product artifact" in turn["error"]
     assert turn["artifact_version"] is None
 
 

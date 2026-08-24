@@ -1,6 +1,12 @@
 import './style.css';
 
 import { ScenePackageError, SceneViewer } from './components/scene-viewer';
+import {
+  buildProductTree,
+  flattenProductTree,
+  type ProductSemanticModel,
+  type ProductTreeNode,
+} from './product-state';
 import { shouldLoadCanonicalScene } from './scene-state';
 
 const MAX_PROMPT_CHARS = 32_000;
@@ -35,6 +41,9 @@ type Project = {
   failure_reason: string | null;
   harness: AgentHarness;
   scene_available: boolean;
+  product_available: boolean;
+  result_kind: 'part' | 'assembly' | null;
+  product_status: 'Accepted' | null;
   artifact_version: number | null;
   turn_count: number;
   diagnostics_available: boolean;
@@ -79,6 +88,60 @@ type ProgressRecord = {
     operation: string;
   };
 };
+type ProductFile = {
+  path: string;
+  sha256: string;
+  size_bytes: number;
+  download_url: string;
+};
+type ProductPart = {
+  part_id: string;
+  quantity: number;
+  component_paths: string[];
+  step_path: string;
+  sha256: string;
+  size_bytes: number;
+  download_url: string;
+};
+type ProductBomItem = {
+  part_id: string;
+  name: string | null;
+  material: string | null;
+  quantity: number;
+  component_paths: string[];
+  step_path: string;
+};
+type ProductValidationCheck = {
+  check_id: string;
+  status: 'passed' | 'failed' | 'not_applicable' | string;
+  message?: string;
+  evidence?: unknown;
+};
+type ProductValidationReport = {
+  status: string;
+  checks: ProductValidationCheck[];
+  blocking_failures: string[];
+};
+type ProductResponse = {
+  schema_version: 'cadflow-product-api/v1';
+  result_kind: 'part' | 'assembly';
+  status: 'Accepted';
+  manifest_url: string;
+  summary: {
+    component_count: number;
+    leaf_part_count: number;
+    unique_part_count: number;
+    solid_count: number;
+    volume_mm3: number;
+  };
+  files: Record<string, ProductFile>;
+  parts: ProductPart[];
+  semantic_model: ProductSemanticModel | null;
+  bom: ProductBomItem[];
+  assumptions: string[];
+  validation_report: ProductValidationReport | null;
+};
+type ProductTab = 'structure' | 'bom' | 'validation';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('viewer root is missing');
@@ -166,13 +229,33 @@ app.innerHTML = `
             <button id="fit-button" class="quiet-button" type="button">Fit</button>
           </div>
         </div>
-        <div id="viewer-stage" class="viewer-stage">
-          <div id="viewer" class="viewer"></div>
-          <div id="viewer-loading" class="viewer-loading" hidden><span class="spinner"></span><span>Loading Scene Artifact</span></div>
-          <div id="viewer-empty" class="viewer-empty"><span class="empty-mark">◇</span><strong id="viewer-empty-title">No Project selected</strong><span id="viewer-empty-copy">Select a Project to inspect its own Scene Artifact.</span></div>
-          <div class="viewer-hint">Drag to rotate · right-drag to pan · scroll to zoom</div>
-          <details id="preview-details" class="preview-details" hidden><summary>Preview diagnostics</summary><pre id="preview-log"></pre></details>
-          <div id="viewer-status" class="viewer-status" aria-live="polite"><span id="viewer-status-dot" class="status-dot"></span><span id="viewer-status-text">Waiting for a Validated Result</span></div>
+        <div class="viewer-workspace">
+          <div id="viewer-stage" class="viewer-stage">
+            <div id="viewer" class="viewer"></div>
+            <div id="viewer-loading" class="viewer-loading" hidden><span class="spinner"></span><span>Loading Scene Artifact</span></div>
+            <div id="viewer-empty" class="viewer-empty"><span class="empty-mark">◇</span><strong id="viewer-empty-title">No Project selected</strong><span id="viewer-empty-copy">Select a Project to inspect its own Scene Artifact.</span></div>
+            <div class="viewer-hint">Drag to rotate · right-drag to pan · scroll to zoom</div>
+            <details id="preview-details" class="preview-details" hidden><summary>Preview diagnostics</summary><pre id="preview-log"></pre></details>
+            <div id="viewer-status" class="viewer-status" aria-live="polite"><span id="viewer-status-dot" class="status-dot"></span><span id="viewer-status-text">Waiting for a Validated Result</span></div>
+          </div>
+          <aside id="product-inspector" class="product-inspector" aria-label="Accepted Product" hidden>
+            <div class="product-inspector-heading">
+              <div class="product-heading-copy"><span class="eyebrow">ACCEPTED PRODUCT</span><strong id="product-title">Product</strong><span id="product-summary"></span></div>
+              <div class="product-heading-actions">
+                <span id="product-status" class="product-status">Accepted</span>
+                <details id="product-downloads" class="product-downloads">
+                  <summary>Files</summary>
+                  <div id="product-download-list" class="product-download-list"></div>
+                </details>
+              </div>
+            </div>
+            <div class="product-tabs" role="tablist" aria-label="Product details">
+              <button class="product-tab" type="button" role="tab" data-product-tab="structure">Structure</button>
+              <button class="product-tab" type="button" role="tab" data-product-tab="bom">BOM</button>
+              <button class="product-tab" type="button" role="tab" data-product-tab="validation">Validation</button>
+            </div>
+            <div id="product-pane" class="product-pane" role="tabpanel" tabindex="0"></div>
+          </aside>
         </div>
       </section>
     </section>
@@ -219,6 +302,14 @@ const previewToggle = document.querySelector<HTMLInputElement>('#preview-toggle'
 const previewRetry = document.querySelector<HTMLButtonElement>('#preview-retry')!;
 const previewDetails = document.querySelector<HTMLDetailsElement>('#preview-details')!;
 const previewLog = document.querySelector<HTMLPreElement>('#preview-log')!;
+const productInspector = document.querySelector<HTMLElement>('#product-inspector')!;
+const productTitle = document.querySelector<HTMLElement>('#product-title')!;
+const productSummary = document.querySelector<HTMLElement>('#product-summary')!;
+const productStatus = document.querySelector<HTMLElement>('#product-status')!;
+const productDownloads = document.querySelector<HTMLDetailsElement>('#product-downloads')!;
+const productDownloadList = document.querySelector<HTMLDivElement>('#product-download-list')!;
+const productPane = document.querySelector<HTMLDivElement>('#product-pane')!;
+const productTabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-product-tab]'));
 const serviceMessage = document.querySelector<HTMLSpanElement>('#service-message')!;
 
 let projects: Project[] = [];
@@ -229,16 +320,33 @@ let conversationByProject = new Map<string, ConversationTurn[]>();
 let eventSource: EventSource | null = null;
 let sceneRequest: AbortController | null = null;
 let previewRequest: AbortController | null = null;
+let productRequest: AbortController | null = null;
 let previewProjectId: string | null = null;
 let latestPreviewRevision = 0;
 let loadedPreviewRevision = 0;
 let loadedSceneProjectId: string | null = null;
 let loadedSceneArtifactVersion: number | null = null;
+let loadedProductProjectId: string | null = null;
+let loadedProductArtifactVersion: number | null = null;
+let acceptedProduct: ProductResponse | null = null;
+let acceptedProductTree: ProductTreeNode | null = null;
+let productLoading = false;
+let productLoadError = '';
+let activeProductTab: ProductTab = 'structure';
+let selectedProductNodeKey: string | null = null;
 let workspaceMessage = '';
 
 const sceneViewer = new SceneViewer(viewerElement, (message, ready) => {
   viewerStatusText.textContent = message;
   viewerStatusDot.classList.toggle('ready', ready);
+}, (nodeId) => {
+  const node = acceptedProductTree
+    ? flattenProductTree(acceptedProductTree).find((item) => item.sceneNodeId === nodeId)
+    : undefined;
+  if (node) {
+    selectedProductNodeKey = node.key;
+    renderProductInspector();
+  }
 });
 
 function currentProject(): Project | null {
@@ -522,11 +630,296 @@ function renderViewerChrome(): void {
   viewerStatusDot.classList.toggle('error', project.preview.state === 'failed');
 }
 
+function renderProductInspector(): void {
+  const project = currentProject();
+  const visible = project !== null && project.product_available && project.state !== 'Running';
+  productInspector.hidden = !visible;
+  if (!visible || !project) return;
+
+  productTitle.textContent = project.result_kind === 'assembly' ? 'Assembly' : 'Part';
+  productStatus.textContent = project.product_status ?? 'Accepted';
+  productSummary.textContent = acceptedProduct
+    ? `${acceptedProduct.summary.unique_part_count} unique · ${acceptedProduct.summary.leaf_part_count} instance${acceptedProduct.summary.leaf_part_count === 1 ? '' : 's'}`
+    : 'Loading product record';
+  renderProductDownloads();
+
+  for (const button of productTabButtons) {
+    const selected = button.dataset.productTab === activeProductTab;
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  }
+  productPane.replaceChildren();
+  productPane.setAttribute('aria-label', humanizeIdentifier(activeProductTab));
+  if (productLoading && !acceptedProduct) {
+    appendProductMessage('Loading accepted product...');
+    return;
+  }
+  if (productLoadError) {
+    appendProductMessage(productLoadError, true);
+    return;
+  }
+  if (!acceptedProduct) {
+    appendProductMessage('Accepted product data is unavailable.', true);
+    return;
+  }
+  if (activeProductTab === 'structure') renderProductStructure();
+  else if (activeProductTab === 'bom') renderProductBom();
+  else renderProductValidation();
+}
+
+function renderProductDownloads(): void {
+  productDownloadList.replaceChildren();
+  if (!acceptedProduct) {
+    productDownloads.hidden = true;
+    productDownloads.open = false;
+    return;
+  }
+  productDownloads.hidden = false;
+  const labels: Record<string, string> = {
+    product_step: 'Product STEP',
+    scene: 'Scene',
+    source_snapshot: 'Source snapshot',
+    semantic_model: 'Semantic model',
+    bom: 'BOM',
+    validation_report: 'Validation report',
+    assumptions: 'Assumptions',
+  };
+  const manifest = document.createElement('a');
+  manifest.href = acceptedProduct.manifest_url;
+  manifest.download = '';
+  manifest.textContent = 'Manifest';
+  productDownloadList.append(manifest);
+  for (const [role, file] of Object.entries(acceptedProduct.files)) {
+    const link = document.createElement('a');
+    link.href = file.download_url;
+    link.download = '';
+    link.textContent = labels[role] ?? humanizeIdentifier(role);
+    productDownloadList.append(link);
+  }
+}
+
+function appendProductMessage(message: string, error = false): void {
+  const element = document.createElement('p');
+  element.className = `product-message${error ? ' error' : ''}`;
+  element.textContent = message;
+  productPane.append(element);
+}
+
+function renderProductStructure(): void {
+  if (!acceptedProductTree) {
+    appendProductMessage('Semantic product structure is unavailable.', true);
+    return;
+  }
+  const sceneReady = loadedSceneProjectId === selectedProjectId;
+  const toolbar = document.createElement('div');
+  toolbar.className = 'product-toolbar';
+  const count = document.createElement('span');
+  count.textContent = `${acceptedProduct?.summary.component_count ?? 0} components`;
+  const showAll = document.createElement('button');
+  showAll.type = 'button';
+  showAll.className = 'inspector-button';
+  showAll.textContent = 'Show All';
+  showAll.disabled = !sceneReady;
+  showAll.addEventListener('click', () => {
+    sceneViewer.showAll();
+    renderProductInspector();
+  });
+  toolbar.append(count, showAll);
+
+  const tree = document.createElement('div');
+  tree.className = 'product-tree';
+  tree.setAttribute('role', 'tree');
+  appendProductTreeNode(tree, acceptedProductTree, 1, sceneReady);
+  productPane.append(toolbar, tree);
+}
+
+function appendProductTreeNode(
+  tree: HTMLElement,
+  node: ProductTreeNode,
+  level: number,
+  sceneReady: boolean,
+): void {
+  const row = document.createElement('div');
+  row.className = 'product-tree-row';
+  row.classList.toggle('selected', selectedProductNodeKey === node.key);
+  row.style.setProperty('--tree-depth', String(level - 1));
+  row.setAttribute('role', 'treeitem');
+  row.setAttribute('aria-level', String(level));
+  row.setAttribute('aria-selected', String(selectedProductNodeKey === node.key));
+
+  const select = document.createElement('button');
+  select.type = 'button';
+  select.className = 'product-tree-select';
+  select.disabled = !sceneReady || !sceneViewer.hasNode(node.sceneNodeId);
+  select.title = node.path;
+  const kind = document.createElement('span');
+  kind.className = `tree-kind tree-kind-${node.itemKind}`;
+  kind.textContent = node.itemKind === 'assembly' ? 'A' : 'P';
+  const copy = document.createElement('span');
+  copy.className = 'tree-copy';
+  const label = document.createElement('strong');
+  label.textContent = node.label;
+  const identity = document.createElement('small');
+  identity.textContent = node.itemId;
+  copy.append(label, identity);
+  select.append(kind, copy);
+  select.addEventListener('click', () => {
+    selectedProductNodeKey = node.key;
+    sceneViewer.selectNode(node.sceneNodeId);
+    renderProductInspector();
+  });
+
+  const visible = sceneViewer.isNodeVisible(node.sceneNodeId);
+  const visibility = document.createElement('button');
+  visibility.type = 'button';
+  visibility.className = 'tree-action';
+  visibility.textContent = visible ? 'Hide' : 'Show';
+  visibility.title = `${visible ? 'Hide' : 'Show'} ${node.label}`;
+  visibility.disabled = !sceneReady || !sceneViewer.hasNode(node.sceneNodeId);
+  visibility.addEventListener('click', () => {
+    sceneViewer.setNodeVisible(node.sceneNodeId, !visible);
+    if (visible && selectedProductNodeKey !== null
+      && (selectedProductNodeKey === node.key || selectedProductNodeKey.startsWith(`${node.key}/`))) {
+      selectedProductNodeKey = null;
+    }
+    renderProductInspector();
+  });
+
+  const isolate = document.createElement('button');
+  isolate.type = 'button';
+  isolate.className = 'tree-action';
+  isolate.textContent = 'Only';
+  isolate.title = `Isolate ${node.label}`;
+  isolate.disabled = !sceneReady || !sceneViewer.hasNode(node.sceneNodeId);
+  isolate.addEventListener('click', () => {
+    selectedProductNodeKey = node.key;
+    sceneViewer.isolateNode(node.sceneNodeId);
+    renderProductInspector();
+  });
+  row.append(select, visibility, isolate);
+  tree.append(row);
+  for (const child of node.children) appendProductTreeNode(tree, child, level + 1, sceneReady);
+}
+
+function renderProductBom(): void {
+  if (!acceptedProduct || acceptedProduct.bom.length === 0) {
+    appendProductMessage('No BOM items are available.', true);
+    return;
+  }
+  const partDownloads = new Map(acceptedProduct.parts.map((part) => [part.part_id, part.download_url]));
+  const scroller = document.createElement('div');
+  scroller.className = 'bom-scroller';
+  const table = document.createElement('table');
+  table.className = 'bom-table';
+  const head = document.createElement('thead');
+  head.innerHTML = '<tr><th>Qty</th><th>Part</th><th>Material</th><th>STEP</th></tr>';
+  const body = document.createElement('tbody');
+  for (const item of acceptedProduct.bom) {
+    const row = document.createElement('tr');
+    const quantity = document.createElement('td');
+    quantity.textContent = String(item.quantity);
+    const part = document.createElement('td');
+    const name = document.createElement('strong');
+    name.textContent = item.name || item.part_id;
+    const partId = document.createElement('code');
+    partId.textContent = item.part_id;
+    const instances = document.createElement('details');
+    instances.className = 'bom-instances';
+    const instanceSummary = document.createElement('summary');
+    instanceSummary.textContent = `${item.component_paths.length} path${item.component_paths.length === 1 ? '' : 's'}`;
+    const paths = document.createElement('ul');
+    for (const componentPath of item.component_paths) {
+      const path = document.createElement('li');
+      path.textContent = componentPath;
+      paths.append(path);
+    }
+    instances.append(instanceSummary, paths);
+    part.append(name, partId, instances);
+    const material = document.createElement('td');
+    material.textContent = item.material || 'Not specified';
+    const downloadCell = document.createElement('td');
+    const download = document.createElement('a');
+    download.className = 'step-download';
+    download.href = partDownloads.get(item.part_id) ?? '#';
+    download.download = '';
+    download.textContent = 'STEP';
+    downloadCell.append(download);
+    row.append(quantity, part, material, downloadCell);
+    body.append(row);
+  }
+  table.append(head, body);
+  scroller.append(table);
+  productPane.append(scroller);
+}
+
+function renderProductValidation(): void {
+  const report = acceptedProduct?.validation_report;
+  if (!report) {
+    appendProductMessage('Validation report is unavailable.', true);
+    return;
+  }
+  const summary = document.createElement('div');
+  summary.className = 'validation-summary';
+  const state = document.createElement('strong');
+  state.textContent = report.status;
+  const checks = document.createElement('span');
+  checks.textContent = `${report.checks.length} checks · ${report.blocking_failures.length} blocking`;
+  summary.append(state, checks);
+
+  const list = document.createElement('div');
+  list.className = 'validation-list';
+  for (const check of report.checks) {
+    const detail = document.createElement('details');
+    detail.className = `validation-check validation-${check.status}`;
+    const heading = document.createElement('summary');
+    const status = document.createElement('span');
+    status.className = 'validation-check-status';
+    status.textContent = check.status === 'not_applicable' ? 'N/A' : check.status;
+    const name = document.createElement('strong');
+    name.textContent = humanizeIdentifier(check.check_id);
+    heading.append(status, name);
+    detail.append(heading);
+    if (check.message || check.evidence !== undefined) {
+      const evidence = document.createElement('pre');
+      evidence.textContent = [
+        check.message,
+        check.evidence === undefined ? null : JSON.stringify(check.evidence, null, 2),
+      ].filter((item): item is string => typeof item === 'string' && item.length > 0).join('\n\n');
+      detail.append(evidence);
+    }
+    list.append(detail);
+  }
+  productPane.append(summary, list);
+
+  const assumptionsHeading = document.createElement('h2');
+  assumptionsHeading.className = 'inspector-subheading';
+  assumptionsHeading.textContent = 'Assumptions';
+  const assumptions = document.createElement('ul');
+  assumptions.className = 'assumption-list';
+  for (const assumption of acceptedProduct?.assumptions ?? []) {
+    const item = document.createElement('li');
+    item.textContent = assumption;
+    assumptions.append(item);
+  }
+  if (assumptions.children.length === 0) {
+    const item = document.createElement('li');
+    item.textContent = 'None recorded';
+    assumptions.append(item);
+  }
+  productPane.append(assumptionsHeading, assumptions);
+}
+
+function humanizeIdentifier(value: string): string {
+  return value.replaceAll('_', ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
 function renderAll(): void {
   renderCatalog();
   renderWorkspace();
   renderViewerEmpty();
   renderViewerChrome();
+  renderProductInspector();
 }
 
 function setMessage(message: string): void {
@@ -537,6 +930,68 @@ function setMessage(message: string): void {
 function closeProgressStream(): void {
   eventSource?.close();
   eventSource = null;
+}
+
+function resetProductState(resetTab = false): void {
+  productRequest?.abort();
+  productRequest = null;
+  loadedProductProjectId = null;
+  loadedProductArtifactVersion = null;
+  acceptedProduct = null;
+  acceptedProductTree = null;
+  productLoading = false;
+  productLoadError = '';
+  selectedProductNodeKey = null;
+  productDownloads.open = false;
+  if (resetTab) activeProductTab = 'structure';
+}
+
+function shouldLoadProduct(project: Project): boolean {
+  return project.product_available
+    && project.state !== 'Running'
+    && (
+      loadedProductProjectId !== project.project_id
+      || loadedProductArtifactVersion !== project.artifact_version
+    );
+}
+
+async function loadProduct(project: Project, version: number): Promise<void> {
+  if (!project.product_available || project.state === 'Running') return;
+  productRequest?.abort();
+  const controller = new AbortController();
+  productRequest = controller;
+  loadedProductProjectId = null;
+  loadedProductArtifactVersion = null;
+  acceptedProduct = null;
+  acceptedProductTree = null;
+  selectedProductNodeKey = null;
+  productLoadError = '';
+  productLoading = true;
+  renderProductInspector();
+  try {
+    const product = await request<ProductResponse>(
+      `/api/projects/${encodeURIComponent(project.project_id)}/product`,
+      { signal: controller.signal },
+    );
+    if (version !== selectedVersion || selectedProjectId !== project.project_id) return;
+    if (product.schema_version !== 'cadflow-product-api/v1' || product.status !== 'Accepted') {
+      throw new Error('Product API returned an unsupported record.');
+    }
+    if (!product.semantic_model) throw new Error('Accepted product has no semantic model.');
+    acceptedProductTree = buildProductTree(product.semantic_model);
+    acceptedProduct = product;
+    loadedProductProjectId = project.project_id;
+    loadedProductArtifactVersion = project.artifact_version;
+  } catch (error) {
+    if (controller.signal.aborted || version !== selectedVersion) return;
+    productLoadError = errorMessage(error);
+  } finally {
+    if (productRequest === controller) productRequest = null;
+    if (version === selectedVersion && selectedProjectId === project.project_id) {
+      productLoading = false;
+      renderProductInspector();
+    }
+  }
 }
 
 function isCurrentPreview(projectId: string, version: number, revision: number): boolean {
@@ -637,8 +1092,10 @@ async function refreshSelectedProject(version: number): Promise<void> {
     if (version !== selectedVersion || selectedProjectId !== projectId) return;
     upsertProject(project);
     conversationByProject.set(projectId, conversation.turns);
+    if (!project.product_available || project.state === 'Running') resetProductState();
     workspaceMessage = '';
     renderAll();
+    const artifactLoads: Promise<void>[] = [];
     if (shouldLoadCanonicalScene({
       projectId,
       state: project.state,
@@ -647,13 +1104,16 @@ async function refreshSelectedProject(version: number): Promise<void> {
       loadedSceneProjectId,
       loadedSceneArtifactVersion,
       previewProjectId,
-    })) await loadScene(project, version);
+    })) artifactLoads.push(loadScene(project, version));
+    if (shouldLoadProduct(project)) artifactLoads.push(loadProduct(project, version));
+    if (artifactLoads.length > 0) await Promise.all(artifactLoads);
     if ((!project.scene_available || project.state === 'Running') && loadedSceneProjectId === projectId) {
       loadedSceneProjectId = null;
       loadedSceneArtifactVersion = null;
       if (project.state === 'Failed' || project.state === 'Stopped') sceneViewer.markPreviewUnvalidated();
       else sceneViewer.clear();
       renderViewerEmpty();
+      renderProductInspector();
     }
     if ((project.state === 'Failed' || project.state === 'Stopped') && !project.scene_available) {
       sceneViewer.markPreviewUnvalidated();
@@ -679,6 +1139,7 @@ async function loadScene(project: Project, version: number): Promise<void> {
   latestPreviewRevision = 0;
   loadedPreviewRevision = 0;
   sceneViewer.clear('Loading canonical Scene Artifact');
+  renderProductInspector();
   viewerEmpty.hidden = true;
   viewerLoading.hidden = false;
   try {
@@ -692,6 +1153,7 @@ async function loadScene(project: Project, version: number): Promise<void> {
       loadedSceneArtifactVersion = project.artifact_version;
       renderViewerEmpty();
       renderViewerChrome();
+      renderProductInspector();
     }
   } catch (error) {
     if (controller.signal.aborted || version !== selectedVersion) return;
@@ -702,6 +1164,7 @@ async function loadScene(project: Project, version: number): Promise<void> {
     if (sceneRequest === controller) {
       sceneRequest = null;
       viewerLoading.hidden = true;
+      renderProductInspector();
     }
   }
 }
@@ -721,6 +1184,7 @@ async function selectProject(projectId: string): Promise<void> {
   loadedPreviewRevision = 0;
   loadedSceneProjectId = null;
   loadedSceneArtifactVersion = null;
+  resetProductState(true);
   promptInput.value = '';
   sceneViewer.clear();
   progressByProject.set(projectId, []);
@@ -735,8 +1199,13 @@ async function selectProject(projectId: string): Promise<void> {
     conversationByProject.set(projectId, conversation.turns);
     renderAll();
     openProgressStream(projectId, version);
-    if (project.scene_available && project.state !== 'Running') await loadScene(project, version);
-    else await loadLivePreview(project, version);
+    if (project.scene_available && project.state !== 'Running') {
+      const artifactLoads: Promise<void>[] = [loadScene(project, version)];
+      if (shouldLoadProduct(project)) artifactLoads.push(loadProduct(project, version));
+      await Promise.all(artifactLoads);
+    } else {
+      await loadLivePreview(project, version);
+    }
   } catch (error) {
     if (version === selectedVersion) setMessage(errorMessage(error));
   }
@@ -756,6 +1225,7 @@ async function refreshCatalog(): Promise<void> {
       loadedPreviewRevision = 0;
       loadedSceneProjectId = null;
       loadedSceneArtifactVersion = null;
+      resetProductState(true);
       sceneViewer.clear();
     }
     renderAll();
@@ -941,6 +1411,7 @@ async function deleteProject(): Promise<void> {
     latestPreviewRevision = 0;
     loadedPreviewRevision = 0;
     loadedSceneArtifactVersion = null;
+    resetProductState(true);
     projects = projects.filter((item) => item.project_id !== project.project_id);
     conversationByProject.delete(project.project_id);
     progressByProject.delete(project.project_id);
@@ -978,6 +1449,7 @@ async function clearConversation(): Promise<void> {
     loadedSceneProjectId = null;
     loadedSceneArtifactVersion = null;
     previewProjectId = null;
+    resetProductState(true);
     sceneViewer.clear();
     workspaceMessage = 'Conversation and CAD artifacts were cleared.';
     renderAll();
@@ -1042,6 +1514,25 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The request could not be completed.';
 }
 
+for (const [index, button] of productTabButtons.entries()) {
+  button.addEventListener('click', () => {
+    activeProductTab = button.dataset.productTab as ProductTab;
+    renderProductInspector();
+  });
+  button.addEventListener('keydown', (event) => {
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % productTabButtons.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + productTabButtons.length) % productTabButtons.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = productTabButtons.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const next = productTabButtons[nextIndex];
+    activeProductTab = next.dataset.productTab as ProductTab;
+    renderProductInspector();
+    next.focus();
+  });
+}
 document.querySelector<HTMLFormElement>('#create-project-form')!.addEventListener('submit', (event) => void createProject(event));
 document.querySelector<HTMLButtonElement>('#refresh-projects')!.addEventListener('click', () => void refreshCatalog());
 runButton.addEventListener('click', () => void submitMessage());
@@ -1069,6 +1560,7 @@ window.addEventListener('beforeunload', () => {
   closeProgressStream();
   sceneRequest?.abort();
   previewRequest?.abort();
+  productRequest?.abort();
   sceneViewer.dispose();
 });
 

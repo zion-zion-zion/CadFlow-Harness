@@ -1,98 +1,105 @@
 ---
 name: cadflow-model-assembly
-description: Build, constrain, inspect, validate, and export complex multi-part mechanical products and nested subassemblies with CadFlow's public Python API. Use for assemblies with separately manufactured parts, repeated component instances, bearings, shafts, gears, motors, housings, connectors, kinematic joints, bills of materials, packaging, or collision/clearance checks. Use cadflow-model-part instead when the requested deliverable is one rigid solid without assembly semantics.
+description: Build and validate semantic multi-part mechanical products with CadFlow. Use for separately manufactured parts, repeated instances, nested subassemblies, connectors, constraints, BOM structure, envelopes, or collision checks. Use cadflow-model-part when the deliverable is one rigid manufactured solid.
 ---
 
 # CadFlow Assembly Modeling
 
-Model a product structure, not a fused visual proxy. Preserve separately
-manufactured parts, reusable component definitions, interfaces, and intended
-degrees of freedom. Use `import cadflow as cad` and only the public frontend.
+Model the product structure rather than a fused visual proxy. Preserve unique
+Part definitions, repeated occurrences, stable interfaces, constraints, and
+intended degrees of freedom. Use only the public `cadflow` frontend.
 
-Read `references/project-structure.md` before writing a nested assembly or a
-project with several component families. Read `references/assembly-api.md`
-when choosing connector types, constraint functions, replay/export behavior,
-or collision checks.
+Read `references/project-structure.md` when the product has several component
+families, repeated instances, or nested subassemblies. Read
+`references/assembly-api.md` for exact Part, connector, constraint, and runtime
+contract syntax.
 
-## Respect the delivery contract
+## Runtime contract
 
-Confirm the runtime's accepted return type before implementation. A full
-assembly workflow may return or capture an `Assembly` plus a flattened preview
-`Compound`. If the active executor requires exactly one positive-volume
-`cad.Shape`, that run cannot deliver a true multi-part assembly. Preserve the
-executor contract: report the incompatibility unless the user explicitly asks
-for a single-solid proxy. Never fuse parts and call the result an assembly.
+Keep `/code/model.py` as the stable entry point:
 
-## Required workflow
+```python
+def build_model(model: cad.Model) -> cad.Assembly:
+    return make_product_rassembly()
+```
 
-1. Extract the product envelope, units, coordinate frame, power/load path,
-   moving and fixed groups, standard parts, manufacturing boundaries,
-   interfaces, clearances, expected motion, and requested outputs. Record
-   uncertain values as named assumptions.
-2. Build a design contract before geometry: a component inventory, interface
-   table, assembly order, and quantitative invariants. Include gear ratios,
-   shaft/bearing fits, fastener patterns, wall/ligament minima, and service
-   access when relevant.
-3. Centralize shared dimensions and validate their equations before invoking
-   the kernel. A mating dimension has one source of truth consumed by both
-   parts; do not repeat magic numbers across component modules.
-4. Build and validate each unique `cad.Part` or reusable subassembly in its
-   local coordinate frame. Give every Part the connectors its parent needs.
-   Instantiate repeated parts from one definition rather than rebuilding
-   identical geometry in a loop.
-5. Create the assembly, add components with unique semantic IDs and authored
-   placements, then forward only stable external connectors. Parent assemblies
-   depend on public connectors, not on a child's private component paths.
-6. Add the smallest independent constraint set that represents the physical
-   joints. Ground the fixed load-path root, solve with `strict=True`, and
-   inspect every unsolved component and residual. Initial placement is a seed
-   and packaging statement; it is not proof of a solved relationship.
-7. Validate system behavior at three levels: every leaf Part remains valid;
-   the constraint report is solved within explicit tolerances; and the product
-   meets envelope, clearance, motion, and interface invariants. Check multiple
-   representative poses for moving products.
-8. Project the solved assembly to preview geometry only after the semantic
-   assembly passes. Run scoped static collision checks, classify every reported
-   pair, and keep known limitations visible. Then export the requested STEP,
-   model JSON, session JSON, metadata/BOM, and views, verifying non-zero files.
-9. Report component and constraint counts, grounded roots, worst residuals,
-   envelope, tested poses, collision scope/results, exported paths, and all
-   unresolved engineering assumptions.
+Use focused helper modules under `/code/` for complex products. After the early
+Assembly gates pass, the executor loads the complete Python source tree and
+generates the semantic model, Scene, product STEP, one STEP per unique Part,
+BOM, assumptions, validation report, and deterministic source snapshot. Source
+code does not write those outputs.
+
+Define JSON-compatible `PRODUCT_SPEC` in `model.py`. Every Assembly declares
+`envelope.max_size_mm`; record inferred values in `assumptions`. Collision
+exclusions are optional, pair-specific full leaf paths with a physical reason.
+The fixed penetration tolerance is 0.02 mm.
+
+## Workflow
+
+1. Classify the product into separately manufactured Parts and nested
+   subassemblies. Record the coordinate frame, fixed root, load or power path,
+   moving groups, external interfaces, envelope, and unresolved assumptions.
+2. Establish one shared dimension source. Encode product equations and
+   positivity, fit, wall, spacing, and packaging invariants before geometry.
+3. Build each unique Part in local coordinates with the replayable `cad.Solid`
+   API described in the Assembly reference. Keep every union connected. Add
+   only the stable mechanical connectors its parent needs, and reuse the same
+   Part object for repeated occurrences.
+4. Add components with unique semantic IDs and explicit seed placements.
+   Forward stable connectors from nested subassemblies instead of exposing
+   their private paths.
+5. Encode the smallest independent constraint set that represents the physical
+   joints. Ground the fixed load-path root and preserve intended revolute or
+   prismatic freedom.
+6. Return the semantic Assembly and run `validate_model`. Treat strict solve,
+   every residual's SDK tolerance, STEP replay, Scene parse, envelope, and
+   current-pose collision as blocking gates.
+7. Repair one diagnosed failure at a time. A successful partial Assembly is a
+   checkpoint; continue until the complete requested product is represented.
+   Run `cad_review` only after deterministic validation reports `Passed`.
 
 ## Assembly rules
 
-- A `Part` wraps exactly one solid. Use an `Assembly` for a bearing, motor,
-  controller, or other reusable item with multiple separately moving bodies.
+- A `cad.Part` wraps exactly one solid. A bearing, motor, or other item with
+  separately moving bodies is a nested `cad.Assembly`.
+- A component occurrence has a unique path; a repeated manufactured item keeps
+  one Part definition and appears at several paths. Do not rebuild identical
+  geometry in an instance loop.
 - Name connectors by mechanical role (`shaft_axis`, `bearing_outer_axis`,
-  `case_mount_axis`), not topology index or incidental face order.
-- Prefer face connectors for datums that must follow manufactured geometry.
-  Use placement connectors for intentional abstract axes, pitch centers,
-  service datums, and repeated patterns.
-- Treat fixed, revolute, and prismatic constraints as joint semantics. Use gear,
-  belt, and rack-pinion constraints only to couple already meaningful axes.
-- External gear meshes rotate oppositely. An internal ring/planet mesh can use
-  a same-direction belt relation with pitch radii when that is the intended
-  kinematic abstraction; document this choice.
-- Model bearing outer-ring and inner-ring attachment explicitly when their
-  bodies participate in the solver. Decorative rolling elements do not need
-  contact kinematics.
-- Keep fastener holes and locating features geometrically compatible even when
-  individual fastener solids are intentionally omitted.
-- Constraint solving proves datum consistency, not strength, contact, torque,
-  bearing life, backlash, thermal behavior, or manufacturability. State which
-  claims still need engineering calculation or physical test.
+  `case_mount`) rather than topology index.
+- Prefer face connectors for manufactured datums and placement connectors for
+  abstract axes, pitch centers, service datums, and patterns.
+- Treat fixed, revolute, and prismatic constraints as joint semantics. Motion
+  coupling constraints relate already meaningful joint axes; they do not
+  construct teeth, contact, backlash, or load capacity.
+- Keep fastener holes and locating features compatible even when fastener
+  solids are intentionally omitted.
+- Current-pose collision is not swept-volume clearance. Do not claim motion
+  clearance, strength, bearing life, tolerance stack, thermal performance, or
+  manufacturability without corresponding analysis.
 
 ## Failure handling
 
-- For an unsolved assembly, inspect missing/duplicate connector references,
-  contradictory grounds, cycles, authored placements, and the first non-zero
-  residual before changing geometry.
-- For overconstraint, remove redundant joint equations or choose a single
-  kinematic abstraction; do not weaken strict solving to hide the conflict.
-- For collision failures, distinguish unintended penetration from intentional
-  fits, gear engagement, or decorative overlap. Scope exclusions narrowly and
-  record the physical reason for each excluded pair.
-- A passing current-pose collision report is not swept-volume clearance. Sample
-  motion poses; note that the current verifier can miss complete containment.
-- If packaging fails, return to the dimension and interface contract. Do not
-  shrink unrelated parts or silently violate the requested envelope.
+- Read the failed entries in `product_validation_checks` before editing. Use
+  their solve message, residual IDs, collision paths and contacts, or envelope
+  measurements as the repair scope. A short-circuited diagnostic Draft omits
+  downstream artifacts; the complete report enters the product bundle after
+  the early gates pass.
+- A failed strict solve may include non-strict diagnostic residuals. Use that
+  evidence for repair, then return the semantic Assembly normally; remove
+  temporary solve calls and debug prints before final validation.
+- For a strict-solve failure, inspect the first residual, missing connector,
+  contradictory ground, duplicate reference, and constraint cycle before
+  changing geometry.
+- For collision failure, correct unintended penetration. Exclude only a named
+  intentional-contact or fit pair, with its real leaf paths and physical
+  reason; never raise the global tolerance to obtain a pass. Treat the
+  reported failure pairs as the repair scope: first change one of those Parts
+  or its placement, and do not add exclusions for pairs absent from the report.
+- For envelope failure, repair shared dimensions or packaging while preserving
+  the requested interfaces and function.
+- For STEP or Scene failure, simplify or repair the failing Part topology while
+  retaining semantic Assembly boundaries.
+- For timeout, use `execution_phase` and the phase named in `error`. Repair the
+  active phase instead of changing unrelated modules. Simplify nonfunctional
+  detail before retrying a slow build, collision, STEP, Scene, or review phase.

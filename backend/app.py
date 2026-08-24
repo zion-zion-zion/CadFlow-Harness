@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -30,6 +31,7 @@ from .harnesses import (
 )
 from .live_preview import LivePreviewScheduler, LivePreviewStore
 from .previews import PreviewError
+from .product_artifact import ProductArtifact, ProductArtifactError
 from .projects import (
     ProjectError,
     ProjectNotFoundError,
@@ -373,6 +375,55 @@ def create_app(
             filename="model.scene.zip",
         )
 
+    @app.get("/api/projects/{project_id}/product")
+    def project_product(project_id: str) -> JSONResponse:
+        artifact = _product_artifact_or_404(project_store, project_id)
+        return JSONResponse(
+            _product_payload(project_id, artifact),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/projects/{project_id}/product/manifest")
+    def project_product_manifest(project_id: str) -> FileResponse:
+        artifact = _product_artifact_or_404(project_store, project_id)
+        return FileResponse(
+            artifact.root / "product.json",
+            media_type="application/json",
+            filename="product.json",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/projects/{project_id}/product/files/{role}")
+    def project_product_file(project_id: str, role: str) -> FileResponse:
+        artifact = _product_artifact_or_404(project_store, project_id)
+        try:
+            path = artifact.file_path(role)
+        except ProductArtifactError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(
+            path,
+            media_type=_product_media_type(role),
+            filename=path.name,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/projects/{project_id}/product/part-step")
+    def project_part_step(
+        project_id: str,
+        part_id: str = Query(min_length=1, max_length=512),
+    ) -> FileResponse:
+        artifact = _product_artifact_or_404(project_store, project_id)
+        try:
+            path = artifact.part_file_path(part_id)
+        except ProductArtifactError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(
+            path,
+            media_type="model/step",
+            filename=path.name,
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.get("/api/projects/{project_id}/trace")
     def project_trace(
         project_id: str,
@@ -489,6 +540,9 @@ def _project_payload(store: ProjectStore, project: Any) -> dict[str, object]:
     diagnostics = store.read_diagnostics(project.project_id)
     preview = LivePreviewStore(store.project_directory(project.project_id)).read_status()
     metrics_available = project.state.value in {"Succeeded", "Failed", "Stopped"}
+    artifact_version = store.current_artifact_version(project.project_id)
+    result_kind = store.current_result_kind(project.project_id)
+    product_available = artifact_version is not None and result_kind is not None
     return {
         "project_id": project.project_id,
         "name": project.name,
@@ -499,7 +553,10 @@ def _project_payload(store: ProjectStore, project: Any) -> dict[str, object]:
         "failure_reason": project.failure_reason,
         "harness": project.harness.value,
         "scene_available": scene_available,
-        "artifact_version": store.current_artifact_version(project.project_id),
+        "artifact_version": artifact_version,
+        "product_available": product_available,
+        "result_kind": result_kind,
+        "product_status": "Accepted" if product_available else None,
         "turn_count": len(store.conversation_turns(project.project_id)),
         "preview": preview.to_dict(),
         "diagnostics_available": diagnostics is not None,
@@ -508,6 +565,93 @@ def _project_payload(store: ProjectStore, project: Any) -> dict[str, object]:
         ),
         "token_usage": _token_usage(diagnostics) if metrics_available else None,
     }
+
+
+def _product_artifact_or_404(store: ProjectStore, project_id: str) -> ProductArtifact:
+    _get_project_or_404(store, project_id)
+    try:
+        return store.product_artifact(project_id)
+    except ProjectStateError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _product_payload(project_id: str, artifact: ProductArtifact) -> dict[str, Any]:
+    summary = artifact.summary
+    files = {
+        role: {
+            "path": record.relative_path,
+            "sha256": record.sha256,
+            "size_bytes": record.size_bytes,
+            "download_url": f"/api/projects/{project_id}/product/files/{quote(role)}",
+        }
+        for role, record in artifact.files.items()
+    }
+    return {
+        "schema_version": "cadflow-product-api/v1",
+        "result_kind": artifact.result_kind,
+        "status": artifact.status.value,
+        "manifest_url": f"/api/projects/{project_id}/product/manifest",
+        "summary": {
+            "component_count": summary.component_count,
+            "leaf_part_count": summary.leaf_part_count,
+            "unique_part_count": summary.unique_part_count,
+            "solid_count": summary.solid_count,
+            "volume_mm3": summary.volume_mm3,
+        },
+        "files": files,
+        "parts": [
+            {
+                "part_id": part.part_id,
+                "quantity": part.quantity,
+                "component_paths": list(part.component_paths),
+                "step_path": part.file.relative_path,
+                "sha256": part.file.sha256,
+                "size_bytes": part.file.size_bytes,
+                "download_url": (
+                    f"/api/projects/{project_id}/product/part-step?part_id="
+                    + quote(part.part_id, safe="")
+                ),
+            }
+            for part in artifact.parts
+        ],
+        "semantic_model": (
+            dict(artifact.semantic_model)
+            if artifact.semantic_model is not None
+            else None
+        ),
+        "bom": [
+            {
+                "part_id": item.part_id,
+                "name": item.name,
+                "material": item.material,
+                "quantity": item.quantity,
+                "component_paths": list(item.component_paths),
+                "step_path": item.step_path,
+            }
+            for item in artifact.bom
+        ],
+        "assumptions": list(artifact.assumptions),
+        "validation_report": (
+            dict(artifact.validation_report)
+            if artifact.validation_report is not None
+            else None
+        ),
+    }
+
+
+def _product_media_type(role: str) -> str:
+    if role == "product_step":
+        return "model/step"
+    if role in {"scene", "source_snapshot"}:
+        return "application/zip"
+    if role in {
+        "assumptions",
+        "bom",
+        "semantic_model",
+        "validation_report",
+    }:
+        return "application/json"
+    return "application/octet-stream"
 
 
 def _scene_available(store: ProjectStore, project: Any) -> bool:

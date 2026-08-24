@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -22,6 +23,15 @@ from .model_source import (
     MODEL_SOURCE_NAME,
     create_model_source,
 )
+from .product_artifact import (
+    PRODUCT_ARTIFACT_MANIFEST_NAME,
+    ProductArtifact,
+    ProductArtifactError,
+    ProductArtifactStatus,
+    accept_product_artifact,
+    load_product_artifact,
+)
+from .scene_validation import validate_scene_artifact
 
 
 MAX_PROMPT_CHARS = 32_000
@@ -235,12 +245,32 @@ class ProjectStore:
         diagnostics: Mapping[str, Any] | None = None,
     ) -> Project:
         project_dir = self.project_directory(project_id)
-        artifact = project_dir / "artifacts" / "model.scene.zip"
-        if not artifact.is_file() or artifact.is_symlink():
+        artifact_dir = project_dir / ARTIFACT_DIRECTORY_NAME
+        try:
+            candidate = load_product_artifact(artifact_dir)
+            candidate.require_complete()
+        except (OSError, ProductArtifactError) as exc:
             raise ProjectStateError(
-                "cannot mark Project Succeeded without the canonical Scene Artifact"
+                "cannot mark Project Succeeded without a complete product artifact"
+            ) from exc
+        if candidate.status is not ProductArtifactStatus.DRAFT:
+            raise ProjectStateError(
+                "cannot mark Project Succeeded without a Draft product candidate"
             )
-        self._commit_artifact_version(project_id)
+        scene_evidence, review_evidence = _acceptance_evidence(
+            candidate,
+            diagnostics,
+        )
+        try:
+            self._commit_artifact_version(
+                project_id,
+                scene_evidence=scene_evidence,
+                review_evidence=review_evidence,
+            )
+        except (OSError, ProductArtifactError) as exc:
+            raise ProjectStateError(
+                "product candidate could not be promoted to Accepted"
+            ) from exc
         return self._mark_terminal(
             project_id,
             state=ProjectState.SUCCEEDED,
@@ -318,6 +348,11 @@ class ProjectStore:
             )
         project_dir = self.project_directory(project_id)
         version = self.current_artifact_version(project_id)
+        if version is not None:
+            try:
+                return self.product_artifact(project_id).file_path("scene")
+            except (ProductArtifactError, ProjectStateError):
+                pass
         artifact = (
             project_dir
             / ARTIFACT_DIRECTORY_NAME
@@ -329,6 +364,31 @@ class ProjectStore:
         )
         if not artifact.is_file() or artifact.is_symlink():
             raise ProjectStateError("Succeeded Project has no canonical Scene Artifact")
+        return artifact
+
+    def product_artifact(self, project_id: str) -> ProductArtifact:
+        """Return the latest versioned Accepted product bundle."""
+
+        project = self.get_project(project_id)
+        if project.state == ProjectState.DRAFT:
+            raise ProjectStateError(
+                "Product Artifact is unavailable before the first successful turn"
+            )
+        version = self.current_artifact_version(project_id)
+        if version is None:
+            raise ProjectStateError("Project has no versioned Product Artifact")
+        bundle_root = (
+            self.project_directory(project_id)
+            / ARTIFACT_DIRECTORY_NAME
+            / f"v{version:04d}"
+            / "files"
+        )
+        try:
+            artifact = load_product_artifact(bundle_root)
+        except (OSError, ProductArtifactError) as exc:
+            raise ProjectStateError("versioned Product Artifact is invalid") from exc
+        if artifact.status is not ProductArtifactStatus.ACCEPTED:
+            raise ProjectStateError("versioned Product Artifact is not Accepted")
         return artifact
 
     def read_diagnostics(self, project_id: str) -> dict[str, Any] | None:
@@ -388,6 +448,24 @@ class ProjectStore:
         version = payload.get("version") if isinstance(payload, Mapping) else None
         return version if isinstance(version, int) and not isinstance(version, bool) else None
 
+    def current_result_kind(self, project_id: str) -> str | None:
+        """Return the semantic type of the current versioned product."""
+
+        path = self.project_directory(project_id) / CURRENT_ARTIFACT_NAME
+        if not path.is_file() or path.is_symlink():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, Mapping):
+            return None
+        result_kind = payload.get("result_kind")
+        if result_kind in {"part", "assembly"}:
+            return str(result_kind)
+        version = payload.get("version")
+        return "part" if isinstance(version, int) and not isinstance(version, bool) else None
+
     def clear_conversation(self, project_id: str) -> Project:
         """Reset one non-running Project and remove its conversation and CAD data."""
 
@@ -434,7 +512,13 @@ class ProjectStore:
             self._write_metadata(project_dir, reset)
             return reset
 
-    def _commit_artifact_version(self, project_id: str) -> int:
+    def _commit_artifact_version(
+        self,
+        project_id: str,
+        *,
+        scene_evidence: Mapping[str, Any],
+        review_evidence: Mapping[str, Any],
+    ) -> int:
         project_dir = self.project_directory(project_id)
         artifact_dir = project_dir / ARTIFACT_DIRECTORY_NAME
         versions = self._artifact_versions(project_id)
@@ -468,10 +552,33 @@ class ProjectStore:
                 destination = source_dir / CODE_DIRECTORY_NAME / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
+        accepted = accept_product_artifact(
+            files_dir,
+            scene_evidence=scene_evidence,
+            review_evidence=review_evidence,
+        )
+
+        def versioned_path(path: Path) -> str:
+            relative = path.relative_to(files_dir).as_posix()
+            return (
+                f"{ARTIFACT_DIRECTORY_NAME}/v{version:04d}/files/{relative}"
+            )
+
         manifest = {
+            "schema_version": "cadflow-project-artifact/v1",
             "version": version,
             "created_at": _timestamp(),
-            "scene": f"{ARTIFACT_DIRECTORY_NAME}/v{version:04d}/files/model.scene.zip",
+            "status": ProductArtifactStatus.ACCEPTED.value,
+            "result_kind": accepted.result_kind,
+            "product_manifest": versioned_path(
+                files_dir / PRODUCT_ARTIFACT_MANIFEST_NAME
+            ),
+            "scene": versioned_path(accepted.file_path("scene")),
+            "product_step": versioned_path(accepted.file_path("product_step")),
+            "bom": versioned_path(accepted.file_path("bom")),
+            "validation_report": versioned_path(
+                accepted.file_path("validation_report")
+            ),
         }
         _write_json(temporary / "manifest.json", manifest)
         temporary.replace(target)
@@ -708,6 +815,87 @@ def _replace_project(project: Project, **changes: Any) -> Project:
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def _acceptance_evidence(
+    candidate: ProductArtifact,
+    diagnostics: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not isinstance(diagnostics, Mapping):
+        raise ProjectStateError("Accepted product requires final run diagnostics")
+    execution = diagnostics.get("execution_result")
+    if not isinstance(execution, Mapping):
+        raise ProjectStateError("Accepted product requires execution diagnostics")
+    if (
+        execution.get("status") != "succeeded"
+        or execution.get("exit_code") != 0
+        or execution.get("result_kind") != candidate.result_kind
+        or execution.get("product_manifest_path") != "artifacts/product.json"
+        or execution.get("product_status") != ProductArtifactStatus.DRAFT.value
+        or execution.get("product_validation_status") != "Passed"
+        or execution.get("product_validation_failures") != []
+    ):
+        raise ProjectStateError("product execution did not pass deterministic validation")
+    summary = candidate.summary
+    expected_counts = {
+        "component_count": summary.component_count,
+        "leaf_part_count": summary.leaf_part_count,
+        "unique_part_count": summary.unique_part_count,
+        "solid_count": summary.solid_count,
+    }
+    if any(execution.get(name) != value for name, value in expected_counts.items()):
+        raise ProjectStateError("execution diagnostics do not match product structure")
+    reported_volume = execution.get("solid_volume")
+    if (
+        not isinstance(reported_volume, (int, float))
+        or isinstance(reported_volume, bool)
+        or not math.isclose(
+            float(reported_volume),
+            summary.volume_mm3,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+    ):
+        raise ProjectStateError("execution diagnostics do not match product volume")
+
+    scene_report = validate_scene_artifact(candidate.file_path("scene"))
+    reported_scene = execution.get("scene_parse_result")
+    if (
+        not scene_report.valid
+        or not isinstance(reported_scene, Mapping)
+        or reported_scene.get("valid") is not True
+    ):
+        raise ProjectStateError("Accepted product requires a valid parsed Scene")
+
+    review = diagnostics.get("review_result")
+    if not isinstance(review, Mapping) or review.get("status") != "pass":
+        raise ProjectStateError("Accepted product requires a passing CAD review")
+    execution_source_hash = execution.get("review_model_sha256")
+    if (
+        not isinstance(execution_source_hash, str)
+        or not execution_source_hash
+        or review.get("model_sha256") != execution_source_hash
+    ):
+        raise ProjectStateError("CAD review is not bound to the executed source revision")
+    findings = review.get("findings", [])
+    if not isinstance(findings, list) or any(
+        isinstance(item, Mapping)
+        and item.get("severity") in {"blocking", "major"}
+        for item in findings
+    ):
+        raise ProjectStateError("passing CAD review contains blocking findings")
+    review_evidence = {
+        key: review.get(key)
+        for key in (
+            "status",
+            "summary",
+            "model_sha256",
+            "reviewer_version",
+            "checked_requirements",
+            "evidence_hashes",
+        )
+    }
+    return scene_report.to_dict(), review_evidence
 
 
 def _artifact_version_limit() -> int:

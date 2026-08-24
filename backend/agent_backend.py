@@ -178,8 +178,21 @@ class _ScopedWriteMixin:
         )
 
     def delete(self, file_path: str) -> DeleteResult:
-        del file_path
-        return DeleteResult(error="delete is not available to the Agent")
+        error = self._write_error(file_path)
+        if error is not None:
+            return DeleteResult(error=error)
+        try:
+            resolved = self._resolve_path(file_path)
+            relative = resolved.relative_to(self.cwd)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return DeleteResult(error=f"Path is outside the allowed root: {exc}")
+        if self._python_only and relative == Path("model.py"):
+            return DeleteResult(
+                error="The required /code/model.py entry point cannot be deleted"
+            )
+        if resolved.exists() and not resolved.is_file():
+            return DeleteResult(error="The Agent may delete only Python files")
+        return super().delete(file_path)
 
 
 class ScopedFilesystemBackend(_ScopedWriteMixin, FilesystemBackend):

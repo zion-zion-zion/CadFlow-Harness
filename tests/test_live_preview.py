@@ -44,11 +44,51 @@ def test_live_preview_executor_isolated_from_validation_outputs(tmp_path: Path) 
     finally:
         executor.close()
 
-    assert result.status == "succeeded"
+    assert result.status == "succeeded", result
     assert result.payload is not None and result.payload[:4] == b"glTF"
     assert not (tmp_path / "preview-side-effect.txt").exists()
     assert not (tmp_path / "artifacts").exists()
     assert not (tmp_path / ".cad-review").exists()
+
+
+def test_live_preview_executor_renders_a_semantic_assembly(tmp_path: Path) -> None:
+    (tmp_path / "code").mkdir()
+    (tmp_path / "code" / "model.py").write_text(
+        """import cadflow as cad
+
+def build_model(model: cad.Model):
+    first = cad.make_part_rpart(
+        part_id="first",
+        body=cad.make_box_rsolid(width=2.0, height=2.0, depth=2.0),
+    )
+    second = cad.make_part_rpart(
+        part_id="second",
+        body=cad.make_box_rsolid(width=2.0, height=2.0, depth=2.0),
+    )
+    assembly = cad.make_assembly_rassembly(assembly_id="preview")
+    assembly = cad.add_component_rassembly(
+        assembly=assembly,
+        item=first,
+        component_id="first",
+        placement=cad.identity_placement_rplacement(),
+    )
+    return cad.add_component_rassembly(
+        assembly=assembly,
+        item=second,
+        component_id="second",
+        placement=cad.make_placement_rplacement(origin=(5.0, 0.0, 0.0)),
+    )
+""",
+        encoding="utf-8",
+    )
+    executor = LivePreviewExecutor()
+    try:
+        result = executor.execute(tmp_path, timeout_seconds=10.0)
+    finally:
+        executor.close()
+
+    assert result.status == "succeeded", result
+    assert result.payload is not None and result.payload[:4] == b"glTF"
 
 
 def test_live_preview_executor_reuses_worker_between_builds(tmp_path: Path) -> None:
