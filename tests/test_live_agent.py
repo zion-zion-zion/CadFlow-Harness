@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.agent import MAX_AGENT_RUN_SECONDS
+from backend.agent import resolve_agent_run_timeout_seconds
 from backend.app import create_app
 from backend.projects import ProjectState
 from backend.scene_validation import validate_scene_artifact
@@ -22,6 +22,7 @@ LIVE_CANCELLATION_PROMPT = (
     "标准库 time.sleep(30) 放在创建最终 Solid 之前，然后继续生成一个有效的单 Solid "
     "并导出 canonical Scene Artifact。"
 )
+LIVE_AGENT_TIMEOUT_SECONDS = resolve_agent_run_timeout_seconds()
 
 
 def _wait_for_terminal_project(
@@ -64,7 +65,7 @@ def test_live_agent_flange_smoke_crosses_service_and_scene_viewer_path(
     finished = _wait_for_terminal_project(
         client,
         project["project_id"],
-        timeout_seconds=MAX_AGENT_RUN_SECONDS + 30.0,
+        timeout_seconds=LIVE_AGENT_TIMEOUT_SECONDS + 30.0,
     )
     assert finished["state"] == ProjectState.SUCCEEDED.value
     assert finished["scene_available"] is True
@@ -96,7 +97,7 @@ def test_live_agent_stop_observes_stopped_and_terminated_cad_child(
     assert started.status_code == 202
 
     coordinator = app.state.run_coordinator
-    deadline = time.monotonic() + MAX_AGENT_RUN_SECONDS
+    deadline = time.monotonic() + LIVE_AGENT_TIMEOUT_SECONDS
     process_id: int | None = None
     while time.monotonic() < deadline:
         process_id = coordinator.active_process_id

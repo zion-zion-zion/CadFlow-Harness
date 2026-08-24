@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import importlib.metadata
+import math
 import os
 import time
 import uuid
@@ -44,8 +45,13 @@ class AgentRunCancelled(AgentRunError):
     """Raised inside a tool when the user has stopped the current Agent Run."""
 
 
-MAX_AGENT_RUN_SECONDS = 20 * 60.0
-AGENT_RUN_TIMEOUT_SECONDS = MAX_AGENT_RUN_SECONDS
+AGENT_RUN_TIMEOUT_ENV_VAR = "CADFLOW_AGENT_RUN_TIMEOUT_SECONDS"
+DEFAULT_AGENT_RUN_TIMEOUT_SECONDS = 20 * 60.0
+# Backward-compatible names for callers that need the default budget. Runtime
+# runs use AgentSettings.run_timeout_seconds so repository-local .env values
+# are resolved after dotenv loading.
+MAX_AGENT_RUN_SECONDS = DEFAULT_AGENT_RUN_TIMEOUT_SECONDS
+AGENT_RUN_TIMEOUT_SECONDS = DEFAULT_AGENT_RUN_TIMEOUT_SECONDS
 MAX_PROVIDER_RETRIES = 2
 
 try:
@@ -53,7 +59,6 @@ try:
 except importlib.metadata.PackageNotFoundError:
     DEEPAGENTS_IMPLEMENTATION_VERSION = "unknown"
 
-_AGENT_RUN_TIMEOUT_MESSAGE = "Agent Run exceeded the twenty-minute wall-clock limit"
 AGENT_EXCLUDED_TOOLS = frozenset({"execute", "task"})
 AGENT_FILESYSTEM_TOOLS = (
     "read_file",
@@ -89,6 +94,39 @@ REASONING_SUMMARIES: tuple[ReasoningSummary, ...] = (
 )
 
 
+def resolve_agent_run_timeout_seconds(
+    environment: Mapping[str, str] | None = None,
+) -> float:
+    """Resolve the positive per-run wall-clock budget from the environment."""
+
+    values = os.environ if environment is None else environment
+    raw = values.get(AGENT_RUN_TIMEOUT_ENV_VAR, "").strip()
+    if not raw:
+        return DEFAULT_AGENT_RUN_TIMEOUT_SECONDS
+    try:
+        timeout_seconds = float(raw)
+    except ValueError as error:
+        raise AgentConfigurationError(
+            f"{AGENT_RUN_TIMEOUT_ENV_VAR} must be a finite positive number of seconds"
+        ) from error
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise AgentConfigurationError(
+            f"{AGENT_RUN_TIMEOUT_ENV_VAR} must be a finite positive number of seconds"
+        )
+    return timeout_seconds
+
+
+def _format_timeout_seconds(timeout_seconds: float) -> str:
+    return f"{timeout_seconds:g}"
+
+
+def _agent_run_timeout_message(timeout_seconds: float) -> str:
+    return (
+        "Agent Run exceeded the configured "
+        f"{_format_timeout_seconds(timeout_seconds)}-second wall-clock limit"
+    )
+
+
 @dataclass(frozen=True)
 class AgentSettings:
     """Backend-only configuration for the single OpenAI-compatible model."""
@@ -99,6 +137,7 @@ class AgentSettings:
     provider: str = "openai"
     reasoning_effort: ReasoningEffort | None = None
     reasoning_summary: ReasoningSummary | None = None
+    run_timeout_seconds: float = DEFAULT_AGENT_RUN_TIMEOUT_SECONDS
 
     @classmethod
     def from_environment(
@@ -141,6 +180,7 @@ class AgentSettings:
                 if reasoning_summary
                 else None
             ),
+            run_timeout_seconds=resolve_agent_run_timeout_seconds(values),
         )
 
     @property
@@ -277,7 +317,8 @@ contract.
 
 Treat the user's request as complete. Work autonomously and do not wait for
 human approval between planning, implementation, validation, and repair. The
-whole run has a twenty-minute wall-clock budget.
+whole run has a configured wall-clock budget of
+__CADFLOW_AGENT_RUN_TIMEOUT_SECONDS__ seconds.
 
 Infer non-critical parameters when needed, use millimetres when no length unit
 is given, and record important inferred assumptions in `PRODUCT_SPEC`.
@@ -375,7 +416,7 @@ A passing candidate is intermediate only when at least one explicit user
 requirement is still absent from its source. When every explicit requirement is
 implemented, treat the first deterministic pass as final: stop polishing,
 comment-only cleanup, and unrequested detail, then call `cad_review` in the same
-turn. Reserve at least 120 seconds of the reported run budget for review.
+turn. Leave enough of the reported run budget to complete the final review.
 
 For every validation, treat the structured result as the source of truth.
 Inspect the reported status, failure type, location, preflight result,
@@ -423,6 +464,7 @@ def _build_agent_system_prompt(
     *,
     workspace_root: str | Path,
     skill_root: str | Path | None,
+    run_timeout_seconds: float = DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
 ) -> str:
     """Add the concrete run-local filesystem boundaries to the Agent prompt."""
 
@@ -430,7 +472,10 @@ def _build_agent_system_prompt(
     # sees only the stable virtual routes supplied by CompositeBackend.
     del workspace_root, skill_root
     return (
-        _SYSTEM_PROMPT
+        _SYSTEM_PROMPT.replace(
+            "__CADFLOW_AGENT_RUN_TIMEOUT_SECONDS__",
+            _format_timeout_seconds(run_timeout_seconds),
+        )
         + """
 
 ## Filesystem boundaries for this run
@@ -460,7 +505,7 @@ def build_chat_model(settings: AgentSettings) -> Any:
         "model": settings.model_id,
         "api_key": settings.api_key,
         "max_retries": MAX_PROVIDER_RETRIES,
-        "timeout": MAX_AGENT_RUN_SECONDS,
+        "timeout": settings.run_timeout_seconds,
         "use_responses_api": settings.use_responses_api,
     }
     if settings.base_url is not None:
@@ -483,6 +528,7 @@ def create_agent_tools(
     on_execution_error: Callable[[ExecutionResult], None] | None = None,
     on_review: Callable[[ReviewResult], None] | None = None,
     run_deadline: float | None = None,
+    run_timeout_seconds: float = DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
     clock: Callable[[], float] = time.monotonic,
     cancellation_token: object | None = None,
     on_progress: Callable[[ProgressUpdate], None] | None = None,
@@ -492,6 +538,7 @@ def create_agent_tools(
     execution_attempts = 0
     latest_execution: ExecutionResult | None = None
     last_executed_source_revision: str | None = None
+    timeout_message = _agent_run_timeout_message(run_timeout_seconds)
 
     def require_time_remaining() -> float | None:
         if _is_cancellation_requested(cancellation_token):
@@ -500,7 +547,7 @@ def create_agent_tools(
             return None
         remaining = run_deadline - clock()
         if remaining <= 0:
-            raise AgentRunError(_AGENT_RUN_TIMEOUT_MESSAGE)
+            raise AgentRunError(timeout_message)
         return remaining
 
     @tool("validate_model")
@@ -659,6 +706,7 @@ def build_deep_agent(
         system_prompt=_build_agent_system_prompt(
             workspace_root=resolved_workspace_root,
             skill_root=resolved_skill_root,
+            run_timeout_seconds=settings.run_timeout_seconds,
         ),
         middleware=(
             FilesystemMiddleware(
@@ -708,7 +756,9 @@ class ReferenceGroundedAgent:
         if not isinstance(prompt, str) or not prompt.strip():
             raise AgentRunError("Prompt must not be empty")
         started = time.monotonic()
-        deadline = started + MAX_AGENT_RUN_SECONDS
+        run_timeout_seconds = self.settings.run_timeout_seconds
+        timeout_message = _agent_run_timeout_message(run_timeout_seconds)
+        deadline = started + run_timeout_seconds
         token = cancellation_token or CancellationToken()
 
         def emit(update: ProgressUpdate) -> None:
@@ -772,6 +822,7 @@ class ReferenceGroundedAgent:
             on_execution_error=record_execution,
             on_review=record_review,
             run_deadline=deadline,
+            run_timeout_seconds=run_timeout_seconds,
             cancellation_token=token,
             on_progress=emit,
         )
@@ -790,6 +841,7 @@ class ReferenceGroundedAgent:
                 prompt,
                 deadline=deadline,
                 cancellation_token=token,
+                run_timeout_seconds=run_timeout_seconds,
                 conversation_log=self.conversation_log,
                 conversation_context=conversation_context,
             )
@@ -799,10 +851,14 @@ class ReferenceGroundedAgent:
         duration = time.monotonic() - started
         execution = executions[-1] if executions else None
         review_result = review_results[-1] if review_results else None
-        if timed_out or token.cancellation_reason == "timeout" or duration > MAX_AGENT_RUN_SECONDS:
+        if (
+            timed_out
+            or token.cancellation_reason == "timeout"
+            or duration > run_timeout_seconds
+        ):
             return AgentRunOutcome(
                 validated=False,
-                failure_reason=_AGENT_RUN_TIMEOUT_MESSAGE,
+                failure_reason=timeout_message,
                 execution_result=execution,
                 execution_results=tuple(executions),
                 tool_use_records=validator.tool_use_records,
@@ -1166,15 +1222,17 @@ def _invoke_agent_with_deadline(
     *,
     deadline: float,
     cancellation_token: CancellationToken,
+    run_timeout_seconds: float = DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
     conversation_log: ConversationLog | None = None,
     conversation_context: list[dict[str, str]] | None = None,
 ) -> tuple[str | None, bool]:
     """Invoke the primary Agent and cancel its task on Stop or timeout."""
 
+    timeout_message = _agent_run_timeout_message(run_timeout_seconds)
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         cancellation_token.cancel(reason="timeout")
-        return _AGENT_RUN_TIMEOUT_MESSAGE, True
+        return timeout_message, True
 
     async def invoke() -> tuple[str | None, bool]:
         config: dict[str, Any] = {}
@@ -1203,7 +1261,7 @@ def _invoke_agent_with_deadline(
                     await _await_cancelled_task(task)
                     timed_out = cancellation_token.cancellation_reason == "timeout"
                     return (
-                        _AGENT_RUN_TIMEOUT_MESSAGE
+                        timeout_message
                         if timed_out
                         else "Agent Run stopped by caller",
                         timed_out,
@@ -1213,7 +1271,7 @@ def _invoke_agent_with_deadline(
                     cancellation_token.cancel(reason="timeout")
                     task.cancel()
                     await _await_cancelled_task(task)
-                    return _AGENT_RUN_TIMEOUT_MESSAGE, True
+                    return timeout_message, True
                 await asyncio.wait({task}, timeout=min(0.05, remaining))
             try:
                 task.result()
@@ -1257,11 +1315,14 @@ __all__ = [
     "AgentSettings",
     "ReasoningEffort",
     "ReasoningSummary",
+    "AGENT_RUN_TIMEOUT_ENV_VAR",
     "AGENT_RUN_TIMEOUT_SECONDS",
+    "DEFAULT_AGENT_RUN_TIMEOUT_SECONDS",
     "MAX_AGENT_RUN_SECONDS",
     "MAX_PROVIDER_RETRIES",
     "ReferenceGroundedAgent",
     "build_chat_model",
     "build_deep_agent",
     "create_agent_tools",
+    "resolve_agent_run_timeout_seconds",
 ]

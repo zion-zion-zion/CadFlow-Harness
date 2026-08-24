@@ -11,10 +11,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.agent import MAX_AGENT_RUN_SECONDS
+from backend.agent import resolve_agent_run_timeout_seconds
 from backend.app import create_app
 from backend.projects import ProjectState
 from backend.scene_validation import validate_scene_artifact
+
+
+LIVE_AGENT_TIMEOUT_SECONDS = resolve_agent_run_timeout_seconds()
 
 
 @dataclass(frozen=True)
@@ -149,7 +152,7 @@ def _wait_for_terminal(
     client: TestClient,
     project_id: str,
 ) -> dict[str, object]:
-    deadline = time.monotonic() + MAX_AGENT_RUN_SECONDS + 60.0
+    deadline = time.monotonic() + LIVE_AGENT_TIMEOUT_SECONDS + 60.0
     while time.monotonic() < deadline:
         response = client.get(f"/api/projects/{project_id}")
         assert response.status_code == 200

@@ -187,7 +187,7 @@ def test_validate_model_refuses_to_start_after_run_deadline(tmp_path: Path) -> N
     )
     now[0] = 10.001
 
-    with pytest.raises(AgentRunError, match="twenty-minute wall-clock limit"):
+    with pytest.raises(AgentRunError, match="configured 1200-second wall-clock limit"):
         tools["validate_model"].invoke({})
 
 

@@ -28,6 +28,7 @@ from .events import (
     ProgressUpdate,
 )
 from .agent import (
+    AGENT_RUN_TIMEOUT_ENV_VAR,
     AGENT_RUN_TIMEOUT_SECONDS,
     AgentConfigurationError,
     AgentRunCancelled,
@@ -35,12 +36,14 @@ from .agent import (
     AgentRunOutcome,
     AgentRunService,
     AgentSettings,
+    DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
     MAX_AGENT_RUN_SECONDS,
     MAX_PROVIDER_RETRIES,
     ReferenceGroundedAgent,
     build_chat_model,
     build_deep_agent,
     create_agent_tools,
+    resolve_agent_run_timeout_seconds,
 )
 from .model_source import (
     ARTIFACT_DIRECTORY_NAME,
@@ -84,6 +87,7 @@ from .scene_validation import SceneParseResult, validate_scene_artifact
 __all__ = [
     "ARTIFACT_DIRECTORY_NAME",
     "CODE_DIRECTORY_NAME",
+    "AGENT_RUN_TIMEOUT_ENV_VAR",
     "AGENT_RUN_TIMEOUT_SECONDS",
     "AgentConfigurationError",
     "AgentHarness",
@@ -102,6 +106,7 @@ __all__ = [
     "CURRENT_ARTIFACT_NAME",
     "ConversationLog",
     "DEFAULT_OUTPUT_BYTES",
+    "DEFAULT_AGENT_RUN_TIMEOUT_SECONDS",
     "ExecutionResult",
     "EVENTS_NAME",
     "MODEL_SOURCE_NAME",
@@ -149,6 +154,7 @@ __all__ = [
     "project_code_directory",
     "create_agent_tools",
     "redact_credentials",
+    "resolve_agent_run_timeout_seconds",
     "review_cad",
     "validate_scene_artifact",
 ]

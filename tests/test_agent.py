@@ -16,12 +16,15 @@ from backend.agent import (
     AgentRunOutcome,
     AgentSettings,
     AgentRunService,
+    DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
     MAX_AGENT_RUN_SECONDS,
+    ReferenceGroundedAgent,
     _is_validated_result,
     _invoke_agent_with_deadline,
     build_chat_model,
     build_deep_agent,
     create_agent_tools,
+    resolve_agent_run_timeout_seconds,
 )
 from backend.projects import ProjectState, ProjectStore
 from backend.cad_executor import CancellationToken, ExecutionResult
@@ -29,8 +32,33 @@ from backend.restricted_tools import RestrictedAgentTools
 from backend.scene_validation import SceneParseResult
 
 
-def test_agent_run_timeout_is_twenty_minutes() -> None:
-    assert MAX_AGENT_RUN_SECONDS == 1200.0
+def test_agent_run_timeout_defaults_to_twenty_minutes() -> None:
+    assert DEFAULT_AGENT_RUN_TIMEOUT_SECONDS == 1200.0
+    assert MAX_AGENT_RUN_SECONDS == DEFAULT_AGENT_RUN_TIMEOUT_SECONDS
+    assert resolve_agent_run_timeout_seconds({}) == 1200.0
+
+
+def test_agent_run_timeout_is_loaded_from_environment() -> None:
+    settings = AgentSettings.from_environment(
+        {
+            "OPENAI_API_KEY": "secret-key",
+            "OPENAI_MODEL_ID": "cad-model",
+            "CADFLOW_AGENT_RUN_TIMEOUT_SECONDS": "37.5",
+        }
+    )
+
+    assert settings.run_timeout_seconds == 37.5
+
+
+@pytest.mark.parametrize("value", ["invalid", "0", "-1", "nan", "inf"])
+def test_agent_run_timeout_rejects_invalid_environment_values(value: str) -> None:
+    with pytest.raises(
+        AgentConfigurationError,
+        match="CADFLOW_AGENT_RUN_TIMEOUT_SECONDS",
+    ):
+        resolve_agent_run_timeout_seconds(
+            {"CADFLOW_AGENT_RUN_TIMEOUT_SECONDS": value}
+        )
 
 
 def test_agent_accepts_a_deterministically_passed_assembly_candidate() -> None:
@@ -124,6 +152,38 @@ def test_agent_invocation_is_cancelled_before_stop_returns() -> None:
     finally:
         agent.sync_release.set()
         worker.join(1.0)
+
+
+def test_reference_agent_uses_configured_run_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BlockingAgent:
+        async def ainvoke(self, *_args: object, **_kwargs: object) -> None:
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        "backend.agent.build_deep_agent",
+        lambda *_args, **_kwargs: BlockingAgent(),
+    )
+    agent = ReferenceGroundedAgent(
+        settings=AgentSettings(
+            model_id="cad-model",
+            api_key="unit-test-key",
+            run_timeout_seconds=0.01,
+        ),
+        repo_root=Path(__file__).parents[1],
+        project_dir=tmp_path,
+    )
+
+    outcome = agent.run("Create a box.")
+
+    assert outcome.validated is False
+    assert outcome.failure_reason == (
+        "Agent Run exceeded the configured 0.01-second wall-clock limit"
+    )
+    assert outcome.duration_seconds is not None
+    assert outcome.duration_seconds < 1.0
 
 
 def test_agent_settings_are_backend_only_and_require_model_credentials() -> None:
@@ -254,12 +314,15 @@ def test_deep_agent_can_be_compiled_without_network_call(tmp_path: Path) -> None
         model_id="cad-model",
         api_key="unit-test-key",
         base_url="https://provider.invalid/v1",
+        run_timeout_seconds=37.5,
     )
     restricted = RestrictedAgentTools(
         repo_root=Path(__file__).parents[1], project_dir=tmp_path
     )
     restricted.begin_run()
     model = build_chat_model(settings)
+
+    assert model.request_timeout == 37.5
 
     agent = build_deep_agent(
         settings,
@@ -454,13 +517,14 @@ def test_agent_prompt_stages_complex_part_and_assembly_work(tmp_path: Path) -> N
     assert "continue to the next planned stage without\ncalling `cad_review`" in prompt
     assert "Never stack more features on a failed stage." in prompt
     assert "passing candidate is intermediate only when at least one explicit" in prompt
-    assert "Reserve at least 120 seconds" in prompt
+    assert "Leave enough of the reported run budget" in prompt
 
 
 def test_agent_prompt_defines_multi_file_product_contract(tmp_path: Path) -> None:
     prompt = _build_agent_system_prompt(
         workspace_root=tmp_path,
         skill_root=Path(__file__).parents[1] / "skills",
+        run_timeout_seconds=37.5,
     )
 
     assert "split `/code/` into focused Python modules" in prompt
@@ -469,7 +533,7 @@ def test_agent_prompt_defines_multi_file_product_contract(tmp_path: Path) -> Non
     assert '"collision_exclusions"' in prompt
     assert "actual full leaf component paths" in prompt
     assert "A successful subprocess can still be a Draft" in prompt
-    assert "twenty-minute wall-clock budget" in prompt
+    assert "configured wall-clock budget of\n37.5 seconds" in prompt
     assert "do not wait for\nhuman approval" in prompt
 
 
