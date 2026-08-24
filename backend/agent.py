@@ -66,17 +66,7 @@ AGENT_FILESYSTEM_TOOLS = (
     "edit_file",
     "delete",
     "ls",
-    "glob",
-    "grep",
 )
-
-_AGENT_TOOL_DESCRIPTION_OVERRIDES = {
-    "grep": (
-        "Search for a literal text pattern in the current Project or the "
-        "read-only Skill reference. Shell commands and regular "
-        "expressions are unavailable; run separate literal searches instead."
-    ),
-}
 
 ReasoningEffort = Literal["none", "low", "medium", "high", "max"]
 ReasoningSummary = Literal["auto", "concise", "detailed"]
@@ -684,7 +674,6 @@ def build_deep_agent(
 
     profile = HarnessProfile(
         excluded_tools=AGENT_EXCLUDED_TOOLS,
-        tool_description_overrides=_AGENT_TOOL_DESCRIPTION_OVERRIDES,
         general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
         extra_middleware=planning_middleware,
     )
@@ -711,7 +700,6 @@ def build_deep_agent(
         middleware=(
             FilesystemMiddleware(
                 backend=backend,
-                custom_tool_descriptions=_AGENT_TOOL_DESCRIPTION_OVERRIDES,
                 tools=list(AGENT_FILESYSTEM_TOOLS),
             ),
         ),

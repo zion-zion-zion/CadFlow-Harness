@@ -341,9 +341,8 @@ def test_deep_agent_can_be_compiled_without_network_call(tmp_path: Path) -> None
         "write_file",
         "edit_file",
         "delete",
-        "glob",
-        "grep",
     }.issubset(graph_tools)
+    assert {"glob", "grep"}.isdisjoint(graph_tools)
     # This remains one primary Text-to-CAD agent; general tools do not require
     # delegating the CAD task to another agent.
     assert "task" not in graph_tools
@@ -403,15 +402,14 @@ def test_deep_agent_model_sees_only_the_confirmed_tool_surface(
         "write_file",
         "edit_file",
         "ls",
-        "glob",
-        "grep",
         "delete",
         "write_todos",
         "validate_model",
         "cad_review",
     }
-    assert {"execute", "task"}.isdisjoint(model.bound_tool_names)
-    assert "execute" not in model.bound_tool_descriptions["grep"].lower()
+    assert {"execute", "glob", "grep", "task"}.isdisjoint(
+        model.bound_tool_names
+    )
     assert "Shell paths vs. virtual paths" not in model.model_request_text
     assert "Host path mappings" not in model.model_request_text
     assert "execute tool runs commands" not in model.model_request_text
