@@ -30,6 +30,7 @@ from .events import (
 from .agent import (
     AGENT_RUN_TIMEOUT_ENV_VAR,
     AGENT_RUN_TIMEOUT_SECONDS,
+    REVIEW_MODEL_ENV_VAR,
     AgentConfigurationError,
     AgentRunCancelled,
     AgentRunError,
@@ -89,6 +90,7 @@ __all__ = [
     "CODE_DIRECTORY_NAME",
     "AGENT_RUN_TIMEOUT_ENV_VAR",
     "AGENT_RUN_TIMEOUT_SECONDS",
+    "REVIEW_MODEL_ENV_VAR",
     "AgentConfigurationError",
     "AgentHarness",
     "AgentRunAdapter",

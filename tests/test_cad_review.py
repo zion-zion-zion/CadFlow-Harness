@@ -27,6 +27,7 @@ class _FakeReviewer:
 def test_default_reviewer_uses_bounded_low_effort_responses_reasoning() -> None:
     class _Settings:
         model_id = "cad-model"
+        review_model_id = "review-model"
         api_key = "test-key"
         base_url = "https://provider.invalid/v1"
         reasoning_effort = "high"
@@ -35,10 +36,20 @@ def test_default_reviewer_uses_bounded_low_effort_responses_reasoning() -> None:
 
     reviewer = _default_reviewer_factory(_Settings())
 
+    assert reviewer.model_name == "review-model"
     assert reviewer.reasoning_effort is None
     assert reviewer.reasoning == {"effort": "low"}
     assert reviewer.request_timeout == 90
     assert reviewer.use_responses_api is True
+
+    class _LegacySettings:
+        model_id = "cad-model"
+        api_key = "test-key"
+        base_url = "https://provider.invalid/v1"
+        use_responses_api = True
+
+    fallback_reviewer = _default_reviewer_factory(_LegacySettings())
+    assert fallback_reviewer.model_name == "cad-model"
 
 
 def _build_project(tmp_path: Path) -> ExecutionResult:

@@ -413,7 +413,7 @@ def _default_reviewer_factory(settings: Any) -> Any:
     from langchain_openai import ChatOpenAI
 
     arguments: dict[str, Any] = {
-        "model": settings.model_id,
+        "model": getattr(settings, "review_model_id", None) or settings.model_id,
         "api_key": settings.api_key,
         "max_retries": 1,
         "timeout": REVIEWER_TIMEOUT_SECONDS,

@@ -199,6 +199,7 @@ def test_agent_settings_are_backend_only_and_require_model_credentials() -> None
 
     assert settings.provider == "openai"
     assert settings.model_id == "cad-model"
+    assert settings.review_model_id is None
     assert settings.base_url == "https://provider.invalid/v1"
     assert settings.reasoning_effort == "high"
     assert settings.reasoning_summary == "auto"
@@ -211,6 +212,15 @@ def test_agent_settings_are_backend_only_and_require_model_credentials() -> None
         }
     )
     assert default_settings.reasoning_effort is None
+
+    review_settings = AgentSettings.from_environment(
+        {
+            "OPENAI_API_KEY": "secret-key",
+            "OPENAI_MODEL_ID": "cad-model",
+            "OPENAI_REVIEW_MODEL_ID": "review-model",
+        }
+    )
+    assert review_settings.review_model_id == "review-model"
 
     with pytest.raises(AgentConfigurationError, match="OPENAI_API_KEY"):
         AgentSettings.from_environment({"OPENAI_MODEL_ID": "cad-model"})

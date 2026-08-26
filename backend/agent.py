@@ -46,6 +46,7 @@ class AgentRunCancelled(AgentRunError):
 
 
 AGENT_RUN_TIMEOUT_ENV_VAR = "CADFLOW_AGENT_RUN_TIMEOUT_SECONDS"
+REVIEW_MODEL_ENV_VAR = "OPENAI_REVIEW_MODEL_ID"
 DEFAULT_AGENT_RUN_TIMEOUT_SECONDS = 20 * 60.0
 # Backward-compatible names for callers that need the default budget. Runtime
 # runs use AgentSettings.run_timeout_seconds so repository-local .env values
@@ -119,7 +120,7 @@ def _agent_run_timeout_message(timeout_seconds: float) -> str:
 
 @dataclass(frozen=True)
 class AgentSettings:
-    """Backend-only configuration for the single OpenAI-compatible model."""
+    """Backend-only configuration for the Agent and optional CAD reviewer."""
 
     model_id: str
     api_key: str = field(repr=False)
@@ -128,6 +129,7 @@ class AgentSettings:
     reasoning_effort: ReasoningEffort | None = None
     reasoning_summary: ReasoningSummary | None = None
     run_timeout_seconds: float = DEFAULT_AGENT_RUN_TIMEOUT_SECONDS
+    review_model_id: str | None = None
 
     @classmethod
     def from_environment(
@@ -171,6 +173,7 @@ class AgentSettings:
                 else None
             ),
             run_timeout_seconds=resolve_agent_run_timeout_seconds(values),
+            review_model_id=values.get(REVIEW_MODEL_ENV_VAR, "").strip() or None,
         )
 
     @property
@@ -1304,6 +1307,7 @@ __all__ = [
     "ReasoningEffort",
     "ReasoningSummary",
     "AGENT_RUN_TIMEOUT_ENV_VAR",
+    "REVIEW_MODEL_ENV_VAR",
     "AGENT_RUN_TIMEOUT_SECONDS",
     "DEFAULT_AGENT_RUN_TIMEOUT_SECONDS",
     "MAX_AGENT_RUN_SECONDS",
