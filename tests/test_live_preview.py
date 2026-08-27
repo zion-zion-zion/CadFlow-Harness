@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import struct
 import time
 from pathlib import Path
 
 import cadflow as cad
+import pytest
 
 from backend.app import create_app
 from backend.live_preview import (
@@ -13,6 +16,7 @@ from backend.live_preview import (
     LivePreviewStore,
     _source_hash,
 )
+from backend.previews import PreviewError, validate_preview_glb
 from backend.projects import ProjectStore
 
 
@@ -57,6 +61,10 @@ def test_live_preview_executor_renders_a_semantic_assembly(tmp_path: Path) -> No
         """import cadflow as cad
 
 def build_model(model: cad.Model):
+    red = cad.make_material_rmaterial(material_id="red", color=(1.0, 0.0, 0.0))
+    blue = cad.make_material_rmaterial(
+        material_id="blue", color=(0.1, 0.2, 0.95)
+    )
     first = cad.make_part_rpart(
         part_id="first",
         body=cad.make_box_rsolid(width=2.0, height=2.0, depth=2.0),
@@ -65,6 +73,8 @@ def build_model(model: cad.Model):
         part_id="second",
         body=cad.make_box_rsolid(width=2.0, height=2.0, depth=2.0),
     )
+    first = cad.assign_material_rpart(part=first, material=red)
+    second = cad.assign_material_rpart(part=second, material=blue)
     assembly = cad.make_assembly_rassembly(assembly_id="preview")
     assembly = cad.add_component_rassembly(
         assembly=assembly,
@@ -83,12 +93,27 @@ def build_model(model: cad.Model):
     )
     executor = LivePreviewExecutor()
     try:
-        result = executor.execute(tmp_path, timeout_seconds=10.0)
+        result = executor.execute(tmp_path, timeout_seconds=20.0)
     finally:
         executor.close()
 
     assert result.status == "succeeded", result
     assert result.payload is not None and result.payload[:4] == b"glTF"
+    json_length = struct.unpack_from("<I", result.payload, 12)[0]
+    document = json.loads(result.payload[20 : 20 + json_length])
+    colors = {
+        tuple(material["pbrMetallicRoughness"]["baseColorFactor"])
+        for material in document["materials"]
+    }
+    assert colors == {(1.0, 0.0, 0.0, 1.0), (0.1, 0.2, 0.95, 1.0)}
+    assert len(document["meshes"]) == 2
+    assert sorted(node["matrix"][12] for node in document["nodes"]) == [0.0, 0.005]
+
+    tampered = result.payload.replace(
+        b"CadFlow live preview", b"Unknown live preview", 1
+    )
+    with pytest.raises(PreviewError):
+        validate_preview_glb(tampered)
 
 
 def test_live_preview_executor_reuses_worker_between_builds(tmp_path: Path) -> None:

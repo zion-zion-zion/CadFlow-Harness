@@ -824,6 +824,7 @@ import traceback
 from pathlib import Path
 
 import cadflow as cad
+from backend.preview_glb import assembly_preview_glb
 
 def clear_snapshot_modules(snapshot):
     for name, module in tuple(sys.modules.items()):
@@ -881,22 +882,18 @@ for line in sys.stdin.buffer:
                             )
                         except Exception:
                             pass
-                        preview_compound = cad.make_compound_from_assembly_rcompound(
-                            assembly=preview_assembly
+                        payload = assembly_preview_glb(
+                            preview_assembly,
+                            deflection=float(request["deflection"]),
                         )
-                        preview_step = output_path.with_suffix(".step")
-                        cad.export_step(
-                            shapes=preview_compound,
-                            filename=str(preview_step),
-                        )
-                        preview_shape = model.import_step(str(preview_step))
                     else:
                         raise TypeError(
                             "Model Source must return one CadFlow Shape or cad.Assembly"
                         )
-                    payload = preview_shape.preview_glb(
-                        deflection=float(request["deflection"])
-                    )
+                    if isinstance(final_result, cad.Shape):
+                        payload = preview_shape.preview_glb(
+                            deflection=float(request["deflection"])
+                        )
                     output_path.write_bytes(payload)
                 response = {"status": "succeeded"}
             except BaseException as exc:

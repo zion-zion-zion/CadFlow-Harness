@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import cadflow as cad
 
+from .preview_glb import validate_assembly_preview_glb
+
 
 MAX_PREVIEW_BYTES = 16 * 1024 * 1024
 
@@ -21,8 +23,15 @@ def validate_preview_glb(payload: bytes | bytearray | memoryview) -> None:
         raise PreviewError("preview frame exceeds the size limit")
     try:
         cad.scene.preflight_glb(payload, expected_kind="triangle")
-    except (TypeError, ValueError) as exc:
-        raise PreviewError("preview frame is not a valid CadFlow triangle GLB") from exc
+    except (TypeError, ValueError) as native_error:
+        try:
+            validate_assembly_preview_glb(bytes(payload))
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+            raise PreviewError(
+                "preview frame is not a valid CadFlow triangle GLB"
+            ) from native_error
+
+
 __all__ = [
     "MAX_PREVIEW_BYTES",
     "PreviewError",

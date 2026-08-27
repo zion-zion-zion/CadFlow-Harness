@@ -12,9 +12,9 @@ import { nodeIsInIsolation } from '../product-state';
 
 type Vec3 = [number, number, number];
 type Transform = { origin: Vec3; x_axis: Vec3; y_axis: Vec3; z_axis: Vec3 };
-type Appearance = {
+export type Appearance = {
   appearance_id: string;
-  base_color: [number, number, number, 1];
+  base_color: [number, number, number, number];
   metallic: number;
   roughness: number;
   alpha_mode: 'opaque' | 'mask' | 'blend';
@@ -96,6 +96,23 @@ export class ScenePackageError extends Error {
     super(message);
     this.name = 'ScenePackageError';
   }
+}
+
+export function preparePreviewScene(scene: THREE.Object3D): THREE.Object3D {
+  scene.name = 'preview-model';
+  return scene;
+}
+
+export function materialFromAppearance(appearance?: Appearance): THREE.MeshStandardMaterial {
+  const color = appearance?.base_color ?? [0.72, 0.75, 0.78, 1];
+  return new THREE.MeshStandardMaterial({
+    color: new THREE.Color(color[0], color[1], color[2]),
+    metalness: appearance?.metallic ?? 0,
+    roughness: appearance?.roughness ?? 0.55,
+    side: appearance?.double_sided ? THREE.DoubleSide : THREE.FrontSide,
+    transparent: appearance?.alpha_mode === 'blend',
+    opacity: color[3],
+  });
 }
 
 export class SceneViewer {
@@ -220,19 +237,7 @@ export class SceneViewer {
         `Preview frame is not a valid CadFlow GLB: ${error instanceof Error ? error.message : 'parse failed'}`,
       );
     }
-    next.name = 'preview-model';
-    next.traverse((object) => {
-      if (!(object instanceof THREE.Mesh)) return;
-      const materials = Array.isArray(object.material) ? object.material : [object.material];
-      for (const material of materials) {
-        if (material instanceof THREE.MeshStandardMaterial) {
-          material.color.set('#b5e87d');
-          material.metalness = 0.18;
-          material.roughness = 0.42;
-          material.side = THREE.DoubleSide;
-        }
-      }
-    });
+    preparePreviewScene(next);
     if (!isCurrent()) {
       this.disposePreviewObject(next);
       return false;
@@ -402,15 +407,7 @@ export class SceneViewer {
 
   private materialFor(definition: Definition): THREE.MeshStandardMaterial {
     const appearance = definition.appearance_id ? this.appearances.get(definition.appearance_id) : undefined;
-    const color = appearance?.base_color ?? [0.72, 0.75, 0.78, 1];
-    return new THREE.MeshStandardMaterial({
-      color: new THREE.Color(color[0], color[1], color[2]),
-      metalness: appearance?.metallic ?? 0,
-      roughness: appearance?.roughness ?? 0.55,
-      side: appearance?.double_sided ? THREE.DoubleSide : THREE.FrontSide,
-      transparent: appearance?.alpha_mode === 'blend',
-      opacity: color[3],
-    });
+    return materialFromAppearance(appearance);
   }
 
   private edgeMaterialFor(definition: Definition): LineMaterial {
