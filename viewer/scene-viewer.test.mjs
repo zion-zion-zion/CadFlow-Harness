@@ -59,3 +59,20 @@ test('final scene material uses the complete manifest appearance', async () => {
   assert.equal(material.roughness, 0.22);
   assert.equal(material.side, THREE.DoubleSide);
 });
+
+test('generic CadFlow appearance gets the studio steel finish', async () => {
+  const { materialFromAppearance } = await loadSceneViewer();
+  const material = materialFromAppearance({
+    appearance_id: 'appearance/evaluated/default',
+    base_color: [0.72, 0.75, 0.78, 1],
+    metallic: 0,
+    roughness: 0.55,
+    alpha_mode: 'opaque',
+    double_sided: false,
+  });
+
+  assert.deepEqual(material.color.toArray(), [0.38, 0.45, 0.54]);
+  assert.equal(material.metalness, 0.45);
+  assert.equal(material.roughness, 0.34);
+  assert.equal(material.transparent, false);
+});

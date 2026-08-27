@@ -23,6 +23,7 @@ type Transform = { origin: Vec3; x_axis: Vec3; y_axis: Vec3; z_axis: Vec3 };
 export type Appearance = {
   appearance_id: string;
   base_color: [number, number, number, number];
+  edge_color?: [number, number, number, number];
   metallic: number;
   roughness: number;
   alpha_mode: 'opaque' | 'mask' | 'blend';
@@ -105,8 +106,11 @@ const MAX_MEMBER_BYTES = 256 * 1024 * 1024;
 const MAX_SCENE_JSON_BYTES = 8 * 1024 * 1024;
 const MAX_COMPRESSION_RATIO = 100;
 const MAX_PREVIEW_BYTES = 16 * 1024 * 1024;
-const CAD_EDGE_LIGHTNESS_OFFSET = 0.5;
 const CAD_EDGE_LINE_WIDTH = 1.6;
+const DEFAULT_CAD_COLOR: [number, number, number, number] = [0.72, 0.75, 0.78, 1];
+const STUDIO_DEFAULT_COLOR: [number, number, number, number] = [0.38, 0.45, 0.54, 1];
+const STUDIO_DEFAULT_METALLIC = 0.45;
+const STUDIO_DEFAULT_ROUGHNESS = 0.34;
 
 export type SceneViewerStatus = (message: string, ready: boolean) => void;
 export type SceneNodeSelection = (nodeId: string) => void;
@@ -130,9 +134,13 @@ export function preparePreviewScene(scene: THREE.Object3D): THREE.Object3D {
 }
 
 export function materialFromAppearance(appearance?: Appearance): THREE.MeshStandardMaterial {
-  const color = appearance?.base_color ?? [0.72, 0.75, 0.78, 1];
-  const metallic = appearance?.metallic ?? 0;
-  const roughness = appearance?.roughness ?? 0.55;
+  const sourceColor = appearance?.base_color ?? DEFAULT_CAD_COLOR;
+  const genericCadAppearance = isGenericCadAppearance(appearance);
+  const color = genericCadAppearance
+    ? [...STUDIO_DEFAULT_COLOR.slice(0, 3), sourceColor[3]] as [number, number, number, number]
+    : sourceColor;
+  const metallic = genericCadAppearance ? STUDIO_DEFAULT_METALLIC : appearance?.metallic ?? 0;
+  const roughness = genericCadAppearance ? STUDIO_DEFAULT_ROUGHNESS : appearance?.roughness ?? 0.55;
   return new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(color[0], color[1], color[2]),
     metalness: metallic,
@@ -145,6 +153,13 @@ export function materialFromAppearance(appearance?: Appearance): THREE.MeshStand
     transparent: appearance?.alpha_mode === 'blend',
     opacity: color[3],
   });
+}
+
+function isGenericCadAppearance(appearance?: Appearance): boolean {
+  if (!appearance) return true;
+  return appearance.metallic === 0
+    && appearance.roughness === 0.55
+    && appearance.base_color.every((value, index) => Math.abs(value - DEFAULT_CAD_COLOR[index]) < 1e-6);
 }
 
 export class SceneViewer {
@@ -573,15 +588,13 @@ export class SceneViewer {
 
   private edgeMaterialFor(definition: Definition): LineMaterial {
     const appearance = definition.appearance_id ? this.appearances.get(definition.appearance_id) : undefined;
-    const baseColor = appearance?.base_color ?? [0.72, 0.75, 0.78, 1];
-    const hsl = { h: 0, s: 0, l: 0 };
-    new THREE.Color(baseColor[0], baseColor[1], baseColor[2]).getHSL(hsl);
+    const edgeColor = appearance?.edge_color ?? [0.08, 0.11, 0.15, 1];
     const material = new LineMaterial({
-      color: new THREE.Color().setHSL(hsl.h, hsl.s, (hsl.l + CAD_EDGE_LIGHTNESS_OFFSET) % 1),
+      color: new THREE.Color(edgeColor[0], edgeColor[1], edgeColor[2]),
       linewidth: CAD_EDGE_LINE_WIDTH,
       worldUnits: false,
-      transparent: baseColor[3] < 1,
-      opacity: baseColor[3],
+      transparent: edgeColor[3] < 1,
+      opacity: edgeColor[3],
       depthTest: true,
       depthWrite: false,
     });
