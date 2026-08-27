@@ -1,0 +1,241 @@
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+import cadflow as cad
+
+from backend.app import create_app
+from backend.live_preview import (
+    LivePreviewExecutor,
+    LivePreviewResult,
+    LivePreviewScheduler,
+    LivePreviewStore,
+    _source_hash,
+)
+from backend.projects import ProjectStore
+
+
+def _model_source(width: float) -> str:
+    return f"""from pathlib import Path
+import cadflow as cad
+
+def build_model(model: cad.Model):
+    Path("preview-side-effect.txt").write_text("snapshot only", encoding="utf-8")
+    return model.box(width={width}, depth=4.0, height=3.0)
+"""
+
+
+def _wait_until(predicate, timeout: float = 3.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError("condition was not reached before timeout")
+
+
+def test_live_preview_executor_isolated_from_validation_outputs(tmp_path: Path) -> None:
+    (tmp_path / "code").mkdir()
+    (tmp_path / "code" / "model.py").write_text(_model_source(5.0), encoding="utf-8")
+    executor = LivePreviewExecutor()
+    try:
+        result = executor.execute(tmp_path, timeout_seconds=10.0)
+    finally:
+        executor.close()
+
+    assert result.status == "succeeded", result
+    assert result.payload is not None and result.payload[:4] == b"glTF"
+    assert not (tmp_path / "preview-side-effect.txt").exists()
+    assert not (tmp_path / "artifacts").exists()
+    assert not (tmp_path / ".cad-review").exists()
+
+
+def test_live_preview_executor_renders_a_semantic_assembly(tmp_path: Path) -> None:
+    (tmp_path / "code").mkdir()
+    (tmp_path / "code" / "model.py").write_text(
+        """import cadflow as cad
+
+def build_model(model: cad.Model):
+    first = cad.make_part_rpart(
+        part_id="first",
+        body=cad.make_box_rsolid(width=2.0, height=2.0, depth=2.0),
+    )
+    second = cad.make_part_rpart(
+        part_id="second",
+        body=cad.make_box_rsolid(width=2.0, height=2.0, depth=2.0),
+    )
+    assembly = cad.make_assembly_rassembly(assembly_id="preview")
+    assembly = cad.add_component_rassembly(
+        assembly=assembly,
+        item=first,
+        component_id="first",
+        placement=cad.identity_placement_rplacement(),
+    )
+    return cad.add_component_rassembly(
+        assembly=assembly,
+        item=second,
+        component_id="second",
+        placement=cad.make_placement_rplacement(origin=(5.0, 0.0, 0.0)),
+    )
+""",
+        encoding="utf-8",
+    )
+    executor = LivePreviewExecutor()
+    try:
+        result = executor.execute(tmp_path, timeout_seconds=10.0)
+    finally:
+        executor.close()
+
+    assert result.status == "succeeded", result
+    assert result.payload is not None and result.payload[:4] == b"glTF"
+
+
+def test_live_preview_executor_reuses_worker_between_builds(tmp_path: Path) -> None:
+    (tmp_path / "code").mkdir()
+    (tmp_path / "code" / "model.py").write_text(
+        _model_source(5.0)
+        .replace("import cadflow as cad", "import os\nimport cadflow as cad")
+        .replace(
+            "def build_model",
+            'print(f"preview-worker:{os.getpid()}")\n\ndef build_model',
+        ),
+        encoding="utf-8",
+    )
+    executor = LivePreviewExecutor()
+    try:
+        first = executor.execute(tmp_path, timeout_seconds=10.0)
+        second = executor.execute(tmp_path, timeout_seconds=10.0)
+    finally:
+        executor.close()
+
+    assert first.status == second.status == "succeeded"
+    assert first.stdout.startswith("preview-worker:")
+    assert first.stdout == second.stdout
+
+
+def test_live_preview_store_keeps_last_model_when_next_build_fails(
+    tmp_path: Path,
+) -> None:
+    with cad.Model() as model:
+        payload = model.box(width=2.0, depth=2.0, height=2.0).preview_glb()
+    store = LivePreviewStore(tmp_path)
+
+    current = store.publish(payload, "first-hash")
+    failed = store.write_status("failed", source_hash="second-hash", error="broken")
+
+    assert current.revision == 1
+    assert failed.revision == 1
+    assert failed.artifact_available is True
+    assert store.artifact().read_bytes() == payload
+
+
+def test_scheduler_rebuilds_after_project_python_changes(tmp_path: Path) -> None:
+    projects = ProjectStore(tmp_path)
+    project = projects.create_project("Live")
+    project = projects.submit_prompt(project.project_id, "Create a box")
+    project_dir = projects.project_directory(project.project_id)
+    project_dir.joinpath("code", "model.py").write_text(_model_source(3.0), encoding="utf-8")
+    with cad.Model() as model:
+        payload = model.box(width=1.0, depth=1.0, height=1.0).preview_glb()
+
+    class RecordingExecutor:
+        def __init__(self) -> None:
+            self.sources: list[str] = []
+
+        def execute(self, root: Path, **_kwargs: object) -> LivePreviewResult:
+            self.sources.append(
+                Path(root, "code", "model.py").read_text(encoding="utf-8")
+            )
+            return LivePreviewResult("succeeded", payload=payload)
+
+    executor = RecordingExecutor()
+    scheduler = LivePreviewScheduler(
+        projects,
+        executor=executor,
+        debounce_seconds=0.02,
+        poll_seconds=0.01,
+    )
+    try:
+        scheduler.activate(project.project_id)
+        store = LivePreviewStore(project_dir)
+        _wait_until(lambda: store.read_status().revision == 1)
+
+        project_dir.joinpath("code", "model.py").write_text(
+            _model_source(9.0), encoding="utf-8"
+        )
+        _wait_until(lambda: store.read_status().revision == 2)
+
+        assert len(executor.sources) == 2
+        assert "width=9.0" in executor.sources[-1]
+        assert store.read_status().state == "current"
+    finally:
+        scheduler.close()
+
+
+def test_scheduler_waits_for_build_model_before_previewing(tmp_path: Path) -> None:
+    projects = ProjectStore(tmp_path)
+    project = projects.create_project("Live")
+    project = projects.submit_prompt(project.project_id, "Create a box")
+    project_dir = projects.project_directory(project.project_id)
+    with cad.Model() as model:
+        payload = model.box(width=1.0, depth=1.0, height=1.0).preview_glb()
+
+    class RecordingExecutor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, _root: Path, **_kwargs: object) -> LivePreviewResult:
+            self.calls += 1
+            return LivePreviewResult("succeeded", payload=payload)
+
+    executor = RecordingExecutor()
+    scheduler = LivePreviewScheduler(
+        projects,
+        executor=executor,
+        debounce_seconds=0.02,
+        poll_seconds=0.01,
+    )
+    try:
+        scheduler.activate(project.project_id)
+        time.sleep(0.1)
+
+        assert executor.calls == 0
+        assert LivePreviewStore(project_dir).read_status().state == "waiting"
+
+        project_dir.joinpath("code", "model.py").write_text(
+            _model_source(3.0), encoding="utf-8"
+        )
+        _wait_until(lambda: LivePreviewStore(project_dir).read_status().revision == 1)
+
+        assert executor.calls == 1
+    finally:
+        scheduler.close()
+
+
+def test_default_agent_service_has_no_live_preview_validation_callbacks(
+    tmp_path: Path,
+) -> None:
+    app = create_app(projects_root=tmp_path)
+    service = app.state.run_coordinator.run_service
+    scheduler = app.state.preview_scheduler
+
+    assert getattr(service, "on_validation_start", None) is None
+    assert getattr(service, "on_validation_end", None) is None
+    assert not hasattr(scheduler, "pause_for_validation")
+    assert not hasattr(scheduler, "resume_after_validation")
+
+
+def test_live_preview_source_hash_ignores_project_runtime_python(tmp_path: Path) -> None:
+    code = tmp_path / "code"
+    code.mkdir()
+    (code / "model.py").write_text("MODEL = 1\n", encoding="utf-8")
+    runtime = tmp_path / "runtime.py"
+    runtime.write_text("RUNTIME = 1\n", encoding="utf-8")
+
+    initial = _source_hash(tmp_path)
+    runtime.write_text("RUNTIME = 2\n", encoding="utf-8")
+    assert _source_hash(tmp_path) == initial
+
+    (code / "helper.py").write_text("HELPER = 1\n", encoding="utf-8")
+    assert _source_hash(tmp_path) != initial

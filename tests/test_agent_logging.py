@@ -6,19 +6,24 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
-from backend.agent_logging import AgentRunLog
+from backend.agent_logging import ConversationLog
 from backend.cad_executor import redact_credentials
 
 
-def test_agent_run_log_persists_prompt_model_and_tool_lifecycle(tmp_path: Path) -> None:
+def test_conversation_log_persists_turn_model_and_tool_lifecycle(tmp_path: Path) -> None:
     long_text = "x" * 100_000
-    trace = AgentRunLog(
+    trace = ConversationLog(
         tmp_path,
+        conversation_id="project-1",
+        turn_id="turn-1",
+        request_id="request-1",
     )
     trace.configure(
         provider="openai",
         model_id="cad-model",
         base_url="https://provider.invalid/v1",
+        reasoning_effort="high",
+        reasoning_summary="auto",
     )
     handler = trace.callback_handler()
     handler.on_chat_model_start(
@@ -36,9 +41,9 @@ def test_agent_run_log_persists_prompt_model_and_tool_lifecycle(tmp_path: Path) 
     )
     handler.on_tool_start(
         {"name": "write_file"},
-        '{"file_path":"model.py","content":"print(1)"}',
+        '{"file_path":"/code/model.py","content":"print(1)"}',
         run_id="tool-1",
-        inputs={"file_path": "model.py", "content": long_text},
+        inputs={"file_path": "/code/model.py", "content": long_text},
     )
     handler.on_tool_end(
         ToolMessage(
@@ -79,7 +84,7 @@ def test_agent_run_log_persists_prompt_model_and_tool_lifecycle(tmp_path: Path) 
         ),
         run_id="model-1",
     )
-    trace.record_internal_tool("validate_model", "model.py")
+    trace.record_internal_tool("validate_model", "code/model.py")
     trace.finish(
         status="succeeded",
     )
@@ -94,37 +99,47 @@ def test_agent_run_log_persists_prompt_model_and_tool_lifecycle(tmp_path: Path) 
 
     records = [
         json.loads(line)
-        for line in (tmp_path / "agent-run.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (tmp_path / "conversation.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     payload = records[0]
-    assert payload["model"] == {
+    assert payload["payload"]["model"] == {
         "base_url": "https://provider.invalid/v1",
         "model_id": "cad-model",
         "provider": "openai",
+        "reasoning_effort": "high",
+        "reasoning_summary": "auto",
     }
-    assert records[-1]["status"] == "succeeded"
+    assert records[-1]["payload"]["status"] == "succeeded"
     assert set(payload) == {
-        "model",
+        "conversation_id",
+        "payload",
         "sequence",
         "timestamp",
+        "turn_id",
         "type",
     }
     assert [event["type"] for event in records] == [
-        "run_started",
+        "turn_started",
         "model_request",
         "tool_call",
         "tool_result",
         "model_response",
         "backend_tool",
-        "run_finished",
+        "turn_succeeded",
     ]
-    assert records[1]["messages"] == [
+    assert records[1]["payload"]["messages"] == [
         {"role": "system", "content": "system API_KEY=[REDACTED]"},
         {"role": "user", "content": f"request API_KEY=[REDACTED] {long_text}"},
     ]
-    assert records[2]["arguments"]["content"] == long_text
-    assert records[3]["result"] == f"result OPENAI_API_KEY=[REDACTED] {long_text}"
-    response = records[4]["messages"][0]
+    external_arguments = records[2]["payload"]["arguments"]
+    assert external_arguments["characters"] > 100_000
+    assert (tmp_path / external_arguments["external_path"]).is_file()
+    assert records[2]["payload"]["call_id"] == "tool-1"
+    external_result = records[3]["payload"]["result"]
+    assert external_result["characters"] > 100_000
+    assert (tmp_path / external_result["external_path"]).is_file()
+    assert records[3]["payload"]["call_id"] == "tool-1"
+    response = records[4]["payload"]["messages"][0]
     assert response["role"] == "assistant"
     assert response["content"] == f"done {long_text}"
     assert response["tool_calls"][0]["args"]["content"] == long_text
@@ -132,17 +147,17 @@ def test_agent_run_log_persists_prompt_model_and_tool_lifecycle(tmp_path: Path) 
     assert "usage_metadata" not in json.dumps(records, ensure_ascii=False)
     assert "token_usage" not in json.dumps(records, ensure_ascii=False)
     assert "run_id" not in json.dumps(records, ensure_ascii=False)
-    assert "provider_retry_count" not in records[-1]
+    assert "provider_retry_count" not in records[-1]["payload"]
     serialized = json.dumps(records, ensure_ascii=False)
     assert "sk-secret-value" not in serialized
     assert "sk-system-secret" not in serialized
     assert "sk-another-secret" not in serialized
 
 
-def test_agent_run_log_accumulates_cached_and_uncached_token_usage(
+def test_conversation_log_accumulates_cached_and_uncached_token_usage(
     tmp_path: Path,
 ) -> None:
-    trace = AgentRunLog(tmp_path)
+    trace = ConversationLog(tmp_path, turn_id="turn-1")
     handler = trace.callback_handler()
 
     handler.on_llm_end(
@@ -208,15 +223,15 @@ def test_agent_run_log_accumulates_cached_and_uncached_token_usage(
         "uncached_input_tokens": 8,
         "output_tokens": 26,
     }
-    assert "token_usage" not in (tmp_path / "agent-run.jsonl").read_text(
+    assert "token_usage" not in (tmp_path / "conversation.jsonl").read_text(
         encoding="utf-8"
     )
 
 
-def test_agent_run_log_counts_missing_cache_details_as_uncached(
+def test_conversation_log_counts_missing_cache_details_as_uncached(
     tmp_path: Path,
 ) -> None:
-    trace = AgentRunLog(tmp_path)
+    trace = ConversationLog(tmp_path, turn_id="turn-1")
     handler = trace.callback_handler()
 
     handler.on_llm_end(
@@ -241,8 +256,8 @@ def test_agent_run_log_counts_missing_cache_details_as_uncached(
     }
 
 
-def test_agent_run_log_caps_cached_tokens_at_input_tokens(tmp_path: Path) -> None:
-    trace = AgentRunLog(tmp_path)
+def test_conversation_log_caps_cached_tokens_at_input_tokens(tmp_path: Path) -> None:
+    trace = ConversationLog(tmp_path, turn_id="turn-1")
 
     trace.record_model_usage(
         {
@@ -263,14 +278,57 @@ def test_agent_run_log_caps_cached_tokens_at_input_tokens(tmp_path: Path) -> Non
     }
 
 
-def test_agent_run_log_survives_malformed_existing_file(tmp_path: Path) -> None:
-    path = tmp_path / "agent-run.jsonl"
+def test_conversation_log_recovers_an_incomplete_tail(tmp_path: Path) -> None:
+    path = tmp_path / "conversation.jsonl"
     path.write_text("not-json", encoding="utf-8")
 
-    trace = AgentRunLog(tmp_path)
+    trace = ConversationLog(tmp_path, turn_id="turn-1")
 
-    assert trace.data["records"][0]["type"] == "run_started"
-    assert json.loads(path.read_text(encoding="utf-8").splitlines()[0])["type"] == "run_started"
+    assert trace.data["records"][0]["type"] == "turn_started"
+    assert json.loads(path.read_text(encoding="utf-8").splitlines()[0])["type"] == "turn_started"
+
+
+def test_conversation_log_replaces_the_legacy_log_after_opening(tmp_path: Path) -> None:
+    legacy = tmp_path / "agent-run.jsonl"
+    legacy.write_text('{"type":"run_started"}\n', encoding="utf-8")
+
+    log = ConversationLog(tmp_path, turn_id="turn-1", user_message="Create a box.")
+
+    assert log.path.name == "conversation.jsonl"
+    assert log.path.is_file()
+    assert not legacy.exists()
+
+
+def test_conversation_context_replays_turns_and_summarizes_over_the_limit(
+    tmp_path: Path,
+) -> None:
+    first = ConversationLog(
+        tmp_path,
+        turn_id="turn-1",
+        request_id="request-1",
+        user_message="Create a wide mounting plate.",
+    )
+    first.finish(status="succeeded", assistant_message="The plate is ready.")
+    second = ConversationLog(
+        tmp_path,
+        turn_id="turn-2",
+        request_id="request-2",
+        user_message="Add four corner holes.",
+    )
+
+    assert second.context_messages(exclude_turn_id="turn-2") == [
+        {"role": "user", "content": "Create a wide mounting plate."},
+        {"role": "assistant", "content": "The plate is ready."},
+    ]
+    summarized = second.context_messages(
+        exclude_turn_id="turn-2",
+        max_chars=20,
+        recent_turns=0,
+    )
+    assert summarized[0]["role"] == "system"
+    assert any(
+        record["type"] == "context_summary" for record in second.data["records"]
+    )
 
 
 def test_redaction_helper_remains_compatible_with_agent_trace() -> None:

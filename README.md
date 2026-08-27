@@ -61,7 +61,10 @@ Prompts, observable tool activity, source revisions, execution outcomes, measure
 
 ### 🔌 The intelligence layer is replaceable
 
-Deep Agents and the Pi SDK sidecar share the same Project workspace and artifact contract. Models, harnesses, and CAD Skills can evolve while execution, verification, run records, and visualization stay reusable—this is what makes CadFlowAgent infrastructure rather than a single-agent demo.
+The Deep Agents harness shares a stable Project workspace and artifact contract
+with the rest of the runtime. Models, harnesses, and CAD Skills can evolve while
+execution, verification, run records, and visualization stay reusable—this is
+what makes CadFlowAgent infrastructure rather than a single-agent demo.
 
 <a id="project-direction"></a>
 
@@ -91,7 +94,7 @@ flowchart TB
 
     subgraph L2["2 · Agent layer"]
         C["Run Coordinator"]
-        H["Agent Harness<br/>Deep Agents | Pi"]
+        H["Agent Harness<br/>Deep Agents"]
         K["CAD Skills<br/>model · inspect · validate"]
         C --> H
         K --> H
@@ -135,31 +138,29 @@ flowchart TB
 
 ### Requirements
 
-- Linux x86_64
-- Python <code>3.12</code>
-- [<code>uv</code>](https://docs.astral.sh/uv/)
-- Node.js <code>22.19</code> or newer and npm
-- bubblewrap available at <code>/usr/bin/bwrap</code>
+- Linux x86_64 with glibc 2.31 or newer and Python 3.12, or macOS 26 arm64
+  with Python 3.13
+- `curl` or `wget` for installing missing tools
 - An OpenAI-compatible model endpoint and API key
 
-The repository vendors <code>vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl</code> with SHA256:
+The repository vendors one CadFlow wheel for each supported platform. `uv`
+selects the matching wheel from the shared `pyproject.toml` and `uv.lock`:
 
-~~~text
-d48acda48f29f5c022695c377f7e0f6089c188923091fd45c3fd2c0e3234886a
-~~~
+- Linux: `cadflow-0.1.0-cp312-cp312-linux_x86_64.whl` (SHA256
+  `753c513fee879258a561efa9d3edf7e73ebe904ed160264caf5851c20b99854f`)
+- macOS: `cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl` (SHA256
+  `738bcccab01a8152831a871f3103790feb4d975c1e98357b887fc4ebe56391fa`)
 
 ### Install
 
 ~~~bash
-git clone https://github.com/zion-zion-zion/CadFlowAgent.git
-cd CadFlowAgent
-
-cp .env.example .env
-uv sync --group dev
-npm --prefix viewer ci
-npm --prefix pi-sidecar ci
-npm --prefix pi-sidecar run build
+./setup.sh
 ~~~
+
+The setup script detects the platform, installs `uv` and a compatible Node.js
+version when needed, syncs the locked Python and Viewer dependencies, and
+creates `.env` from the example without overwriting an existing file. Use
+`./setup.sh --check` to validate an existing environment without changing it.
 
 Configure the model provider in <code>.env</code>:
 
@@ -175,7 +176,15 @@ OPENAI_API_KEY=<api-key>
 ./run.sh
 ~~~
 
-Open [http://localhost:5173](http://localhost:5173) to create a Project, choose an available agent harness, submit a modeling task, follow live progress, and inspect the final 3D result. The backend API is available at <code>http://localhost:8000</code>.
+`run.sh` detects the operating system and architecture and selects the matching
+Python interpreter automatically.
+
+Open [http://localhost:5678](http://localhost:5678) to create a Project, choose
+the available agent harness, submit a modeling task, follow live progress, and
+inspect the final 3D result. The backend API is available at
+<code>http://localhost:8765</code>. `TEXT_TO_CAD_HOST` and
+`TEXT_TO_CAD_FRONTEND_HOST` may be set when another machine needs to reach the
+trusted local demo.
 
 ### Runtime configuration
 
@@ -185,14 +194,16 @@ Open [http://localhost:5173](http://localhost:5173) to create a Project, choose 
 | <code>OPENAI_MODEL_ID</code> | — | Model identifier used by the agent harnesses. |
 | <code>OPENAI_API_KEY</code> | — | Provider credential. Never commit it. |
 | <code>TEXT_TO_CAD_HOST</code> | <code>0.0.0.0</code> | Backend bind host. |
-| <code>TEXT_TO_CAD_PORT</code> | <code>8000</code> | Backend port. |
+| <code>TEXT_TO_CAD_PORT</code> | <code>8765</code> | Backend port. |
 | <code>TEXT_TO_CAD_FRONTEND_HOST</code> | <code>0.0.0.0</code> | Viewer bind host. |
-| <code>TEXT_TO_CAD_FRONTEND_PORT</code> | <code>5173</code> | Viewer port. |
+| <code>TEXT_TO_CAD_FRONTEND_PORT</code> | <code>5678</code> | Viewer port. |
 | <code>TEXT_TO_CAD_PROJECTS_ROOT</code> | <code>output/projects</code> | Persistent Project workspace root. |
 
 ## 📐 Current modeling contract
 
-Each Project starts from one stable entry point:
+The current application still has a deliberately narrower output contract:
+each Project starts with a non-passing `code/model.py` scaffold and keeps this
+stable entry point:
 
 ~~~python
 import cadflow as cad
@@ -203,7 +214,16 @@ def build_model(model: cad.Model) -> cad.Shape:
     raise NotImplementedError
 ~~~
 
-The current application accepts one valid <code>cad.Shape</code> containing exactly one solid with positive volume. After validation, the backend creates <code>artifacts/model.scene.zip</code> for the browser Viewer. Skills and standalone examples cover broader inspection and export workflows, but they do not widen this application boundary.
+The Agent's writable workspace is the Project's `code/` directory. It may read
+and write only `*.py` files there, including local helper modules. Project
+metadata, conversation logs, previews, review evidence, and CAD artifacts stay
+outside that workspace. Skills are available through a separate read-only
+reference mount; repository examples are not mounted into the Agent workspace.
+The returned value must still be one valid `cad.Shape` with one solid and
+positive volume. The backend creates `artifacts/model.scene.zip` after
+validating the returned Shape and keeps STEP conversion internal to the Scene
+bridge. These runtime paths and alternative inputs or output types do not
+change the Project contract.
 
 <a id="cad-skill-layer"></a>
 
@@ -216,7 +236,8 @@ Skills provide task-specific modeling knowledge and exact API references without
 | [<code>cadflow-model-part</code>](skills/cadflow-model-part/SKILL.md) | Parametric rigid parts, sketches, features, booleans, blends, and single-part delivery. |
 | [<code>cadflow-flexible-model</code>](skills/cadflow-flexible-model/SKILL.md) | Static cloth, leather, membranes, garments, and other flexible geometry. |
 | [<code>cadflow-step-brep</code>](skills/cadflow-step-brep/SKILL.md) | STEP/BREP inspection, feature inference, reconstruction, and evidence-based comparison. |
-| [<code>cadflow-validate-export</code>](skills/cadflow-validate-export/SKILL.md) | Geometry validation, replay, rendering, export checks, and measured reports. |
+| [<code>cadflow-model-assembly</code>](skills/cadflow-model-assembly/SKILL.md) | Multi-part product and assembly structure, placement, and acceptance. |
+| [<code>cadflow-rotary-transmission</code>](skills/cadflow-rotary-transmission/SKILL.md) | Rotary joints, gears, shafts, and transmission mechanisms. |
 
 ## 🗂️ Repository map
 
@@ -224,7 +245,6 @@ Skills provide task-specific modeling knowledge and exact API references without
 CadFlowAgent/
 ├── backend/          Agent runtime, Project API, execution, events, and validation
 ├── viewer/           Browser workspace and Three.js Scene viewer
-├── pi-sidecar/       Resident worker for the Pi agent harness
 ├── skills/           Progressive CadFlow workflows and API references
 ├── examples/         Parts, flexible models, assemblies, and reconstruction data
 ├── tests/            Runtime, boundary, repair-loop, and integration tests
@@ -232,6 +252,20 @@ CadFlowAgent/
 ~~~
 
 Explore the [example catalog](examples/README.md), including mechanical parts, complex assemblies, flexible geometry, and the reconstruction trajectory seed.
+
+## ✅ Checks
+
+~~~bash
+# Linux
+uv run --python 3.12 pytest
+
+# macOS
+uv run --python 3.13 pytest
+
+cd viewer && npm run build
+~~~
+
+Live provider tests are opt-in with `-m live_agent`.
 
 ## 📄 License
 

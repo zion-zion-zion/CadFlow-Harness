@@ -1,9 +1,6 @@
 out/
 *.step
 *.stl
-*.obj
-*.png
-*.glb
 *.json
 *.scene.zip
 *.zip

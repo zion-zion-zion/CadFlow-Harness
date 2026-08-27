@@ -8,6 +8,8 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
+import { nodeIsInIsolation } from '../product-state';
+
 type Vec3 = [number, number, number];
 type Transform = { origin: Vec3; x_axis: Vec3; y_axis: Vec3; z_axis: Vec3 };
 type Appearance = {
@@ -82,12 +84,12 @@ const MAX_UNPACKED_BYTES = 512 * 1024 * 1024;
 const MAX_MEMBER_BYTES = 256 * 1024 * 1024;
 const MAX_SCENE_JSON_BYTES = 8 * 1024 * 1024;
 const MAX_COMPRESSION_RATIO = 100;
-const MAX_PREVIEW_COORDINATES = 3_000_000;
-const MAX_PREVIEW_INDICES = 3_000_000;
+const MAX_PREVIEW_BYTES = 16 * 1024 * 1024;
 const CAD_EDGE_LIGHTNESS_OFFSET = 0.5;
 const CAD_EDGE_LINE_WIDTH = 1.6;
 
 export type SceneViewerStatus = (message: string, ready: boolean) => void;
+export type SceneNodeSelection = (nodeId: string) => void;
 
 export class ScenePackageError extends Error {
   constructor(message: string) {
@@ -108,14 +110,24 @@ export class SceneViewer {
   private readonly edgeCache = new Map<string, THREE.Object3D>();
   private readonly definitions = new Map<string, Definition>();
   private readonly appearances = new Map<string, Appearance>();
+  private readonly sceneNodes = new Map<string, THREE.Object3D>();
   private readonly onStatus: SceneViewerStatus;
+  private readonly onNodeSelected: SceneNodeSelection;
   private currentManifest: SceneManifest | null = null;
   private currentFiles: PackageFiles | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private previewHasFramed = false;
+  private selectionHelper: THREE.BoxHelper | null = null;
+  private selectedNodeId: string | null = null;
+  private pointerStart: { x: number; y: number } | null = null;
 
-  constructor(container: HTMLElement, onStatus: SceneViewerStatus = () => undefined) {
+  constructor(
+    container: HTMLElement,
+    onStatus: SceneViewerStatus = () => undefined,
+    onNodeSelected: SceneNodeSelection = () => undefined,
+  ) {
     this.onStatus = onStatus;
+    this.onNodeSelected = onNodeSelected;
     this.scene.background = new THREE.Color('#0b0e12');
     this.camera.up.set(0, 0, 1);
     this.camera.position.set(2.4, 2.1, 3.0);
@@ -143,8 +155,12 @@ export class SceneViewer {
 
     this.modelRoot.name = 'validated-scene';
     this.previewRoot.name = 'live-preview';
-    this.previewRoot.scale.setScalar(0.001);
+    // Native preview GLBs use glTF's Y-up basis: (x, z, -y) / 1000.
+    // The application scene is Z-up, so rotate the preview into that basis.
+    this.previewRoot.rotation.x = Math.PI / 2;
     this.scene.add(this.modelRoot, this.previewRoot);
+    this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
+    this.renderer.domElement.addEventListener('pointerup', this.handlePointerUp);
     this.resizeObserver = new ResizeObserver(() => this.resize(container));
     this.resizeObserver.observe(container);
     this.resize(container);
@@ -187,27 +203,42 @@ export class SceneViewer {
     }
   }
 
-  async loadPreview(document: unknown, label: string): Promise<void> {
-    const meshDocument = validatePreviewDocument(document);
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshDocument.vertices, 3));
-    geometry.setIndex(meshDocument.triangles);
-    geometry.computeVertexNormals();
-    geometry.computeBoundingSphere();
-    const material = new THREE.MeshStandardMaterial({
-      color: '#b5e87d',
-      metalness: 0.18,
-      roughness: 0.42,
-      side: THREE.DoubleSide,
+  async loadPreview(
+    payload: ArrayBuffer,
+    label: string,
+    isCurrent: () => boolean = () => true,
+  ): Promise<boolean> {
+    if (payload.byteLength > MAX_PREVIEW_BYTES) {
+      throw new ScenePackageError('Preview frame exceeds the browser size limit');
+    }
+    let next: THREE.Object3D;
+    try {
+      const gltf = await this.loader.parseAsync(payload, '');
+      next = gltf.scene;
+    } catch (error) {
+      throw new ScenePackageError(
+        `Preview frame is not a valid CadFlow GLB: ${error instanceof Error ? error.message : 'parse failed'}`,
+      );
+    }
+    next.name = 'preview-model';
+    next.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (material instanceof THREE.MeshStandardMaterial) {
+          material.color.set('#b5e87d');
+          material.metalness = 0.18;
+          material.roughness = 0.42;
+          material.side = THREE.DoubleSide;
+        }
+      }
     });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = `preview-${meshDocument.operation}`;
-    const edgeGeometry = new THREE.EdgesGeometry(geometry, 28);
-    const edgeMaterial = new THREE.LineBasicMaterial({ color: '#273a25', transparent: true, opacity: 0.9 });
-    const edges = new THREE.LineSegments(edgeGeometry, edgeMaterial);
-    edges.name = 'preview-edges';
-    const next = new THREE.Group();
-    next.add(mesh, edges);
+    if (!isCurrent()) {
+      this.disposePreviewObject(next);
+      return false;
+    }
+    // Parsing completes before this swap, so a failed or stale frame leaves the
+    // last usable preview visible and its GPU resources intact.
     this.clearPreview();
     this.previewRoot.add(next);
     if (!this.previewHasFramed) {
@@ -215,6 +246,7 @@ export class SceneViewer {
       this.previewHasFramed = true;
     }
     this.onStatus(`${label} · unvalidated`, false);
+    return true;
   }
 
   markPreviewUnvalidated(): void {
@@ -230,11 +262,67 @@ export class SceneViewer {
     this.frame(this.modelRoot.children.length > 0 ? this.modelRoot : this.previewRoot);
   }
 
+  hasNode(nodeId: string): boolean {
+    return this.sceneNodes.has(nodeId);
+  }
+
+  isNodeVisible(nodeId: string): boolean {
+    return this.sceneNodes.get(nodeId)?.visible ?? false;
+  }
+
+  selectNode(nodeId: string | null): boolean {
+    this.clearSelection();
+    if (nodeId === null) return true;
+    const object = this.sceneNodes.get(nodeId);
+    if (!object) return false;
+    object.updateWorldMatrix(true, true);
+    const helper = new THREE.BoxHelper(object, new THREE.Color('#f1c86b'));
+    helper.name = 'product-selection';
+    helper.material.depthTest = false;
+    helper.material.transparent = true;
+    helper.material.opacity = 0.9;
+    helper.renderOrder = 20;
+    this.selectionHelper = helper;
+    this.selectedNodeId = nodeId;
+    this.scene.add(helper);
+    return true;
+  }
+
+  setNodeVisible(nodeId: string, visible: boolean): boolean {
+    const object = this.sceneNodes.get(nodeId);
+    if (!object) return false;
+    object.visible = visible;
+    if (visible) {
+      for (const [candidateId, candidate] of this.sceneNodes) {
+        if (nodeId.startsWith(`${candidateId}/`)) candidate.visible = true;
+      }
+    }
+    if (!visible && this.selectedNodeId !== null && nodeIsInIsolation(this.selectedNodeId, nodeId)) {
+      this.clearSelection();
+    }
+    return true;
+  }
+
+  isolateNode(nodeId: string): boolean {
+    if (!this.sceneNodes.has(nodeId)) return false;
+    for (const [candidateId, object] of this.sceneNodes) {
+      object.visible = nodeIsInIsolation(candidateId, nodeId);
+    }
+    this.selectNode(nodeId);
+    return true;
+  }
+
+  showAll(): void {
+    for (const object of this.sceneNodes.values()) object.visible = true;
+  }
+
   dispose(): void {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.renderer.setAnimationLoop(null);
     this.controls.dispose();
+    this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
+    this.renderer.domElement.removeEventListener('pointerup', this.handlePointerUp);
     this.clearModel();
     this.renderer.dispose();
     this.renderer.domElement.remove();
@@ -259,6 +347,8 @@ export class SceneViewer {
         object.matrixAutoUpdate = false;
         object.matrix.copy(placementMatrix(node.transform));
         object.visible = node.visible;
+        object.userData.sceneNodeId = node.node_id;
+        this.sceneNodes.set(node.node_id, object);
         parent.add(object);
         if (definition.kind !== 'assembly') object.add(await this.instantiateDefinition(definition));
         await build(object, node.node_id);
@@ -393,6 +483,7 @@ export class SceneViewer {
   }
 
   private clearModel(): void {
+    this.clearSelection();
     const disposedGeometries = new Set<THREE.BufferGeometry>();
     const disposedMaterials = new Set<THREE.Material>();
     const dispose = (root: THREE.Object3D): void => {
@@ -427,59 +518,70 @@ export class SceneViewer {
     this.edgeCache.clear();
     this.definitions.clear();
     this.appearances.clear();
+    this.sceneNodes.clear();
     this.currentManifest = null;
     this.currentFiles = null;
   }
 
+  private clearSelection(): void {
+    if (this.selectionHelper) {
+      this.scene.remove(this.selectionHelper);
+      this.selectionHelper.geometry.dispose();
+      this.selectionHelper.material.dispose();
+      this.selectionHelper = null;
+    }
+    this.selectedNodeId = null;
+  }
+
+  private readonly handlePointerDown = (event: PointerEvent): void => {
+    if (event.button === 0) this.pointerStart = { x: event.clientX, y: event.clientY };
+  };
+
+  private readonly handlePointerUp = (event: PointerEvent): void => {
+    const start = this.pointerStart;
+    this.pointerStart = null;
+    if (event.button !== 0 || !start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+    const bounds = this.renderer.domElement.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return;
+    const pointer = new THREE.Vector2(
+      ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+      -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
+    );
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(pointer, this.camera);
+    const hit = raycaster.intersectObject(this.modelRoot, true)[0]?.object;
+    let candidate: THREE.Object3D | null = hit ?? null;
+    while (candidate && typeof candidate.userData.sceneNodeId !== 'string') candidate = candidate.parent;
+    const nodeId = candidate?.userData.sceneNodeId;
+    if (typeof nodeId === 'string' && this.selectNode(nodeId)) this.onNodeSelected(nodeId);
+  };
+
   private clearPreview(): void {
     while (this.previewRoot.children.length) {
       const child = this.previewRoot.children[0];
-      child.traverse((object) => {
-        if (!(object instanceof THREE.Mesh || object instanceof THREE.LineSegments || object instanceof THREE.Points)) return;
-        object.geometry.dispose();
-        const materials = Array.isArray(object.material) ? object.material : [object.material];
-        for (const material of materials) material.dispose();
-      });
+      this.disposePreviewObject(child);
       this.previewRoot.remove(child);
     }
   }
-}
 
-type PreviewMeshDocument = {
-  operation: string;
-  vertices: number[];
-  triangles: number[];
-};
-
-function validatePreviewDocument(document: unknown): PreviewMeshDocument {
-  if (typeof document !== 'object' || document === null || Array.isArray(document)) {
-    throw new ScenePackageError('Preview frame must be an object');
+  private disposePreviewObject(root: THREE.Object3D): void {
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    root.traverse((object) => {
+      if (!(object instanceof THREE.Mesh || object instanceof THREE.LineSegments || object instanceof THREE.Points)) return;
+      if (!geometries.has(object.geometry)) {
+        object.geometry.dispose();
+        geometries.add(object.geometry);
+      }
+      const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of objectMaterials) {
+        if (!materials.has(material)) {
+          material.dispose();
+          materials.add(material);
+        }
+      }
+    });
   }
-  const payload = document as Record<string, unknown>;
-  if (payload.schema_version !== 1) throw new ScenePackageError('Unsupported preview schema');
-  const operation = payload.operation;
-  if (typeof operation !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(operation)) {
-    throw new ScenePackageError('Preview operation is invalid');
-  }
-  const vertices = payload.vertices;
-  const triangles = payload.triangles;
-  if (!Array.isArray(vertices) || !Array.isArray(triangles)) {
-    throw new ScenePackageError('Preview mesh must contain vertices and triangles');
-  }
-  if (vertices.length === 0 || vertices.length % 3 !== 0 || vertices.length > MAX_PREVIEW_COORDINATES) {
-    throw new ScenePackageError('Preview vertices are invalid');
-  }
-  if (triangles.length === 0 || triangles.length % 3 !== 0 || triangles.length > MAX_PREVIEW_INDICES) {
-    throw new ScenePackageError('Preview triangles are invalid');
-  }
-  for (const value of vertices) {
-    if (typeof value !== 'number' || !Number.isFinite(value)) throw new ScenePackageError('Preview vertices must be finite numbers');
-  }
-  const vertexCount = vertices.length / 3;
-  for (const value of triangles) {
-    if (!Number.isSafeInteger(value) || value < 0 || value >= vertexCount) throw new ScenePackageError('Preview triangle index is invalid');
-  }
-  return { operation, vertices, triangles };
 }
 
 function bytesFor(files: PackageFiles, uri: string): Uint8Array {

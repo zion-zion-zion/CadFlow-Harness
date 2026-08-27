@@ -87,8 +87,8 @@ mesh.write_stl("out/garment.stl")
 mesh.write_json("out/garment.json")
 ```
 
-For a complete four-view renderer, use
-`examples/cadflow_static_flexible_garment.py` as the project-local template.
+For a complete four-view renderer, use the patterns in this skill as the
+project-local template. Repository examples are not available to the Agent.
 
 ## Failure handling
 

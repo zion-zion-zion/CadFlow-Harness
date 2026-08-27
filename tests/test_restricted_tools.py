@@ -14,7 +14,7 @@ def test_validator_prepares_and_executes_without_reference_gates(tmp_path: Path)
     validator = AgentModelValidator(project_dir=tmp_path, executor=StubExecutor())
 
     scaffold = validator.begin_run()
-    assert scaffold.model_path == tmp_path / "model.py"
+    assert scaffold.model_path == tmp_path / "code" / "model.py"
     assert validator.validate_model() == "executed"
     assert [record.tool_name for record in validator.tool_use_records] == [
         "prepare_model_source",

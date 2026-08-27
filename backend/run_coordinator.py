@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import threading
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -15,6 +16,7 @@ from .agent import (
     DEEPAGENTS_IMPLEMENTATION_VERSION,
     ReferenceGroundedAgent,
 )
+from .agent_logging import ConversationLog
 from .cad_executor import CancellationToken, redact_credentials
 from .events import ProgressEventStore, ProgressUpdate
 from .harnesses import (
@@ -22,6 +24,7 @@ from .harnesses import (
     AgentRunAdapter,
     AgentRunAdapterRegistry,
 )
+from .live_preview import LivePreviewScheduler, LivePreviewStatus
 from .projects import (
     Project,
     ProjectState,
@@ -41,11 +44,22 @@ class RunConflictError(ProjectStateError):
 class _ActiveRun:
     project_id: str
     prompt: str
+    turn_id: str
+    request_id: str
+    conversation_log: ConversationLog
     cancellation_token: CancellationToken
     finished: threading.Event
     adapter: AgentRunAdapter
     thread: threading.Thread | None = None
     stopping: bool = False
+
+
+@dataclass(frozen=True)
+class MessageSubmission:
+    project: Project
+    turn_id: str
+    request_id: str
+    duplicate: bool = False
 
 
 class AgentRunCoordinator:
@@ -61,10 +75,14 @@ class AgentRunCoordinator:
         adapter_registry: AgentRunAdapterRegistry | None = None,
         settings_factory: Callable[[], Any] | None = None,
         agent_factory: Callable[..., Any] | None = None,
+        preview_scheduler: LivePreviewScheduler | None = None,
     ) -> None:
         self.store = store
         self.repo_root = Path(repo_root).expanduser().resolve()
         self.events = event_store or ProgressEventStore(store.root)
+        self.preview_scheduler = preview_scheduler or LivePreviewScheduler(
+            store, on_status=self._record_preview_status
+        )
         self.run_service = run_service or AgentRunService(
             store=store,
             repo_root=self.repo_root,
@@ -77,11 +95,6 @@ class AgentRunCoordinator:
                     AgentHarness.DEEPAGENTS,
                     self.run_service,
                     DEEPAGENTS_IMPLEMENTATION_VERSION,
-                ),
-                AgentRunAdapter(
-                    AgentHarness.PI,
-                    _UnavailablePiService(),
-                    "0.84.2",
                 ),
             )
         )
@@ -107,6 +120,24 @@ class AgentRunCoordinator:
 
         recovered = self.store.recover_interrupted_runs()
         for project in recovered:
+            conversation = self.store.conversation_log(project.project_id)
+            running_turn = next(
+                (
+                    turn
+                    for turn in reversed(conversation.turns())
+                    if turn["status"] == "running"
+                ),
+                None,
+            )
+            if running_turn is not None:
+                self.store.conversation_log(
+                    project.project_id,
+                    turn_id=str(running_turn["turn_id"]),
+                ).finish(
+                    status="failed",
+                    failure_reason=project.failure_reason,
+                    assistant_message=project.failure_reason,
+                )
             self.events.append(
                 project.project_id,
                 stage="failed",
@@ -121,16 +152,56 @@ class AgentRunCoordinator:
         prompt: str,
         harness: AgentHarness | str = AgentHarness.DEEPAGENTS,
     ) -> Project:
+        return self.start_message(
+            project_id,
+            prompt,
+            request_id=uuid.uuid4().hex,
+            harness=harness,
+        ).project
+
+    def start_message(
+        self,
+        project_id: str,
+        prompt: str,
+        *,
+        request_id: str,
+        retry_of: str | None = None,
+        harness: AgentHarness | str = AgentHarness.DEEPAGENTS,
+    ) -> MessageSubmission:
         adapter = self.adapters.get(harness)
         adapter.require_available()
         with self._lock:
+            conversation = self.store.conversation_log(project_id)
+            existing = conversation.turn_for_request(request_id)
+            if existing is not None:
+                return MessageSubmission(
+                    project=self.store.get_project(project_id),
+                    turn_id=str(existing["turn_id"]),
+                    request_id=request_id,
+                    duplicate=True,
+                )
             if self._active is not None:
                 raise RunConflictError("another Agent Run is already active")
+            if retry_of is not None and conversation.turn(retry_of) is None:
+                raise ProjectStateError("retry_of does not identify a Project turn")
             project = self.store.submit_prompt(project_id, prompt, adapter.harness)
+            turn_id = uuid.uuid4().hex
+            conversation_log = self.store.conversation_log(
+                project.project_id,
+                turn_id=turn_id,
+                request_id=request_id,
+                user_message=prompt,
+                retry_of=retry_of,
+                harness=adapter.harness.value,
+                implementation_version=adapter.implementation_version,
+            )
             token = CancellationToken()
             active = _ActiveRun(
                 project_id=project.project_id,
                 prompt=project.prompt or prompt,
+                turn_id=turn_id,
+                request_id=request_id,
+                conversation_log=conversation_log,
                 cancellation_token=token,
                 finished=threading.Event(),
                 adapter=adapter,
@@ -142,6 +213,7 @@ class AgentRunCoordinator:
                 tool="service",
                 result=f"{adapter.label} Agent Run accepted",
             )
+            self._preview_call("activate", project.project_id)
             thread = threading.Thread(
                 target=self._run_worker,
                 args=(active,),
@@ -150,7 +222,22 @@ class AgentRunCoordinator:
             )
             active.thread = thread
             thread.start()
-            return project
+            return MessageSubmission(
+                project=project,
+                turn_id=turn_id,
+                request_id=request_id,
+            )
+
+    def wait_for_turn(
+        self,
+        turn_id: str,
+        timeout_seconds: float | None = None,
+    ) -> bool:
+        with self._lock:
+            active = self._active
+            if active is None or active.turn_id != turn_id:
+                return True
+        return active.finished.wait(timeout_seconds)
 
     def stop(self, project_id: str) -> Project:
         with self._lock:
@@ -169,6 +256,7 @@ class AgentRunCoordinator:
                     result="Stop requested by user",
                 )
                 active.cancellation_token.cancel()
+                self._preview_call("deactivate", project_id)
         if not active.finished.wait(RUN_STOP_WAIT_SECONDS):
             force_stop = getattr(active.adapter.service, "force_stop", None)
             if callable(force_stop):
@@ -192,6 +280,7 @@ class AgentRunCoordinator:
                         result="Deletion requested; cancelling Agent Run",
                     )
                     active.cancellation_token.cancel()
+                    self._preview_call("deactivate", project_id)
             elif project.state == ProjectState.RUNNING:
                 raise ProjectStateError("Running Project has no active Agent Run")
 
@@ -228,6 +317,9 @@ class AgentRunCoordinator:
                 failure_reason=_safe_reason(exc),
             )
         try:
+            self._preview_call(
+                "deactivate", active.project_id, validated=outcome.validated
+            )
             self._finish_project(active, outcome)
         finally:
             active.finished.set()
@@ -254,6 +346,10 @@ class AgentRunCoordinator:
             kwargs["prompt_submitted"] = True
         if accepts_kwargs or "harness" in parameters:
             kwargs["harness"] = active.adapter.harness
+        if accepts_kwargs or "conversation_log" in parameters:
+            kwargs["conversation_log"] = active.conversation_log
+        if accepts_kwargs or "turn_id" in parameters:
+            kwargs["turn_id"] = active.turn_id
         result = run(active.project_id, active.prompt, **kwargs)
         if not isinstance(result, AgentRunOutcome):
             raise AgentRunError("Agent Run service returned an invalid outcome")
@@ -277,6 +373,36 @@ class AgentRunCoordinator:
             )
 
         return record
+
+    def _record_preview_status(
+        self, project_id: str, status: LivePreviewStatus
+    ) -> None:
+        result = status.error or {
+            "waiting": "Waiting for source changes",
+            "stale": "Source changed",
+            "building": "Building live preview",
+            "current": "Live preview is current",
+            "paused": "Live preview paused",
+            "failed": "Live preview failed",
+        }.get(status.state, status.state)
+        preview_ready = status.state == "current" and status.revision > 0
+        self.events.append(
+            project_id,
+            stage=f"preview_{status.state}",
+            tool="preview",
+            result=result,
+            preview_attempt=1 if preview_ready else None,
+            preview_revision=status.revision if preview_ready else None,
+            preview_operation="result" if preview_ready else None,
+        )
+
+    def _preview_call(self, method_name: str, *args: Any, **kwargs: Any) -> None:
+        try:
+            method = getattr(self.preview_scheduler, method_name)
+            method(*args, **kwargs)
+        except Exception:
+            # Live preview is user-facing observability and cannot affect a run.
+            return
 
     def _finish_project(self, active: _ActiveRun, outcome: AgentRunOutcome) -> None:
         project = self.store.get_project(active.project_id)
@@ -330,6 +456,28 @@ class AgentRunCoordinator:
                 tool="service",
                 result=project.failure_reason or "Agent Run failed",
             )
+        succeeded = project.state == ProjectState.SUCCEEDED
+        assistant_message = active.conversation_log.latest_model_response_text()
+        if not assistant_message:
+            if succeeded:
+                version = self.store.current_artifact_version(active.project_id)
+                assistant_message = (
+                    f"CAD model updated successfully. Artifact v{version:04d} is ready."
+                    if version is not None
+                    else "CAD model updated successfully."
+                )
+            else:
+                assistant_message = project.failure_reason or "The CAD turn failed."
+        active.conversation_log.finish(
+            status="succeeded" if succeeded else project.state.value.lower(),
+            failure_reason=None if succeeded else project.failure_reason,
+            assistant_message=assistant_message,
+            artifact_version=(
+                self.store.current_artifact_version(active.project_id)
+                if succeeded
+                else None
+            ),
+        )
 
 
 def _safe_reason(error: Exception) -> str:
@@ -337,12 +485,9 @@ def _safe_reason(error: Exception) -> str:
     return redact_credentials(first)[:500] or type(error).__name__
 
 
-class _UnavailablePiService:
-    available = False
-    unavailable_reason = "Pi worker is unavailable"
-
-    def run(self, *_args: object, **_kwargs: object) -> AgentRunOutcome:
-        raise AgentRunError(self.unavailable_reason)
-
-
-__all__ = ["AgentRunCoordinator", "RUN_STOP_WAIT_SECONDS", "RunConflictError"]
+__all__ = [
+    "AgentRunCoordinator",
+    "MessageSubmission",
+    "RUN_STOP_WAIT_SECONDS",
+    "RunConflictError",
+]

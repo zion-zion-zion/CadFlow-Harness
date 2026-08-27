@@ -61,7 +61,9 @@ Prompt、可观察的工具活动、源码版本、执行结果、几何测量�
 
 ### 🔌 让智能模型可以替换
 
-Deep Agents 与 Pi SDK Sidecar 共享同一套 Project 工作区和 Artifact 契约。模型、Agent Harness 与 CAD Skills 可以持续演进，而执行、验证、运行记录和可视化能力保持复用——这正是 CadFlowAgent 与单一 Agent Demo 的本质区别。
+Deep Agents Harness 与其余运行时共享稳定的 Project 工作区和 Artifact 契约。模型、
+Agent Harness 与 CAD Skills 可以持续演进，而执行、验证、运行记录和可视化能力保持
+复用——这正是 CadFlowAgent 与单一 Agent Demo 的本质区别。
 
 <a id="项目方向"></a>
 
@@ -91,7 +93,7 @@ flowchart TB
 
     subgraph L2["2 · Agent 层"]
         C["Run Coordinator"]
-        H["Agent Harness<br/>Deep Agents | Pi"]
+        H["Agent Harness<br/>Deep Agents"]
         K["CAD Skills<br/>建模 · 检查 · 验证"]
         C --> H
         K --> H
@@ -135,31 +137,28 @@ flowchart TB
 
 ### 环境要求
 
-- Linux x86_64
-- Python <code>3.12</code>
-- [<code>uv</code>](https://docs.astral.sh/uv/)
-- Node.js <code>22.19</code> 或更高版本，以及 npm
-- <code>/usr/bin/bwrap</code> 路径下可用的 bubblewrap
+- Linux x86_64（glibc 2.31 或更高版本）+ Python 3.12，或 macOS 26
+  arm64 + Python 3.13
+- 用于安装缺失工具的 `curl` 或 `wget`
 - OpenAI 兼容的模型端点和 API Key
 
-仓库内置 <code>vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl</code>，SHA256 为：
+仓库为两个受支持的平台分别内置了 CadFlow wheel。`uv` 会通过同一份
+`pyproject.toml` 和 `uv.lock` 自动选择匹配的文件：
 
-~~~text
-d48acda48f29f5c022695c377f7e0f6089c188923091fd45c3fd2c0e3234886a
-~~~
+- Linux：`cadflow-0.1.0-cp312-cp312-linux_x86_64.whl`（SHA256
+  `753c513fee879258a561efa9d3edf7e73ebe904ed160264caf5851c20b99854f`）
+- macOS：`cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl`（SHA256
+  `738bcccab01a8152831a871f3103790feb4d975c1e98357b887fc4ebe56391fa`）
 
 ### 安装
 
 ~~~bash
-git clone https://github.com/zion-zion-zion/CadFlowAgent.git
-cd CadFlowAgent
-
-cp .env.example .env
-uv sync --group dev
-npm --prefix viewer ci
-npm --prefix pi-sidecar ci
-npm --prefix pi-sidecar run build
+./setup.sh
 ~~~
+
+安装脚本会检测当前平台，在缺失时安装 `uv` 和兼容的 Node.js，按锁文件同步 Python
+与 Viewer 依赖，并在不覆盖已有文件的前提下从示例创建 `.env`。使用
+`./setup.sh --check` 可以只检查现有环境，不进行任何修改。
 
 在 <code>.env</code> 中配置模型服务：
 
@@ -175,7 +174,12 @@ OPENAI_API_KEY=<api-key>
 ./run.sh
 ~~~
 
-浏览器打开 [http://localhost:5173](http://localhost:5173)，即可创建 Project、选择可用的 Agent Harness、提交建模任务、查看实时进度并检查最终 3D 结果。后端 API 位于 <code>http://localhost:8000</code>。
+`run.sh` 会自动检测操作系统和架构，并选择对应的 Python 解释器。
+
+浏览器打开 [http://localhost:5678](http://localhost:5678)，即可创建 Project、选择可用的
+Agent Harness、提交建模任务、查看实时进度并检查最终 3D 结果。后端 API 位于
+<code>http://localhost:8765</code>。如需让其他机器访问本机服务，可设置
+`TEXT_TO_CAD_HOST` 和 `TEXT_TO_CAD_FRONTEND_HOST`；该服务仍只适合可信的本机演示环境。
 
 ### 运行时配置
 
@@ -185,14 +189,15 @@ OPENAI_API_KEY=<api-key>
 | <code>OPENAI_MODEL_ID</code> | — | Agent Harness 使用的模型标识符。 |
 | <code>OPENAI_API_KEY</code> | — | 模型服务凭证，严禁提交到仓库。 |
 | <code>TEXT_TO_CAD_HOST</code> | <code>0.0.0.0</code> | 后端监听地址。 |
-| <code>TEXT_TO_CAD_PORT</code> | <code>8000</code> | 后端端口。 |
+| <code>TEXT_TO_CAD_PORT</code> | <code>8765</code> | 后端端口。 |
 | <code>TEXT_TO_CAD_FRONTEND_HOST</code> | <code>0.0.0.0</code> | Viewer 监听地址。 |
-| <code>TEXT_TO_CAD_FRONTEND_PORT</code> | <code>5173</code> | Viewer 端口。 |
+| <code>TEXT_TO_CAD_FRONTEND_PORT</code> | <code>5678</code> | Viewer 端口。 |
 | <code>TEXT_TO_CAD_PROJECTS_ROOT</code> | <code>output/projects</code> | Project 工作区的持久化根目录。 |
 
 ## 📐 当前建模契约
 
-每个 Project 都从一个稳定入口开始：
+当前应用仍采用更窄的输出契约：每个 Project 先创建一个不会通过验证的
+`code/model.py` 初始骨架，并保留以下稳定入口：
 
 ~~~python
 import cadflow as cad
@@ -203,7 +208,12 @@ def build_model(model: cad.Model) -> cad.Shape:
     raise NotImplementedError
 ~~~
 
-当前应用只接受一个有效的 <code>cad.Shape</code>，其中必须恰好包含一个 Solid 且体积为正。验证通过后，后端生成供浏览器 Viewer 使用的 <code>artifacts/model.scene.zip</code>。Skills 和独立示例覆盖了更广泛的检查与导出工作流，但不会扩大当前应用边界。
+Agent 拥有 Project 工作区，可以创建本地模块，也可以使用环境中已安装的
+CadFlow/Python API。后端不会根据 API 来源直接拒绝代码，但最终返回值仍必须是
+一个有效的 `cad.Shape`，包含一个 solid 且体积为正。后端验证 Shape 后，内部生成
+`artifacts/model.scene.zip`，STEP 只用于 Scene 桥接，不作为项目产物。Deep Agent
+运行可以只读访问 repository Skills，但 repository examples 不会暴露给 Agent；其中
+不同的输入或输出类型不会改变当前 Project 契约。
 
 <a id="cad-skill-层"></a>
 
@@ -216,7 +226,8 @@ Skills 提供任务专用的建模知识和精确 API 参考，避免每次 Agen
 | [<code>cadflow-model-part</code>](skills/cadflow-model-part/SKILL.md) | 参数化刚性零件、Sketch、特征、布尔操作、圆角和单零件交付。 |
 | [<code>cadflow-flexible-model</code>](skills/cadflow-flexible-model/SKILL.md) | 静态布料、皮革、薄膜、服装及其他柔性几何体。 |
 | [<code>cadflow-step-brep</code>](skills/cadflow-step-brep/SKILL.md) | STEP/BREP 检查、特征推断、重建和基于证据的对比。 |
-| [<code>cadflow-validate-export</code>](skills/cadflow-validate-export/SKILL.md) | 几何验证、重放、渲染、导出检查和量化报告。 |
+| [<code>cadflow-model-assembly</code>](skills/cadflow-model-assembly/SKILL.md) | 多部件产品与装配结构、定位和验收。 |
+| [<code>cadflow-rotary-transmission</code>](skills/cadflow-rotary-transmission/SKILL.md) | 旋转关节、齿轮、轴和传动机构。 |
 
 ## 🗂️ 仓库结构
 
@@ -224,7 +235,6 @@ Skills 提供任务专用的建模知识和精确 API 参考，避免每次 Agen
 CadFlowAgent/
 ├── backend/          Agent 运行时、Project API、执行、事件与验证
 ├── viewer/           浏览器工作区与 Three.js Scene Viewer
-├── pi-sidecar/       Pi Agent Harness 的常驻 Worker
 ├── skills/           渐进式 CadFlow 工作流与 API 参考
 ├── examples/         零件、柔性模型、装配体与重建数据
 ├── tests/            运行时、边界、修复循环与集成测试
@@ -232,6 +242,20 @@ CadFlowAgent/
 ~~~
 
 可以从[示例目录](examples/README.md)探索机械零件、复杂装配体、柔性几何和重建轨迹种子。
+
+## ✅ 检查
+
+~~~bash
+# Linux
+uv run --python 3.12 pytest
+
+# macOS
+uv run --python 3.13 pytest
+
+cd viewer && npm run build
+~~~
+
+真实模型服务测试通过 `-m live_agent` 显式启用。
 
 ## 📄 许可证
 

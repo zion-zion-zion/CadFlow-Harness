@@ -1,4 +1,4 @@
-"""Harness-neutral selection and availability for one-shot Agent Runs."""
+"""Harness-neutral selection and availability for conversation turns."""
 
 from __future__ import annotations
 
@@ -11,12 +11,10 @@ class AgentHarness(str, Enum):
     """Stable machine identifiers accepted by the public Run API."""
 
     DEEPAGENTS = "deepagents"
-    PI = "pi"
 
 
 HARNESS_LABELS = {
     AgentHarness.DEEPAGENTS: "Deep Agents",
-    AgentHarness.PI: "Pi",
 }
 
 

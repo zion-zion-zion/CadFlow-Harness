@@ -10,6 +10,8 @@ from .cad_executor import (
     redact_credentials,
 )
 from .contracts import ToolUseRecord
+from .agent_logging import CONVERSATION_LOG_NAME, ConversationLog
+from .cad_review import ReviewFinding, ReviewResult, review_cad
 from .harnesses import (
     AgentHarness,
     AgentRunAdapter,
@@ -26,29 +28,45 @@ from .events import (
     ProgressUpdate,
 )
 from .agent import (
+    AGENT_RUN_TIMEOUT_ENV_VAR,
     AGENT_RUN_TIMEOUT_SECONDS,
+    REVIEW_MODEL_ENV_VAR,
     AgentConfigurationError,
     AgentRunCancelled,
     AgentRunError,
     AgentRunOutcome,
     AgentRunService,
     AgentSettings,
+    DEFAULT_AGENT_RUN_TIMEOUT_SECONDS,
     MAX_AGENT_RUN_SECONDS,
     MAX_PROVIDER_RETRIES,
     ReferenceGroundedAgent,
     build_chat_model,
     build_deep_agent,
     create_agent_tools,
+    resolve_agent_run_timeout_seconds,
 )
 from .model_source import (
     ARTIFACT_DIRECTORY_NAME,
+    CODE_DIRECTORY_NAME,
     MODEL_SOURCE_NAME,
     SCENE_ARTIFACT_NAME,
     ModelSourceScaffold,
     create_model_source,
+    migrate_legacy_sources,
+    model_source_path,
+    project_code_directory,
+)
+from .live_preview import (
+    LivePreviewExecutor,
+    LivePreviewResult,
+    LivePreviewScheduler,
+    LivePreviewStatus,
+    LivePreviewStore,
 )
 from .restricted_tools import AgentModelValidator, RestrictedAgentTools
 from .projects import (
+    CURRENT_ARTIFACT_NAME,
     MAX_PROMPT_CHARS,
     Project,
     ProjectError,
@@ -59,16 +77,9 @@ from .projects import (
     PromptValidationError,
     RESTART_RECOVERY_REASON,
 )
-from .pi_sidecar import (
-    PI_ABORT_GRACE_SECONDS,
-    PI_IMPLEMENTATION_VERSION,
-    PI_PROTOCOL_VERSION,
-    PiAgentRunService,
-    PiProtocolError,
-    PiWorkerSupervisor,
-)
 from .run_coordinator import (
     AgentRunCoordinator,
+    MessageSubmission,
     RUN_STOP_WAIT_SECONDS,
     RunConflictError,
 )
@@ -76,7 +87,10 @@ from .scene_validation import SceneParseResult, validate_scene_artifact
 
 __all__ = [
     "ARTIFACT_DIRECTORY_NAME",
+    "CODE_DIRECTORY_NAME",
+    "AGENT_RUN_TIMEOUT_ENV_VAR",
     "AGENT_RUN_TIMEOUT_SECONDS",
+    "REVIEW_MODEL_ENV_VAR",
     "AgentConfigurationError",
     "AgentHarness",
     "AgentRunAdapter",
@@ -90,7 +104,11 @@ __all__ = [
     "CAD_EXECUTION_TIMEOUT_SECONDS",
     "CADExecutor",
     "CancellationToken",
+    "CONVERSATION_LOG_NAME",
+    "CURRENT_ARTIFACT_NAME",
+    "ConversationLog",
     "DEFAULT_OUTPUT_BYTES",
+    "DEFAULT_AGENT_RUN_TIMEOUT_SECONDS",
     "ExecutionResult",
     "EVENTS_NAME",
     "MODEL_SOURCE_NAME",
@@ -98,7 +116,13 @@ __all__ = [
     "MAX_PROMPT_CHARS",
     "MAX_AGENT_RUN_SECONDS",
     "MAX_PROVIDER_RETRIES",
+    "MessageSubmission",
     "MAX_EVENT_RESULT_CHARS",
+    "LivePreviewExecutor",
+    "LivePreviewResult",
+    "LivePreviewScheduler",
+    "LivePreviewStatus",
+    "LivePreviewStore",
     "HARNESS_LABELS",
     "HarnessUnavailableError",
     "Project",
@@ -113,13 +137,9 @@ __all__ = [
     "ProgressEventStore",
     "ProgressUpdate",
     "RESTART_RECOVERY_REASON",
-    "PI_ABORT_GRACE_SECONDS",
-    "PI_IMPLEMENTATION_VERSION",
-    "PI_PROTOCOL_VERSION",
-    "PiAgentRunService",
-    "PiProtocolError",
-    "PiWorkerSupervisor",
     "ReferenceGroundedAgent",
+    "ReviewFinding",
+    "ReviewResult",
     "RestrictedAgentTools",
     "SCENE_ARTIFACT_NAME",
     "SceneParseResult",
@@ -131,7 +151,12 @@ __all__ = [
     "build_chat_model",
     "build_deep_agent",
     "create_model_source",
+    "migrate_legacy_sources",
+    "model_source_path",
+    "project_code_directory",
     "create_agent_tools",
     "redact_credentials",
+    "resolve_agent_run_timeout_seconds",
+    "review_cad",
     "validate_scene_artifact",
 ]

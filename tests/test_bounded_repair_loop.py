@@ -10,6 +10,7 @@ from backend.agent import (
     AgentRunOutcome,
     AgentRunService,
     AgentSettings,
+    ReasoningEffort,
     build_chat_model,
     create_agent_tools,
 )
@@ -90,7 +91,13 @@ def test_validate_model_allows_retries_beyond_three_attempts(
         clock=lambda: 0.0,
     )
 
-    results = [tools["validate_model"].invoke({}) for _ in range(5)]
+    results = []
+    for revision in range(5):
+        (tmp_path / "code" / "model.py").write_text(
+            f"REVISION = {revision}\n",
+            encoding="utf-8",
+        )
+        results.append(tools["validate_model"].invoke({}))
 
     assert executor.calls == 5
     assert [item["error"] for item in results] == [
@@ -102,6 +109,68 @@ def test_validate_model_allows_retries_beyond_three_attempts(
     ]
     assert results[-1]["final_shape_count"] == 1
     assert results[-1]["scene_parse_result"]["valid"] is True
+    assert results[-1]["run_time_remaining_seconds"] == 600.0
+
+
+def test_validate_model_stops_an_unchanged_source_retry(tmp_path: Path) -> None:
+    class CountingExecutor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, *_args: object, **_kwargs: object) -> ExecutionResult:
+            self.calls += 1
+            return _execution_result(error="geometry failed")
+
+    executor = CountingExecutor()
+    _restricted, tools = _validation_tools(tmp_path, executor)
+
+    first = tools["validate_model"].invoke({})
+    assert first["status"] == "failed"
+    with pytest.raises(AgentRunError, match="source has not changed"):
+        tools["validate_model"].invoke({})
+    assert executor.calls == 1
+
+
+def test_validate_model_accepts_a_changed_helper_source(tmp_path: Path) -> None:
+    class CountingExecutor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, *_args: object, **_kwargs: object) -> ExecutionResult:
+            self.calls += 1
+            return _execution_result(error="geometry failed")
+
+    executor = CountingExecutor()
+    _restricted, tools = _validation_tools(tmp_path, executor)
+
+    tools["validate_model"].invoke({})
+    (tmp_path / "code" / "gears.py").write_text("MODULE = 1\n", encoding="utf-8")
+    tools["validate_model"].invoke({})
+
+    assert executor.calls == 2
+
+
+def test_validate_model_does_not_request_preview_frames(
+    tmp_path: Path,
+) -> None:
+    class RecordingExecutor:
+        def execute(self, _project_dir: Path, **kwargs: object) -> ExecutionResult:
+            assert "preview_callback" not in kwargs
+            return _execution_result(
+                status="succeeded",
+                error=None,
+                volume=12.5,
+                scene_valid=True,
+            )
+
+    _restricted, tools = _validation_tools(
+        tmp_path,
+        RecordingExecutor(),
+    )
+
+    result = tools["validate_model"].invoke({})
+
+    assert result["status"] == "succeeded"
 
 
 def test_validate_model_refuses_to_start_after_run_deadline(tmp_path: Path) -> None:
@@ -118,7 +187,7 @@ def test_validate_model_refuses_to_start_after_run_deadline(tmp_path: Path) -> N
     )
     now[0] = 10.001
 
-    with pytest.raises(AgentRunError, match="ten-minute wall-clock limit"):
+    with pytest.raises(AgentRunError, match="configured 1200-second wall-clock limit"):
         tools["validate_model"].invoke({})
 
 
@@ -126,13 +195,18 @@ def test_reference_agent_adapter_turns_boundary_exception_into_diagnosis(
     tmp_path: Path,
 ) -> None:
     class RaisingExecutor:
+        def __init__(self) -> None:
+            self.calls = 0
+
         def execute(self, *_args: object, **_kwargs: object) -> object:
+            self.calls += 1
             raise RuntimeError("CAD runner failed\nTraceback: hidden")
 
     records: list[ExecutionResult] = []
+    executor = RaisingExecutor()
     _restricted, tools = _validation_tools(
         tmp_path,
-        RaisingExecutor(),
+        executor,
         on_execution=records.append,
         on_execution_error=records.append,
         run_deadline=600.0,
@@ -140,10 +214,13 @@ def test_reference_agent_adapter_turns_boundary_exception_into_diagnosis(
     )
 
     result = tools["validate_model"].invoke({})
+    retry = tools["validate_model"].invoke({})
 
     assert result["status"] == "failed"
     assert result["error"] == "CAD runner failed"
-    assert len(records) == 1
+    assert retry["status"] == "failed"
+    assert executor.calls == 2
+    assert len(records) == 2
     assert records[0].stderr == ""
 
 
@@ -212,22 +289,69 @@ def test_agent_run_service_persists_three_attempts_and_removes_partial_output(
     assert not (tmp_path / project.project_id / "artifacts").exists() or not any(
         (tmp_path / project.project_id / "artifacts").iterdir()
     )
-    agent_log = tmp_path / project.project_id / "agent-run.jsonl"
+    agent_log = tmp_path / project.project_id / "conversation.jsonl"
     assert agent_log.is_file()
     records = [
         json.loads(line)
         for line in agent_log.read_text(encoding="utf-8").splitlines()
     ]
-    assert records[-1]["status"] == "failed"
+    assert records[-1]["payload"]["status"] == "failed"
 
 
-def test_chat_model_configures_only_two_provider_retries() -> None:
+@pytest.mark.parametrize(
+    ("reasoning_effort", "use_responses_api"),
+    [
+        (None, True),
+        ("none", False),
+        ("low", True),
+        ("medium", True),
+        ("high", True),
+        ("max", True),
+    ],
+)
+def test_chat_model_selects_api_for_reasoning_effort(
+    reasoning_effort: ReasoningEffort | None,
+    use_responses_api: bool,
+) -> None:
     model = build_chat_model(
         AgentSettings(
             model_id="cad-model",
             api_key="test-key",
             base_url="https://provider.invalid/v1",
+            reasoning_effort=reasoning_effort,
         )
     )
 
     assert model.max_retries == 2
+    assert model.use_responses_api is use_responses_api
+    if use_responses_api:
+        assert model.reasoning == (
+            {"effort": reasoning_effort} if reasoning_effort is not None else None
+        )
+        assert model.reasoning_effort is None
+    else:
+        assert model.reasoning is None
+        assert model.reasoning_effort == reasoning_effort
+
+
+def test_chat_model_sends_reasoning_summary_only_to_responses() -> None:
+    responses_model = build_chat_model(
+        AgentSettings(
+            model_id="cad-model",
+            api_key="test-key",
+            reasoning_effort="high",
+            reasoning_summary="auto",
+        )
+    )
+    chat_model = build_chat_model(
+        AgentSettings(
+            model_id="cad-model",
+            api_key="test-key",
+            reasoning_effort="none",
+            reasoning_summary="auto",
+        )
+    )
+
+    assert responses_model.reasoning == {"effort": "high", "summary": "auto"}
+    assert chat_model.reasoning is None
+    assert chat_model.reasoning_effort == "none"

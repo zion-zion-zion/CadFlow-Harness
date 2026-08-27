@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any, Callable
 
 from .contracts import ToolUseRecord
-from .model_source import ModelSourceScaffold, create_model_source
+from .model_source import (
+    ModelSourceScaffold,
+    create_model_source,
+    model_source_path,
+    project_code_directory,
+)
 
 
 class AgentModelValidator:
@@ -31,9 +37,43 @@ class AgentModelValidator:
     def tool_use_records(self) -> tuple[ToolUseRecord, ...]:
         return tuple(self._records)
 
+    @property
+    def project_dir(self) -> Path:
+        return self._project_dir
+
+    @property
+    def code_dir(self) -> Path:
+        """Return the Agent-owned Python source directory."""
+
+        return project_code_directory(self._project_dir)
+
+    @property
+    def model_path(self) -> Path:
+        """Return the canonical Model Source path inside ``code/``."""
+
+        return model_source_path(self._project_dir)
+
+    def source_revision(self) -> str:
+        """Return a deterministic revision for every Python source in ``code/``."""
+
+        digest = hashlib.sha256()
+        for source_path in sorted(self.code_dir.rglob("*.py")):
+            relative_path = source_path.relative_to(self.code_dir).as_posix().encode()
+            contents = source_path.read_bytes()
+            digest.update(len(relative_path).to_bytes(8, "big"))
+            digest.update(relative_path)
+            digest.update(len(contents).to_bytes(8, "big"))
+            digest.update(contents)
+        return digest.hexdigest()
+
+    def record_tool_use(self, tool_name: str, target: str) -> None:
+        """Record a host-side CAD tool invocation for the run audit."""
+
+        self._record(tool_name, target)
+
     def begin_run(self) -> ModelSourceScaffold:
         scaffold = create_model_source(self._project_dir, overwrite=False)
-        self._record("prepare_model_source", "model.py")
+        self._record("prepare_model_source", "code/model.py")
         return scaffold
 
     def validate_model(
@@ -42,7 +82,6 @@ class AgentModelValidator:
         cancellation_token: Any | None = None,
         timeout_seconds: float | None = None,
         attempt: int | None = None,
-        preview_callback: Callable[[Any], None] | None = None,
     ) -> Any:
         executor = self._executor
         if executor is None:
@@ -50,14 +89,12 @@ class AgentModelValidator:
 
             executor = CADExecutor()
             self._executor = executor
-        self._record("validate_model", "model.py")
+        self._record("validate_model", "code/model.py")
         kwargs: dict[str, Any] = {"cancellation_token": cancellation_token}
         if timeout_seconds is not None:
             kwargs["timeout_seconds"] = timeout_seconds
         if attempt is not None:
             kwargs["attempt"] = attempt
-        if preview_callback is not None:
-            kwargs["preview_callback"] = preview_callback
         return executor.execute(self._project_dir, **kwargs)
 
     def _record(self, tool_name: str, target: str) -> None:

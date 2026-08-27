@@ -20,12 +20,14 @@ from .model_source import (
     ARTIFACT_DIRECTORY_NAME,
     MODEL_SOURCE_NAME,
     SCENE_ARTIFACT_NAME,
+    create_model_source,
+    project_code_directory,
 )
-from .previews import (
-    PreviewError,
-    PreviewFrame,
-    prepare_preview_attempt,
-    read_preview_frame,
+from .product_artifact import (
+    PRODUCT_ARTIFACT_MANIFEST_NAME,
+    ProductArtifact,
+    ProductArtifactError,
+    load_product_artifact,
 )
 from .scene_validation import SceneParseResult, validate_scene_artifact
 
@@ -34,7 +36,8 @@ CAD_EXECUTION_TIMEOUT_SECONDS = 120.0
 DEFAULT_OUTPUT_BYTES = 64 * 1024
 _RESULT_PREFIX = "__CADFLOW_EXECUTION_RESULT__"
 _PREFLIGHT_PREFIX = "__CADFLOW_PREFLIGHT__"
-_PREVIEW_PREFIX = "__CADFLOW_PREVIEW__"
+_PHASE_PREFIX = "__CADFLOW_EXECUTION_PHASE__"
+_RUNNER_PATH = Path(__file__).with_name("cad_runner.py").resolve()
 
 _SENSITIVE_ENV_NAME = re.compile(
     r"(?i)(api[_-]?(?:key|token)|access[_-]?token|secret|password|credential|"
@@ -51,6 +54,22 @@ _TOKEN_SECRET = re.compile(
     r"\b(?:sk|pk|ghp|github_pat|xox[baprs])-[A-Za-z0-9._~+/=-]{8,}"
 )
 _TRACEBACK_LOCATION = re.compile(r'File "([^"]+)", line (\d+)')
+_ARTIFACT_VERSION_DIRECTORY = re.compile(r"^v[0-9]{4,}$")
+_VALIDATION_CHECK_LIMIT = 16
+_VALIDATION_MAPPING_LIMIT = 32
+_VALIDATION_TEXT_LIMIT = 1024
+_VALIDATION_DEPTH_LIMIT = 8
+_VALIDATION_NODE_LIMIT = 768
+_VALIDATION_SEQUENCE_LIMIT = 32
+_VALIDATION_SEQUENCE_LIMITS = {
+    "contacts": 4,
+    "failures": 12,
+    "residuals": 24,
+    "warnings": 8,
+    "grounded_component_ids": 64,
+    "solved_component_ids": 64,
+    "unsolved_component_ids": 64,
+}
 
 
 @dataclass(frozen=True)
@@ -76,10 +95,65 @@ class ExecutionResult:
     error_location: str | None = None
     preflight_status: str = "not_run"
     imported_modules: tuple[str, ...] = ()
+    review_artifact_dir: str | None = None
+    review_manifest_path: str | None = None
+    review_model_sha256: str | None = None
+    review_evidence_error: str | None = None
+    result_kind: str | None = None
+    component_count: int | None = None
+    leaf_part_count: int | None = None
+    unique_part_count: int | None = None
+    product_manifest_path: str | None = None
+    product_status: str | None = None
+    product_validation_status: str | None = None
+    product_validation_failures: tuple[str, ...] = ()
+    product_validation_checks: tuple[dict[str, object], ...] = ()
+    execution_phase: str | None = None
+    validation_short_circuited: bool = False
 
     @property
     def output_truncated(self) -> bool:
         return self.stdout_truncated or self.stderr_truncated
+
+    @property
+    def is_validated_product(self) -> bool:
+        """Return whether this result may proceed to independent CAD review."""
+
+        if self.result_kind == "part":
+            structure_is_valid = bool(
+                self.component_count == 0
+                and self.leaf_part_count == 1
+                and self.unique_part_count == 1
+                and self.solid_count == 1
+            )
+        elif self.result_kind == "assembly":
+            structure_is_valid = bool(
+                self.component_count is not None
+                and self.leaf_part_count is not None
+                and self.unique_part_count is not None
+                and self.component_count >= self.leaf_part_count >= 1
+                and 1 <= self.unique_part_count <= self.leaf_part_count
+                and self.solid_count == self.leaf_part_count
+            )
+        else:
+            structure_is_valid = False
+        required_entries = {"model.scene.zip", "product.json", "validation.json"}
+        return bool(
+            self.status == "succeeded"
+            and self.exit_code == 0
+            and self.final_shape_count == 1
+            and structure_is_valid
+            and self.solid_volume is not None
+            and math.isfinite(self.solid_volume)
+            and self.solid_volume > 0
+            and self.scene_artifact_exists
+            and self.scene_parse_result.valid
+            and required_entries.issubset(self.artifact_entries)
+            and self.product_manifest_path == "artifacts/product.json"
+            and self.product_status == "Draft"
+            and self.product_validation_status == "Passed"
+            and not self.product_validation_failures
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -102,6 +176,21 @@ class ExecutionResult:
             "error_location": self.error_location,
             "preflight_status": self.preflight_status,
             "imported_modules": list(self.imported_modules),
+            "review_artifact_dir": self.review_artifact_dir,
+            "review_manifest_path": self.review_manifest_path,
+            "review_model_sha256": self.review_model_sha256,
+            "review_evidence_error": self.review_evidence_error,
+            "result_kind": self.result_kind,
+            "component_count": self.component_count,
+            "leaf_part_count": self.leaf_part_count,
+            "unique_part_count": self.unique_part_count,
+            "product_manifest_path": self.product_manifest_path,
+            "product_status": self.product_status,
+            "product_validation_status": self.product_validation_status,
+            "product_validation_failures": list(self.product_validation_failures),
+            "product_validation_checks": list(self.product_validation_checks),
+            "execution_phase": self.execution_phase,
+            "validation_short_circuited": self.validation_short_circuited,
         }
 
 
@@ -235,9 +324,8 @@ class CADExecutor:
         max_output_bytes: int = DEFAULT_OUTPUT_BYTES,
         cancellation_token: object | None = None,
         attempt: int = 1,
-        preview_callback: Callable[[PreviewFrame], None] | None = None,
     ) -> ExecutionResult:
-        """Execute ``model.py`` in the Project's working directory.
+        """Execute ``code/model.py`` in the Project's working directory.
 
         The source is intentionally executed without policy-based AST, import,
         or dangerous-call inspection. The compile/import preflight only reports
@@ -249,7 +337,8 @@ class CADExecutor:
 
         started = time.monotonic()
         root = Path(project_dir).expanduser().resolve()
-        model_path = root / MODEL_SOURCE_NAME
+        code_dir = project_code_directory(root)
+        model_path = code_dir / MODEL_SOURCE_NAME
         artifact_dir = root / ARTIFACT_DIRECTORY_NAME
         scene_path = artifact_dir / SCENE_ARTIFACT_NAME
         process: subprocess.Popen[bytes] | None = None
@@ -260,50 +349,23 @@ class CADExecutor:
         preflight_location: str | None = None
         preflight_status = "not_run"
         imported_modules: tuple[str, ...] = ()
-        live_preview_callback = preview_callback
-
-        def handle_preview_line(line: str) -> None:
-            if not line.startswith(_PREVIEW_PREFIX) or live_preview_callback is None:
-                return
-            try:
-                payload = json.loads(line[len(_PREVIEW_PREFIX) :])
-                if not isinstance(payload, dict):
-                    return
-                marker_attempt = payload.get("attempt")
-                revision = payload.get("revision")
-                operation = payload.get("operation")
-                if marker_attempt != attempt or not isinstance(revision, int) or not isinstance(operation, str):
-                    return
-                frame = read_preview_frame(
-                    root,
-                    attempt=attempt,
-                    revision=revision,
-                    operation=operation,
-                )
-                live_preview_callback(frame)
-            except (PreviewError, TypeError, ValueError, json.JSONDecodeError):
-                return
-
-        stdout_collector = _OutputCollector(
-            max_output_bytes,
-            on_line=handle_preview_line if live_preview_callback is not None else None,
-        )
+        stdout_collector = _OutputCollector(max_output_bytes)
         stderr_collector = _OutputCollector(max_output_bytes)
 
         try:
+            # This call also migrates a pre-``code/`` Project once, preserving
+            # the source before the trusted subprocess starts.
+            scaffold = create_model_source(root, overwrite=False)
+            code_dir = scaffold.code_dir
+            model_path = scaffold.model_path
             if timeout_seconds <= 0 or not math.isfinite(timeout_seconds):
                 raise ValueError("timeout_seconds must be finite and positive")
             if max_output_bytes < 0:
                 raise ValueError("max_output_bytes must not be negative")
             if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
                 raise ValueError("attempt must be a positive integer")
-            self._validate_project_paths(root, model_path, artifact_dir)
+            self._validate_project_paths(root, code_dir, model_path, artifact_dir)
             self._clear_artifacts(artifact_dir)
-            if live_preview_callback is not None:
-                try:
-                    prepare_preview_attempt(root, attempt)
-                except PreviewError:
-                    live_preview_callback = None
             if _is_cancelled(cancellation_token):
                 forced_status = "cancelled"
             else:
@@ -314,11 +376,10 @@ class CADExecutor:
                         [
                             sys.executable,
                             "-u",
-                            "-c",
-                            _RUNNER_SOURCE,
+                            str(_RUNNER_PATH),
                             str(model_path),
-                            str(attempt),
-                            "1" if live_preview_callback is not None else "0",
+                            str(root),
+                            str(code_dir),
                         ],
                         cwd=root,
                         env=build_cad_environment(),
@@ -389,6 +450,7 @@ class CADExecutor:
             )
         )
         payload = _runner_payload(bytes(stdout_collector.payload))
+        execution_phase = _runner_phase(bytes(stdout_collector.payload))
         preflight_payload = _runner_preflight_payload(bytes(stdout_collector.payload))
         if preflight_payload is not None:
             imported_modules = _module_names(preflight_payload)
@@ -399,6 +461,60 @@ class CADExecutor:
         ):
             preflight_status = "failed"
         shape_count, solid_count, solid_volume = _shape_facts(payload)
+        result_kind = _result_kind(payload)
+        component_count, leaf_part_count = _assembly_facts(payload)
+        topology_error = _payload_string(payload, "topology_error")
+        reported_unique_part_count = _payload_int(payload, "unique_part_count")
+        reported_product_manifest_path = _payload_string(
+            payload, "product_manifest_path"
+        )
+        reported_product_status = _payload_string(payload, "product_status")
+        product_validation_status = _payload_string(
+            payload, "product_validation_status"
+        )
+        product_validation_failures = _payload_strings(
+            payload, "product_validation_failures"
+        )
+        validation_short_circuited = _payload_bool(
+            payload, "validation_short_circuited"
+        )
+        product_artifact: ProductArtifact | None = None
+        product_artifact_error: str | None = None
+        product_manifest_path: str | None = None
+        product_status: str | None = None
+        product_validation_checks: tuple[dict[str, object], ...] = ()
+        unique_part_count: int | None = reported_unique_part_count
+        if validation_short_circuited:
+            product_status = reported_product_status
+            product_validation_checks = _bounded_validation_checks(
+                {
+                    "checks": (
+                        payload.get("product_validation_checks", [])
+                        if payload is not None
+                        else []
+                    )
+                }
+            )
+        else:
+            try:
+                product_artifact = load_product_artifact(artifact_dir)
+                product_artifact.require_complete()
+                product_manifest_path = str(
+                    (artifact_dir / PRODUCT_ARTIFACT_MANIFEST_NAME).relative_to(root)
+                )
+                product_status = product_artifact.status.value
+                unique_part_count = product_artifact.summary.unique_part_count
+                product_validation_checks = _bounded_validation_checks(
+                    product_artifact.validation_report
+                )
+            except (OSError, ProductArtifactError) as exc:
+                product_artifact_error = str(exc)
+        (
+            review_artifact_dir,
+            review_manifest_path,
+            review_model_sha256,
+            review_evidence_error,
+        ) = _review_facts(payload)
 
         status = "succeeded"
         error: str | None = None
@@ -418,7 +534,7 @@ class CADExecutor:
             error = (
                 "CAD execution cancelled by caller"
                 if forced_status == "cancelled"
-                else f"CAD execution timed out after {timeout_seconds:g} seconds"
+                else _timeout_error(timeout_seconds, execution_phase)
             )
             error_type = forced_status
         elif exit_code != 0:
@@ -432,13 +548,39 @@ class CADExecutor:
             status = "failed"
             error = "CAD process did not report a CadFlow Model Source result"
             error_type = "execution"
+        elif result_kind not in {"part", "assembly"}:
+            status = "failed"
+            error = "CAD process reported an unknown Model Source result type"
+            error_type = "topology"
         elif shape_count != 1:
             status = "failed"
-            error = f"Model Source returned {shape_count or 0} Shapes; expected exactly one"
+            error = f"Model Source returned {shape_count or 0} results; expected exactly one"
             error_type = "topology"
-        elif solid_count != 1:
+        elif topology_error is not None:
             status = "failed"
-            error = f"Model Source Shape contains {solid_count or 0} solids; expected exactly one"
+            error = topology_error
+            error_type = "topology"
+        elif result_kind == "part" and solid_count != 1:
+            status = "failed"
+            error = (
+                f"Model Source cad.Shape contains {solid_count or 0} solids; "
+                "multi-part models must return cad.Assembly"
+                if solid_count is not None and solid_count > 1
+                else "final Shape must be solid-compatible and contain exactly one solid"
+            )
+            error_type = "topology"
+        elif result_kind == "assembly" and (
+            component_count is None
+            or component_count < 1
+            or leaf_part_count is None
+            or leaf_part_count < 1
+        ):
+            status = "failed"
+            error = "Model Source Assembly must contain at least one leaf Part"
+            error_type = "topology"
+        elif result_kind == "assembly" and solid_count != leaf_part_count:
+            status = "failed"
+            error = "every Assembly leaf Part must contain exactly one solid"
             error_type = "topology"
         elif (
             solid_volume is None or not math.isfinite(solid_volume) or solid_volume <= 0
@@ -446,18 +588,88 @@ class CADExecutor:
             status = "failed"
             error = "final Shape volume must be finite and greater than zero"
             error_type = "geometry"
+        elif validation_short_circuited:
+            short_circuit_is_valid = bool(
+                result_kind == "assembly"
+                and product_validation_status == "Draft"
+                and product_validation_failures
+                and reported_product_status == "Draft"
+                and reported_product_manifest_path is None
+                and unique_part_count is not None
+                and leaf_part_count is not None
+                and 1 <= unique_part_count <= leaf_part_count
+                and any(
+                    check.get("status") == "failed"
+                    for check in product_validation_checks
+                )
+                and not artifact_entries
+                and not scene_exists
+                and review_artifact_dir is None
+                and review_manifest_path is None
+                and review_evidence_error is None
+            )
+            if not short_circuit_is_valid:
+                status = "failed"
+                error = "CAD process reported an invalid short-circuited Draft"
+                error_type = "product_validation"
+        elif product_artifact_error is not None or product_artifact is None:
+            status = "failed"
+            error = (
+                "product artifact could not be validated: "
+                + (product_artifact_error or "unknown product artifact error")
+            )
+            error_type = "product_artifact"
+        elif product_artifact.result_kind != result_kind:
+            status = "failed"
+            error = "product artifact result kind does not match Model Source"
+            error_type = "product_artifact"
+        elif (
+            product_artifact.summary.component_count != (component_count or 0)
+            or product_artifact.summary.leaf_part_count
+            != (leaf_part_count if result_kind == "assembly" else 1)
+            or product_artifact.summary.solid_count != solid_count
+            or not math.isclose(
+                product_artifact.summary.volume_mm3,
+                solid_volume,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+        ):
+            status = "failed"
+            error = "product artifact summary does not match observed CAD facts"
+            error_type = "product_artifact"
+        elif (
+            reported_product_manifest_path != product_manifest_path
+            or reported_product_status != product_status
+            or reported_unique_part_count != unique_part_count
+        ):
+            status = "failed"
+            error = "CAD process product artifact report is inconsistent"
+            error_type = "product_artifact"
         elif _artifact_has_symlink(artifact_dir):
             status = "failed"
             error = "artifacts must not contain symbolic links"
             error_type = "scene"
-        elif artifact_entries != (SCENE_ARTIFACT_NAME,):
+        elif artifact_entries != _declared_artifact_entries(product_artifact):
             status = "failed"
-            error = "artifacts must contain only artifacts/model.scene.zip"
-            error_type = "scene"
+            error = "artifacts contain files not declared by product.json"
+            error_type = "product_artifact"
+        elif product_artifact.file_path("scene") != scene_path:
+            status = "failed"
+            error = "product artifact Scene must use artifacts/model.scene.zip"
+            error_type = "product_artifact"
         elif not scene_parse.valid:
             status = "failed"
             error = scene_parse.error or "canonical Scene Artifact could not be parsed"
             error_type = "scene"
+        elif review_evidence_error is not None:
+            status = "failed"
+            error = f"CAD review evidence could not be generated: {review_evidence_error}"
+            error_type = "review_evidence"
+        elif not review_manifest_path or not review_artifact_dir:
+            status = "failed"
+            error = "CAD review evidence was not generated"
+            error_type = "review_evidence"
         if error_location is None and error_type in {"syntax", "import", "api"}:
             error_location = _traceback_location(stderr, stdout)
 
@@ -481,27 +693,56 @@ class CADExecutor:
             error_location=error_location,
             preflight_status=preflight_status,
             imported_modules=imported_modules,
+            review_artifact_dir=review_artifact_dir,
+            review_manifest_path=review_manifest_path,
+            review_model_sha256=review_model_sha256,
+            review_evidence_error=review_evidence_error,
+            result_kind=result_kind,
+            component_count=component_count,
+            leaf_part_count=leaf_part_count,
+            unique_part_count=unique_part_count,
+            product_manifest_path=product_manifest_path,
+            product_status=product_status,
+            product_validation_status=product_validation_status,
+            product_validation_failures=product_validation_failures,
+            product_validation_checks=product_validation_checks,
+            execution_phase=execution_phase,
+            validation_short_circuited=validation_short_circuited,
         )
 
     @staticmethod
     def _validate_project_paths(
-        root: Path, model_path: Path, artifact_dir: Path
+        root: Path, code_dir: Path, model_path: Path, artifact_dir: Path
     ) -> None:
         if not root.is_dir():
             raise ValueError("Project working directory does not exist")
+        if code_dir.is_symlink():
+            raise ValueError("Project code directory must not be a symlink")
+        if not code_dir.is_dir():
+            raise ValueError("Project code directory does not exist")
+        for source_path in code_dir.rglob("*"):
+            if source_path.is_symlink():
+                raise ValueError("Project code sources must not be symbolic links")
         if model_path.is_symlink():
             raise ValueError("Model Source must not be a symlink")
-        if not _is_under(model_path.resolve(), root):
-            raise ValueError("Model Source is outside the Project")
+        if not _is_under(model_path.resolve(), code_dir):
+            raise ValueError("Model Source is outside Project code")
         if not model_path.is_file():
             raise ValueError("current Project Model Source is missing")
         if artifact_dir.is_symlink():
             raise ValueError("Project artifact directory must not be a symlink")
         artifact_dir.mkdir(parents=True, exist_ok=True)
+        review_dir = root / ".cad-review"
+        if review_dir.is_symlink():
+            raise ValueError("Project CAD review directory must not be a symlink")
+        if review_dir.exists() and not review_dir.is_dir():
+            raise ValueError("Project CAD review path must be a directory")
 
     @staticmethod
     def _clear_artifacts(artifact_dir: Path) -> None:
         for child in artifact_dir.iterdir():
+            if child.is_dir() and _ARTIFACT_VERSION_DIRECTORY.fullmatch(child.name):
+                continue
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child)
             else:
@@ -569,6 +810,40 @@ def _runner_preflight_payload(raw_stdout: bytes) -> dict[str, object] | None:
             return None
         return payload if isinstance(payload, dict) else None
     return None
+
+
+def _runner_phase(raw_stdout: bytes) -> str | None:
+    text = raw_stdout.decode("utf-8", errors="replace")
+    for line in reversed(text.splitlines()):
+        if not line.startswith(_PHASE_PREFIX):
+            continue
+        try:
+            payload = json.loads(line[len(_PHASE_PREFIX) :])
+        except json.JSONDecodeError:
+            return None
+        phase = payload.get("phase") if isinstance(payload, dict) else None
+        return phase if isinstance(phase, str) and phase else None
+    return None
+
+
+def _timeout_error(timeout_seconds: float, phase: str | None) -> str:
+    base = f"CAD execution timed out after {timeout_seconds:g} seconds"
+    if phase is None:
+        return base
+    guidance = {
+        "model_build": "simplify expensive booleans and build one representative Part first",
+        "strict_constraint_solve": "simplify or repair the constraint graph",
+        "current_pose_collision": (
+            "reduce mesh complexity; exclude only named physical contact pairs"
+        ),
+        "product_step_export": "simplify product geometry before STEP export",
+        "unique_part_step_export": "simplify the slow unique Part geometry",
+        "step_export_replay": "simplify exported topology",
+        "scene_export": "simplify render geometry",
+        "review_evidence": "simplify the final product used for review renders",
+    }.get(phase)
+    message = f"{base} during {phase}"
+    return f"{message}; {guidance}" if guidance else message
 
 
 def _preflight_source(model_path: Path) -> tuple[str | None, str | None]:
@@ -641,6 +916,203 @@ def _shape_facts(
     return count, solid_count, float(volume) if volume is not None else None
 
 
+def _result_kind(payload: dict[str, object] | None) -> str | None:
+    if payload is None:
+        return None
+    value = payload.get("result_kind")
+    return value if value in {"part", "assembly"} else None
+
+
+def _assembly_facts(
+    payload: dict[str, object] | None,
+) -> tuple[int | None, int | None]:
+    if payload is None:
+        return None, None
+    values: list[int | None] = []
+    for name in ("component_count", "leaf_part_count"):
+        value = payload.get(name)
+        values.append(
+            value if isinstance(value, int) and not isinstance(value, bool) else None
+        )
+    return values[0], values[1]
+
+
+def _payload_string(
+    payload: dict[str, object] | None,
+    name: str,
+) -> str | None:
+    if payload is None:
+        return None
+    value = payload.get(name)
+    return value if isinstance(value, str) and value else None
+
+
+def _payload_int(
+    payload: dict[str, object] | None,
+    name: str,
+) -> int | None:
+    if payload is None:
+        return None
+    value = payload.get(name)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _payload_bool(
+    payload: dict[str, object] | None,
+    name: str,
+) -> bool:
+    if payload is None:
+        return False
+    value = payload.get(name)
+    return value if isinstance(value, bool) else False
+
+
+def _payload_strings(
+    payload: dict[str, object] | None,
+    name: str,
+) -> tuple[str, ...]:
+    if payload is None:
+        return ()
+    value = payload.get(name)
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        return ()
+    return tuple(value)
+
+
+def _bounded_validation_checks(
+    validation_report: Mapping[str, object] | None,
+) -> tuple[dict[str, object], ...]:
+    """Project verified validation evidence into a bounded Agent-facing result."""
+
+    if not isinstance(validation_report, Mapping):
+        return ()
+    raw_checks = validation_report.get("checks")
+    if not isinstance(raw_checks, list):
+        return ()
+    ranked_checks = sorted(
+        enumerate(raw_checks),
+        key=lambda item: (
+            not (
+                isinstance(item[1], Mapping)
+                and item[1].get("status") == "failed"
+            ),
+            item[0],
+        ),
+    )
+    checks: list[dict[str, object]] = []
+    for _, raw_check in ranked_checks[:_VALIDATION_CHECK_LIMIT]:
+        if not isinstance(raw_check, Mapping):
+            continue
+        check_id = raw_check.get("check_id")
+        status = raw_check.get("status")
+        if not isinstance(check_id, str) or status not in {
+            "passed",
+            "failed",
+            "not_applicable",
+        }:
+            continue
+        check: dict[str, object] = {"check_id": check_id, "status": status}
+        message = raw_check.get("message")
+        if isinstance(message, str):
+            check["message"] = _bounded_validation_text(message)
+        evidence = raw_check.get("evidence")
+        if isinstance(evidence, Mapping):
+            budget = [_VALIDATION_NODE_LIMIT]
+            bounded_evidence, truncated = _bounded_validation_value(
+                evidence,
+                key="evidence",
+                depth=0,
+                budget=budget,
+            )
+            if isinstance(bounded_evidence, dict):
+                check["evidence"] = bounded_evidence
+            if truncated or raw_check.get("evidence_truncated") is True:
+                check["evidence_truncated"] = True
+        checks.append(check)
+    return tuple(checks)
+
+
+def _bounded_validation_value(
+    value: object,
+    *,
+    key: str,
+    depth: int,
+    budget: list[int],
+) -> tuple[object | None, bool]:
+    if budget[0] <= 0 or depth > _VALIDATION_DEPTH_LIMIT:
+        return None, True
+    budget[0] -= 1
+    if value is None or isinstance(value, (bool, int, float)):
+        return value, False
+    if isinstance(value, str):
+        bounded = _bounded_validation_text(value)
+        return bounded, bounded != value
+    if isinstance(value, Mapping):
+        bounded_mapping: dict[str, object] = {}
+        truncated = len(value) > _VALIDATION_MAPPING_LIMIT
+        for raw_key, child in list(value.items())[:_VALIDATION_MAPPING_LIMIT]:
+            if not isinstance(raw_key, str):
+                truncated = True
+                continue
+            bounded_child, child_truncated = _bounded_validation_value(
+                child,
+                key=raw_key,
+                depth=depth + 1,
+                budget=budget,
+            )
+            if budget[0] <= 0 and bounded_child is None:
+                truncated = True
+                break
+            bounded_mapping[raw_key] = bounded_child
+            truncated = truncated or child_truncated
+        return bounded_mapping, truncated
+    if isinstance(value, (list, tuple)):
+        limit = _VALIDATION_SEQUENCE_LIMITS.get(key, _VALIDATION_SEQUENCE_LIMIT)
+        bounded_items: list[object] = []
+        truncated = len(value) > limit
+        for child in value[:limit]:
+            bounded_child, child_truncated = _bounded_validation_value(
+                child,
+                key=key,
+                depth=depth + 1,
+                budget=budget,
+            )
+            if budget[0] <= 0 and bounded_child is None:
+                truncated = True
+                break
+            bounded_items.append(bounded_child)
+            truncated = truncated or child_truncated
+        return bounded_items, truncated
+    return _bounded_validation_text(str(value)), True
+
+
+def _bounded_validation_text(value: str) -> str:
+    if len(value) <= _VALIDATION_TEXT_LIMIT:
+        return value
+    return value[: _VALIDATION_TEXT_LIMIT - 3] + "..."
+
+
+def _review_facts(
+    payload: dict[str, object] | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Read bounded review evidence metadata emitted by the CAD child."""
+
+    if payload is None:
+        return None, None, None, None
+    values = tuple(
+        payload.get(name)
+        for name in (
+            "review_artifact_dir",
+            "review_manifest_path",
+            "review_model_sha256",
+            "review_evidence_error",
+        )
+    )
+    return tuple(
+        value if isinstance(value, str) else None for value in values
+    )  # type: ignore[return-value]
+
+
 def _first_error(stderr: str, stdout: str, fallback: str) -> str:
     for candidate in (stderr.strip(), stdout.strip()):
         if candidate:
@@ -651,16 +1123,33 @@ def _first_error(stderr: str, stdout: str, fallback: str) -> str:
 def _artifact_entries(artifact_dir: Path) -> tuple[str, ...]:
     if not artifact_dir.is_dir():
         return ()
-    entries = [
-        path.relative_to(artifact_dir).as_posix() for path in artifact_dir.rglob("*")
-    ]
+    entries = []
+    for path in artifact_dir.rglob("*"):
+        relative = path.relative_to(artifact_dir)
+        if relative.parts and _ARTIFACT_VERSION_DIRECTORY.fullmatch(relative.parts[0]):
+            continue
+        if path.is_file() or path.is_symlink():
+            entries.append(relative.as_posix())
+    return tuple(sorted(entries))
+
+
+def _declared_artifact_entries(artifact: ProductArtifact) -> tuple[str, ...]:
+    entries = {PRODUCT_ARTIFACT_MANIFEST_NAME}
+    entries.update(record.relative_path for record in artifact.files.values())
+    entries.update(part.file.relative_path for part in artifact.parts)
     return tuple(sorted(entries))
 
 
 def _artifact_has_symlink(artifact_dir: Path) -> bool:
-    return artifact_dir.is_symlink() or any(
-        path.is_symlink() for path in artifact_dir.rglob("*")
-    )
+    if artifact_dir.is_symlink():
+        return True
+    for path in artifact_dir.rglob("*"):
+        relative = path.relative_to(artifact_dir)
+        if relative.parts and _ARTIFACT_VERSION_DIRECTORY.fullmatch(relative.parts[0]):
+            continue
+        if path.is_symlink():
+            return True
+    return False
 
 
 def _is_under(path: Path, root: Path) -> bool:
@@ -704,6 +1193,13 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
             process.terminate()
     except ProcessLookupError:
         return
+    except PermissionError:
+        # A short-lived macOS process-group race can make killpg unavailable;
+        # still terminate the child itself so callers receive a result.
+        try:
+            process.terminate()
+        except (OSError, ProcessLookupError):
+            return
     try:
         process.wait(timeout=0.75)
     except subprocess.TimeoutExpired:
@@ -714,157 +1210,14 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
                 process.kill()
         except ProcessLookupError:
             return
+        except PermissionError:
+            try:
+                process.kill()
+            except (OSError, ProcessLookupError):
+                return
         process.wait()
 
 
-_RUNNER_SOURCE = f"""\
-import json
-import builtins
-import os
-import runpy
-import sys
-import tempfile
-from pathlib import Path
-
-import cadflow as cad
-
-
-model_path = Path(sys.argv[1]).resolve()
-attempt = int(sys.argv[2])
-preview_enabled = sys.argv[3] == "1"
-imported_modules = {{"cadflow"}}
-real_import = builtins.__import__
-
-def tracking_import(name, globals=None, locals=None, fromlist=(), level=0):
-    imported_modules.add(name)
-    return real_import(name, globals, locals, fromlist, level)
-
-builtins.__import__ = tracking_import
-try:
-    namespace = runpy.run_path(str(model_path), run_name="cadflow_model_source")
-finally:
-    builtins.__import__ = real_import
-build_model = namespace.get("build_model")
-if not callable(build_model):
-    raise RuntimeError("Model Source must define build_model(model) -> cad.Shape")
-
-print({_PREFLIGHT_PREFIX!r} + json.dumps(
-    {{"status": "passed", "imported_modules": sorted(imported_modules)[:256]}},
-    separators=(",", ":"),
-), flush=True)
-
-class PreviewModel(cad.Model):
-    '''CadFlow model that publishes bounded, best-effort mesh checkpoints.'''
-
-    _preview_limit = 24
-
-    def __init__(self, preview_root, preview_attempt):
-        super().__init__()
-        self._preview_root = Path(preview_root)
-        self._preview_attempt = preview_attempt
-        self._preview_revision = 0
-        self._preview_count = 0
-
-    def _publish_preview(self, operation, shape):
-        if self._preview_count >= self._preview_limit:
-            return
-        try:
-            if not isinstance(shape, cad.Shape):
-                return
-            if int(shape.topology.get("solids", 0)) < 1:
-                return
-            mesh = shape.mesh(deflection=0.5)
-            vertices = mesh.get("vertices")
-            triangles = mesh.get("triangles")
-            if not isinstance(vertices, list) or not isinstance(triangles, list):
-                return
-            document = {{
-                "schema_version": 1,
-                "operation": operation,
-                "vertices": vertices,
-                "triangles": triangles,
-            }}
-            self._preview_revision += 1
-            revision = self._preview_revision
-            self._preview_root.mkdir(parents=True, exist_ok=True)
-            path = self._preview_root / (str(revision) + ".json")
-            temporary = self._preview_root / ("." + str(revision) + ".tmp")
-            temporary.write_text(
-                json.dumps(document, separators=(",", ":"), allow_nan=False),
-                encoding="utf-8",
-            )
-            os.replace(temporary, path)
-            print(
-                {_PREVIEW_PREFIX!r}
-                + json.dumps(
-                    {{
-                        "attempt": self._preview_attempt,
-                        "revision": revision,
-                        "operation": operation,
-                    }},
-                    separators=(",", ":"),
-                ),
-                flush=True,
-            )
-            self._preview_count += 1
-        except Exception:
-            # Preview generation is observability and must never affect the CAD run.
-            return
-
-
-def _preview_method(name):
-    original = getattr(cad.Model, name)
-
-    def wrapped(self, *args, **kwargs):
-        result = original(self, *args, **kwargs)
-        self._publish_preview(name, result)
-        return result
-
-    return wrapped
-
-
-for _operation in (
-    "union", "cut", "intersect", "extrude", "revolve", "loft", "sweep",
-    "fillet", "chamfer", "shell",
-):
-    setattr(PreviewModel, _operation, _preview_method(_operation))
-
-model_type = PreviewModel if preview_enabled else cad.Model
-preview_root = model_path.parent / "previews" / str(attempt)
-with model_type(preview_root, attempt) if preview_enabled else model_type() as model:
-    final_shape = build_model(model)
-    if not isinstance(final_shape, cad.Shape):
-        raise TypeError("Model Source must return one CadFlow Shape")
-    if preview_enabled and isinstance(model, PreviewModel) and model._preview_count == 0:
-        # Primitive-only models still get one observable frame before export.
-        model._publish_preview("result", final_shape)
-    topology = final_shape.topology
-    solid_count = int(topology.get("solids", 0))
-    solid_volume = float(final_shape.volume)
-    artifact_dir = model_path.parent / "artifacts"
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".cadflow-bridge-", dir=model_path.parent) as bridge_dir:
-        step_path = Path(bridge_dir) / "model.step"
-        final_shape.export_step(str(step_path))
-        ocp_shape = cad.inspection.brep.load_step_rshape(step_path)
-        compat_solid = cad.Solid(ocp_shape)
-        package = cad.compile_scene(
-            scene_id="model",
-            roots=(cad.SceneRoot(root_id="main", value=compat_solid),),
-            source=cad.SceneSource(kind="manual", source_id="model.py"),
-        )
-        cad.export_scene(
-            package=package,
-            path=artifact_dir / "model.scene.zip",
-        )
-
-payload = {{
-    "final_shape_count": 1,
-    "solid_count": solid_count,
-    "solid_volume": solid_volume,
-}}
-print({_RESULT_PREFIX!r} + json.dumps(payload, separators=(",", ":")), flush=True)
-"""
 
 
 __all__ = [
@@ -873,7 +1226,6 @@ __all__ = [
     "CancellationToken",
     "DEFAULT_OUTPUT_BYTES",
     "ExecutionResult",
-    "PreviewFrame",
     "build_cad_environment",
     "redact_credentials",
 ]
