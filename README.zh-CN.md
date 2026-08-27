@@ -193,6 +193,7 @@ Agent Harness、提交建模任务、查看实时进度并检查最终 3D 结果
 | <code>TEXT_TO_CAD_FRONTEND_HOST</code> | <code>0.0.0.0</code> | Viewer 监听地址。 |
 | <code>TEXT_TO_CAD_FRONTEND_PORT</code> | <code>5678</code> | Viewer 端口。 |
 | <code>TEXT_TO_CAD_PROJECTS_ROOT</code> | <code>output/projects</code> | Project 工作区的持久化根目录。 |
+| <code>CADFLOW_PREVIEW_TIMEOUT_SECONDS</code> | <code>15</code> | 实时预览 worker 的超时秒数，修改后需重启后端。 |
 
 ## 📐 当前建模契约
 

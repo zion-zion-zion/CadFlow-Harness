@@ -198,6 +198,7 @@ trusted local demo.
 | <code>TEXT_TO_CAD_FRONTEND_HOST</code> | <code>0.0.0.0</code> | Viewer bind host. |
 | <code>TEXT_TO_CAD_FRONTEND_PORT</code> | <code>5678</code> | Viewer port. |
 | <code>TEXT_TO_CAD_PROJECTS_ROOT</code> | <code>output/projects</code> | Persistent Project workspace root. |
+| <code>CADFLOW_PREVIEW_TIMEOUT_SECONDS</code> | <code>15</code> | Live preview worker wall-clock budget; restart the backend after changing it. |
 
 ## 📐 Current modeling contract
 

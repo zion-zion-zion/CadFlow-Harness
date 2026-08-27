@@ -58,11 +58,15 @@ from .model_source import (
     project_code_directory,
 )
 from .live_preview import (
+    DEFAULT_PREVIEW_TIMEOUT_SECONDS,
     LivePreviewExecutor,
     LivePreviewResult,
     LivePreviewScheduler,
     LivePreviewStatus,
     LivePreviewStore,
+    PREVIEW_TIMEOUT_ENV_VAR,
+    PREVIEW_TIMEOUT_SECONDS,
+    resolve_preview_timeout_seconds,
 )
 from .restricted_tools import AgentModelValidator, RestrictedAgentTools
 from .projects import (
@@ -119,10 +123,13 @@ __all__ = [
     "MessageSubmission",
     "MAX_EVENT_RESULT_CHARS",
     "LivePreviewExecutor",
+    "DEFAULT_PREVIEW_TIMEOUT_SECONDS",
     "LivePreviewResult",
     "LivePreviewScheduler",
     "LivePreviewStatus",
     "LivePreviewStore",
+    "PREVIEW_TIMEOUT_ENV_VAR",
+    "PREVIEW_TIMEOUT_SECONDS",
     "HARNESS_LABELS",
     "HarnessUnavailableError",
     "Project",
@@ -157,6 +164,7 @@ __all__ = [
     "create_agent_tools",
     "redact_credentials",
     "resolve_agent_run_timeout_seconds",
+    "resolve_preview_timeout_seconds",
     "review_cad",
     "validate_scene_artifact",
 ]

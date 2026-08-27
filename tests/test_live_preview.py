@@ -10,10 +10,13 @@ import pytest
 
 from backend.app import create_app
 from backend.live_preview import (
+    DEFAULT_PREVIEW_TIMEOUT_SECONDS,
     LivePreviewExecutor,
     LivePreviewResult,
     LivePreviewScheduler,
     LivePreviewStore,
+    PREVIEW_TIMEOUT_ENV_VAR,
+    resolve_preview_timeout_seconds,
     _source_hash,
 )
 from backend.previews import PreviewError, validate_preview_glb
@@ -37,6 +40,17 @@ def _wait_until(predicate, timeout: float = 3.0) -> None:
             return
         time.sleep(0.01)
     raise AssertionError("condition was not reached before timeout")
+
+
+def test_preview_timeout_is_configurable_from_environment() -> None:
+    assert resolve_preview_timeout_seconds({}) == DEFAULT_PREVIEW_TIMEOUT_SECONDS
+    assert resolve_preview_timeout_seconds({PREVIEW_TIMEOUT_ENV_VAR: "60"}) == 60.0
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "invalid"])
+def test_preview_timeout_rejects_invalid_environment_values(value: str) -> None:
+    with pytest.raises(ValueError, match=PREVIEW_TIMEOUT_ENV_VAR):
+        resolve_preview_timeout_seconds({PREVIEW_TIMEOUT_ENV_VAR: value})
 
 
 def test_live_preview_executor_isolated_from_validation_outputs(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import math
 import os
 import shutil
 import signal
@@ -14,6 +15,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,12 +29,37 @@ from .projects import ProjectState, ProjectStore
 
 PREVIEW_DEBOUNCE_SECONDS = 0.2
 PREVIEW_POLL_SECONDS = 0.1
-PREVIEW_TIMEOUT_SECONDS = 15.0
+PREVIEW_TIMEOUT_ENV_VAR = "CADFLOW_PREVIEW_TIMEOUT_SECONDS"
+DEFAULT_PREVIEW_TIMEOUT_SECONDS = 15.0
+# Backward-compatible name for callers that import the default budget.
+PREVIEW_TIMEOUT_SECONDS = DEFAULT_PREVIEW_TIMEOUT_SECONDS
 PREVIEW_DEFLECTION = 1.0
 PREVIEW_OUTPUT_BYTES = 64 * 1024
 LIVE_PREVIEW_DIRECTORY = "previews/live"
 LIVE_PREVIEW_STATUS_NAME = "status.json"
 LIVE_PREVIEW_MODEL_NAME = "model.glb"
+
+
+def resolve_preview_timeout_seconds(
+    environment: Mapping[str, str] | None = None,
+) -> float:
+    """Resolve the positive live-preview wall-clock budget from the environment."""
+
+    values = os.environ if environment is None else environment
+    raw = values.get(PREVIEW_TIMEOUT_ENV_VAR, "").strip()
+    if not raw:
+        return DEFAULT_PREVIEW_TIMEOUT_SECONDS
+    try:
+        timeout_seconds = float(raw)
+    except ValueError as error:
+        raise ValueError(
+            f"{PREVIEW_TIMEOUT_ENV_VAR} must be a finite positive number of seconds"
+        ) from error
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError(
+            f"{PREVIEW_TIMEOUT_ENV_VAR} must be a finite positive number of seconds"
+        )
+    return timeout_seconds
 
 _EXCLUDED_ROOT_NAMES = frozenset(
     {
@@ -83,7 +110,7 @@ class LivePreviewRunner(Protocol):
         self,
         project_dir: str | Path,
         *,
-        timeout_seconds: float = PREVIEW_TIMEOUT_SECONDS,
+        timeout_seconds: float | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> LivePreviewResult: ...
 
@@ -221,7 +248,7 @@ class LivePreviewExecutor:
         self,
         project_dir: str | Path,
         *,
-        timeout_seconds: float = PREVIEW_TIMEOUT_SECONDS,
+        timeout_seconds: float | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> LivePreviewResult:
         with self._execution_lock:
@@ -239,6 +266,11 @@ class LivePreviewExecutor:
         cancellation_token: CancellationToken | None,
     ) -> LivePreviewResult:
         root = Path(project_dir).expanduser().resolve()
+        if timeout_seconds is None:
+            try:
+                timeout_seconds = resolve_preview_timeout_seconds()
+            except ValueError as exc:
+                return LivePreviewResult("failed", error=str(exc))
         token = cancellation_token or CancellationToken()
         process: subprocess.Popen[bytes] | None = None
         try:
