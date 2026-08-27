@@ -153,7 +153,7 @@ h1 { margin: 7px 0 0; color: #eef4fb; font-size: 17px; font-weight: 600; letter-
 .product-download-list { position: absolute; z-index: 8; top: calc(100% + 5px); right: 0; display: grid; width: 168px; padding: 5px; border: 1px solid #303b48; border-radius: 3px; background: #151b22; box-shadow: 0 12px 28px rgba(0, 0, 0, .34); }
 .product-download-list a { min-height: 30px; padding: 8px; overflow: hidden; color: #bdc9d5; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
 .product-download-list a:hover { color: #b3e36b; background: #1e272c; }
-.product-tabs { display: grid; flex: 0 0 38px; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid #202832; }
+.product-tabs { display: grid; flex: 0 0 38px; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid #202832; }
 .product-tab { min-width: 0; border: 0; border-bottom: 2px solid transparent; color: #718094; background: #0d1217; cursor: pointer; font: 9px "DM Mono", monospace; }
 .product-tab:hover { color: #c5d1dc; }
 .product-tab.selected { border-bottom-color: #b3e36b; color: #e5edf5; background: #12191f; }
@@ -161,6 +161,13 @@ h1 { margin: 7px 0 0; color: #eef4fb; font-size: 17px; font-weight: 600; letter-
 .product-message { margin: 0; padding: 22px 14px; color: #8190a3; font: 10px/1.6 "DM Mono", monospace; overflow-wrap: anywhere; }
 .product-message.error { color: #dd8b80; }
 .product-toolbar { display: flex; min-height: 43px; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px 7px 13px; border-bottom: 1px solid #202832; color: #718094; font: 9px "DM Mono", monospace; }
+.motion-toolbar { justify-content: flex-start; }
+.motion-toolbar .inspector-button { min-width: 64px; }
+.motion-joint { display: block; padding: 13px 14px 15px; border-bottom: 1px solid #202832; color: #aebdcd; }
+.motion-joint-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; font: 10px/1.35 "DM Mono", monospace; }
+.motion-joint-heading strong { min-width: 0; overflow-wrap: anywhere; }
+.motion-joint-heading output { flex: 0 0 auto; color: #b3e36b; }
+.motion-joint input[type="range"] { width: 100%; accent-color: #b3e36b; cursor: pointer; }
 .inspector-button, .tree-action { border: 1px solid #303b48; border-radius: 3px; color: #aebdcd; background: #151b22; cursor: pointer; font: 9px "DM Mono", monospace; }
 .inspector-button { min-height: 28px; padding: 6px 8px; }
 .inspector-button:hover, .tree-action:hover { border-color: #799b51; color: #b3e36b; }

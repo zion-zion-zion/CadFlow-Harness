@@ -8,7 +8,14 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
-import { nodeIsInIsolation } from '../product-state';
+import {
+  buildMotionModel,
+  nodeIsInIsolation,
+  sceneNodeIdForProductPath,
+  type ProductMotionJoint,
+  type ProductMotionModel,
+  type ProductSemanticModel,
+} from '../product-state';
 
 type Vec3 = [number, number, number];
 type Transform = { origin: Vec3; x_axis: Vec3; y_axis: Vec3; z_axis: Vec3 };
@@ -78,6 +85,18 @@ type SceneManifest = {
 type PackageFiles = Record<string, Uint8Array>;
 type PackageRecord = { uri: string; byte_length: number; content_hash: string };
 
+type MotionTarget = {
+  object: THREE.Object3D;
+  baseWorld: THREE.Matrix4;
+  parentWorldInverse: THREE.Matrix4;
+};
+
+type MotionRuntime = ProductMotionJoint & {
+  pivot: THREE.Vector3;
+  axis: THREE.Vector3;
+  targets: MotionTarget[];
+};
+
 const MAX_PACKAGE_BYTES = 256 * 1024 * 1024;
 const MAX_PACKAGE_MEMBERS = 10_000;
 const MAX_UNPACKED_BYTES = 512 * 1024 * 1024;
@@ -137,6 +156,13 @@ export class SceneViewer {
   private selectionHelper: THREE.BoxHelper | null = null;
   private selectedNodeId: string | null = null;
   private pointerStart: { x: number; y: number } | null = null;
+  private motionModel: ProductMotionModel | null = null;
+  private motionRuntime = new Map<string, MotionRuntime>();
+  private motionAngles = new Map<string, number>();
+  private motionPlaying = false;
+  private motionDriverId: string | null = null;
+  private motionLastTime = 0;
+  private motionChangeHandler: () => void = () => undefined;
 
   constructor(
     container: HTMLElement,
@@ -181,8 +207,9 @@ export class SceneViewer {
     this.resizeObserver = new ResizeObserver(() => this.resize(container));
     this.resizeObserver.observe(container);
     this.resize(container);
-    this.renderer.setAnimationLoop(() => {
+    this.renderer.setAnimationLoop((time) => {
       this.controls.update();
+      this.advanceMotion(time);
       this.renderer.render(this.scene, this.camera);
     });
   }
@@ -265,6 +292,90 @@ export class SceneViewer {
 
   fit(): void {
     this.frame(this.modelRoot.children.length > 0 ? this.modelRoot : this.previewRoot);
+  }
+
+  setMotionModel(model: ProductSemanticModel | null): void {
+    this.motionModel = model ? buildMotionModel(model) : null;
+    this.motionRuntime.clear();
+    this.motionAngles.clear();
+    this.motionPlaying = false;
+    this.motionDriverId = null;
+    if (!this.motionModel || this.sceneNodes.size === 0) return;
+    this.modelRoot.updateWorldMatrix(true, true);
+    for (const joint of this.motionModel.joints) {
+      const runtime = this.createMotionRuntime(joint);
+      if (!runtime) continue;
+      this.motionRuntime.set(joint.joint_id, runtime);
+      this.motionAngles.set(joint.joint_id, joint.initial_angle_degrees);
+    }
+    this.applyMotion();
+  }
+
+  setMotionChangeHandler(handler: () => void): void {
+    this.motionChangeHandler = handler;
+  }
+
+  motionJoints(): ProductMotionJoint[] {
+    return [...this.motionRuntime.values()].map(({ targets: _targets, pivot: _pivot, axis: _axis, ...joint }) => joint);
+  }
+
+  jointAngle(jointId: string): number | null {
+    return this.motionAngles.get(jointId) ?? null;
+  }
+
+  setJointAngle(jointId: string, angleDegrees: number): boolean {
+    const joint = this.motionRuntime.get(jointId);
+    if (!joint || !Number.isFinite(angleDegrees)) return false;
+    const angle = THREE.MathUtils.clamp(angleDegrees, joint.lower_angle_degrees, joint.upper_angle_degrees);
+    const angles = new Map(this.motionAngles);
+    angles.set(jointId, angle);
+    const queue = [jointId];
+    const visited = new Set<string>();
+    while (queue.length > 0) {
+      const sourceId = queue.shift()!;
+      if (visited.has(sourceId)) continue;
+      visited.add(sourceId);
+      const sourceAngle = angles.get(sourceId);
+      if (sourceAngle === undefined) continue;
+      for (const coupling of this.motionModel?.couplings ?? []) {
+        let targetId: string | null = null;
+        let targetAngle: number | null = null;
+        if (coupling.joint_a_id === sourceId) {
+          targetId = coupling.joint_b_id;
+          targetAngle = coupling.ratio * sourceAngle + coupling.phase_offset_degrees;
+        } else if (coupling.joint_b_id === sourceId && coupling.ratio !== 0) {
+          targetId = coupling.joint_a_id;
+          targetAngle = (sourceAngle - coupling.phase_offset_degrees) / coupling.ratio;
+        }
+        if (!targetId || targetAngle === null || visited.has(targetId)) continue;
+        const target = this.motionRuntime.get(targetId);
+        if (!target) continue;
+        angles.set(targetId, THREE.MathUtils.clamp(targetAngle, target.lower_angle_degrees, target.upper_angle_degrees));
+        queue.push(targetId);
+      }
+    }
+    this.motionAngles = angles;
+    this.applyMotion();
+    return true;
+  }
+
+  resetMotion(): void {
+    for (const joint of this.motionRuntime.values()) this.motionAngles.set(joint.joint_id, joint.initial_angle_degrees);
+    this.applyMotion();
+  }
+
+  setMotionPlaying(playing: boolean, driverId?: string): void {
+    this.motionDriverId = driverId && this.motionRuntime.has(driverId)
+      ? driverId
+      : this.motionDriverId && this.motionRuntime.has(this.motionDriverId)
+        ? this.motionDriverId
+        : this.motionRuntime.keys().next().value ?? null;
+    this.motionPlaying = playing && this.motionDriverId !== null;
+    this.motionLastTime = 0;
+  }
+
+  isMotionPlaying(): boolean {
+    return this.motionPlaying;
   }
 
   hasNode(nodeId: string): boolean {
@@ -518,6 +629,12 @@ export class SceneViewer {
     this.sceneNodes.clear();
     this.currentManifest = null;
     this.currentFiles = null;
+    this.motionModel = null;
+    this.motionRuntime.clear();
+    this.motionAngles.clear();
+    this.motionPlaying = false;
+    this.motionDriverId = null;
+    this.motionLastTime = 0;
   }
 
   private clearSelection(): void {
@@ -552,6 +669,62 @@ export class SceneViewer {
     const nodeId = candidate?.userData.sceneNodeId;
     if (typeof nodeId === 'string' && this.selectNode(nodeId)) this.onNodeSelected(nodeId);
   };
+
+  private createMotionRuntime(joint: ProductMotionJoint): MotionRuntime | null {
+    const movingNodeIds = joint.moving_group_paths.map(sceneNodeIdForProductPath);
+    const targets: MotionTarget[] = [];
+    for (const nodeId of movingNodeIds) {
+      const object = this.sceneNodes.get(nodeId);
+      if (!object || !object.parent) continue;
+      object.updateWorldMatrix(true, false);
+      const parentWorldInverse = object.parent.matrixWorld.clone().invert();
+      targets.push({ object, baseWorld: object.matrixWorld.clone(), parentWorldInverse });
+    }
+    if (targets.length === 0) return null;
+    const connectorNode = this.sceneNodes.get(sceneNodeIdForProductPath(joint.moving_component_path)) ?? targets[0].object;
+    connectorNode.updateWorldMatrix(true, false);
+    const connectorPlacement = joint.connector_placement;
+    const localOrigin = new THREE.Vector3(...(connectorPlacement?.origin ?? [0, 0, 0])).multiplyScalar(0.001);
+    const pivot = localOrigin.applyMatrix4(connectorNode.matrixWorld);
+    const localAxis = new THREE.Vector3(...(connectorPlacement?.z_axis ?? [0, 0, 1]));
+    const axis = localAxis.transformDirection(connectorNode.matrixWorld).normalize();
+    if (axis.lengthSq() < 1e-10) return null;
+    return { ...joint, pivot, axis, targets };
+  }
+
+  private advanceMotion(time: number): void {
+    if (!this.motionPlaying || !this.motionDriverId) return;
+    if (!this.motionLastTime) {
+      this.motionLastTime = time;
+      return;
+    }
+    const deltaSeconds = Math.min(Math.max((time - this.motionLastTime) / 1000, 0), 0.1);
+    this.motionLastTime = time;
+    const joint = this.motionRuntime.get(this.motionDriverId);
+    if (!joint) return;
+    const current = this.motionAngles.get(joint.joint_id) ?? joint.initial_angle_degrees;
+    const speed = 120;
+    let next = current + deltaSeconds * speed;
+    if (next >= joint.upper_angle_degrees) next = joint.lower_angle_degrees;
+    this.setJointAngle(joint.joint_id, next);
+  }
+
+  private applyMotion(): void {
+    for (const joint of this.motionRuntime.values()) {
+      const angle = this.motionAngles.get(joint.joint_id) ?? joint.initial_angle_degrees;
+      const delta = THREE.MathUtils.degToRad(angle - joint.initial_angle_degrees);
+      const rotation = new THREE.Matrix4().makeRotationAxis(joint.axis, delta);
+      const toPivot = new THREE.Matrix4().makeTranslation(joint.pivot.x, joint.pivot.y, joint.pivot.z);
+      const fromPivot = new THREE.Matrix4().makeTranslation(-joint.pivot.x, -joint.pivot.y, -joint.pivot.z);
+      const worldMotion = toPivot.multiply(rotation).multiply(fromPivot);
+      for (const target of joint.targets) {
+        const world = worldMotion.clone().multiply(target.baseWorld);
+        target.object.matrix.copy(target.parentWorldInverse.clone().multiply(world));
+        target.object.matrixWorld.copy(world);
+      }
+    }
+    this.motionChangeHandler();
+  }
 
   private clearPreview(): void {
     while (this.previewRoot.children.length) {

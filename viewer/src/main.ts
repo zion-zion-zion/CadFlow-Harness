@@ -4,6 +4,7 @@ import { ScenePackageError, SceneViewer } from './components/scene-viewer';
 import {
   buildProductTree,
   flattenProductTree,
+  type ProductMotionJoint,
   type ProductSemanticModel,
   type ProductTreeNode,
 } from './product-state';
@@ -141,7 +142,7 @@ type ProductResponse = {
   assumptions: string[];
   validation_report: ProductValidationReport | null;
 };
-type ProductTab = 'structure' | 'bom' | 'validation';
+type ProductTab = 'structure' | 'bom' | 'validation' | 'motion';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('viewer root is missing');
@@ -253,6 +254,7 @@ app.innerHTML = `
               <button class="product-tab" type="button" role="tab" data-product-tab="structure">Structure</button>
               <button class="product-tab" type="button" role="tab" data-product-tab="bom">BOM</button>
               <button class="product-tab" type="button" role="tab" data-product-tab="validation">Validation</button>
+              <button class="product-tab" type="button" role="tab" data-product-tab="motion">Motion</button>
             </div>
             <div id="product-pane" class="product-pane" role="tabpanel" tabindex="0"></div>
           </aside>
@@ -348,6 +350,7 @@ const sceneViewer = new SceneViewer(viewerElement, (message, ready) => {
     renderProductInspector();
   }
 });
+sceneViewer.setMotionChangeHandler(updateMotionControls);
 
 function currentProject(): Project | null {
   return projects.find((project) => project.project_id === selectedProjectId) ?? null;
@@ -665,7 +668,8 @@ function renderProductInspector(): void {
   }
   if (activeProductTab === 'structure') renderProductStructure();
   else if (activeProductTab === 'bom') renderProductBom();
-  else renderProductValidation();
+  else if (activeProductTab === 'validation') renderProductValidation();
+  else renderProductMotion();
 }
 
 function renderProductDownloads(): void {
@@ -704,6 +708,79 @@ function appendProductMessage(message: string, error = false): void {
   element.className = `product-message${error ? ' error' : ''}`;
   element.textContent = message;
   productPane.append(element);
+}
+
+function renderProductMotion(): void {
+  const joints = sceneViewer.motionJoints();
+  if (joints.length === 0) {
+    appendProductMessage('No interactive revolute joints are available for this product.');
+    return;
+  }
+  const toolbar = document.createElement('div');
+  toolbar.className = 'product-toolbar motion-toolbar';
+  const play = document.createElement('button');
+  play.type = 'button';
+  play.className = 'inspector-button';
+  play.textContent = sceneViewer.isMotionPlaying() ? 'Pause' : 'Play';
+  play.addEventListener('click', () => {
+    sceneViewer.setMotionPlaying(!sceneViewer.isMotionPlaying(), joints[0].joint_id);
+    renderProductInspector();
+  });
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'inspector-button';
+  reset.textContent = 'Reset';
+  reset.addEventListener('click', () => {
+    sceneViewer.setMotionPlaying(false);
+    sceneViewer.resetMotion();
+    renderProductInspector();
+  });
+  toolbar.append(play, reset);
+  const hint = document.createElement('p');
+  hint.className = 'product-message';
+  hint.textContent = 'Adjust a joint angle to preview its connected parts and couplings.';
+  productPane.append(toolbar, hint);
+  joints.forEach((joint) => appendMotionJoint(productPane, joint));
+}
+
+function appendMotionJoint(container: HTMLElement, joint: ProductMotionJoint): void {
+  const field = document.createElement('label');
+  field.className = 'motion-joint';
+  const heading = document.createElement('span');
+  heading.className = 'motion-joint-heading';
+  const name = document.createElement('strong');
+  name.textContent = joint.label;
+  const value = document.createElement('output');
+  value.textContent = `${Math.round(sceneViewer.jointAngle(joint.joint_id) ?? joint.initial_angle_degrees)}°`;
+  heading.append(name, value);
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = String(joint.lower_angle_degrees);
+  slider.max = String(joint.upper_angle_degrees);
+  slider.step = '1';
+  slider.value = String(sceneViewer.jointAngle(joint.joint_id) ?? joint.initial_angle_degrees);
+  slider.addEventListener('input', () => {
+    sceneViewer.setMotionPlaying(false);
+    sceneViewer.setJointAngle(joint.joint_id, Number(slider.value));
+    updateMotionControls();
+  });
+  slider.dataset.jointId = joint.joint_id;
+  field.dataset.jointId = joint.joint_id;
+  field.append(heading, slider);
+  container.append(field);
+}
+
+function updateMotionControls(): void {
+  for (const row of productPane.querySelectorAll<HTMLElement>('.motion-joint')) {
+    const jointId = row.dataset.jointId;
+    if (!jointId) continue;
+    const angle = sceneViewer.jointAngle(jointId);
+    if (angle === null) continue;
+    const slider = row.querySelector<HTMLInputElement>('input[type="range"]');
+    const output = row.querySelector<HTMLOutputElement>('output');
+    if (slider) slider.value = String(angle);
+    if (output) output.textContent = `${Math.round(angle)}°`;
+  }
 }
 
 function renderProductStructure(): void {
@@ -942,6 +1019,7 @@ function resetProductState(resetTab = false): void {
   productLoading = false;
   productLoadError = '';
   selectedProductNodeKey = null;
+  sceneViewer.setMotionModel(null);
   productDownloads.open = false;
   if (resetTab) activeProductTab = 'structure';
 }
@@ -980,6 +1058,7 @@ async function loadProduct(project: Project, version: number): Promise<void> {
     if (!product.semantic_model) throw new Error('Accepted product has no semantic model.');
     acceptedProductTree = buildProductTree(product.semantic_model);
     acceptedProduct = product;
+    sceneViewer.setMotionModel(product.semantic_model);
     loadedProductProjectId = project.project_id;
     loadedProductArtifactVersion = project.artifact_version;
   } catch (error) {
@@ -1148,6 +1227,7 @@ async function loadScene(project: Project, version: number): Promise<void> {
     const blob = await response.blob();
     if (version !== selectedVersion || selectedProjectId !== project.project_id) return;
     await sceneViewer.load(blob);
+    if (acceptedProduct?.semantic_model) sceneViewer.setMotionModel(acceptedProduct.semantic_model);
     if (version === selectedVersion && selectedProjectId === project.project_id) {
       loadedSceneProjectId = project.project_id;
       loadedSceneArtifactVersion = project.artifact_version;
