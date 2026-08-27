@@ -3,6 +3,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
@@ -119,15 +120,27 @@ export class ScenePackageError extends Error {
 
 export function preparePreviewScene(scene: THREE.Object3D): THREE.Object3D {
   scene.name = 'preview-model';
+  scene.traverse((object) => {
+    if (object instanceof THREE.Mesh) {
+      object.castShadow = true;
+      object.receiveShadow = true;
+    }
+  });
   return scene;
 }
 
 export function materialFromAppearance(appearance?: Appearance): THREE.MeshStandardMaterial {
   const color = appearance?.base_color ?? [0.72, 0.75, 0.78, 1];
-  return new THREE.MeshStandardMaterial({
+  const metallic = appearance?.metallic ?? 0;
+  const roughness = appearance?.roughness ?? 0.55;
+  return new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(color[0], color[1], color[2]),
-    metalness: appearance?.metallic ?? 0,
-    roughness: appearance?.roughness ?? 0.55,
+    metalness: metallic,
+    roughness,
+    envMapIntensity: 0.8 + metallic * 0.45,
+    // A restrained clear coat gives matte CAD surfaces a readable studio highlight.
+    clearcoat: 0.08 + (1 - metallic) * 0.08,
+    clearcoatRoughness: Math.min(roughness + 0.08, 0.42),
     side: appearance?.double_sided ? THREE.DoubleSide : THREE.FrontSide,
     transparent: appearance?.alpha_mode === 'blend',
     opacity: color[3],
@@ -140,6 +153,8 @@ export class SceneViewer {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly controls: OrbitControls;
   private readonly loader = new GLTFLoader();
+  private readonly keyLight: THREE.DirectionalLight;
+  private readonly shadowCatcher: THREE.Mesh<THREE.PlaneGeometry, THREE.ShadowMaterial>;
   private readonly modelRoot = new THREE.Group();
   private readonly previewRoot = new THREE.Group();
   private readonly geometryCache = new Map<string, THREE.Object3D>();
@@ -163,6 +178,7 @@ export class SceneViewer {
   private motionDriverId: string | null = null;
   private motionLastTime = 0;
   private motionChangeHandler: () => void = () => undefined;
+  private environmentTarget: THREE.WebGLRenderTarget | null = null;
 
   constructor(
     container: HTMLElement,
@@ -171,14 +187,18 @@ export class SceneViewer {
   ) {
     this.onStatus = onStatus;
     this.onNodeSelected = onNodeSelected;
-    this.scene.background = new THREE.Color('#0b0e12');
+    // Let the viewer panel's studio backdrop show through the transparent canvas.
+    this.scene.background = null;
     this.camera.up.set(0, 0, 1);
     this.camera.position.set(2.4, 2.1, 3.0);
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
+    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.append(this.renderer.domElement);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -188,13 +208,37 @@ export class SceneViewer {
     this.controls.minDistance = 0.01;
     this.controls.maxDistance = 1000;
 
-    this.scene.add(new THREE.HemisphereLight('#d9e9ff', '#10141b', 1.7));
-    const keyLight = new THREE.DirectionalLight('#fff8e9', 3.1);
-    keyLight.position.set(4, 7, 5);
-    this.scene.add(keyLight, keyLight.target);
-    const fillLight = new THREE.DirectionalLight('#8db4ff', 1.1);
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.environmentTarget = pmrem.fromScene(new RoomEnvironment(), 0.04);
+    this.scene.environment = this.environmentTarget.texture;
+    pmrem.dispose();
+
+    this.scene.add(new THREE.HemisphereLight('#d9e9ff', '#10141b', 0.85));
+    this.keyLight = new THREE.DirectionalLight('#fff8e9', 2.0);
+    this.keyLight.position.set(4, 7, 5);
+    this.keyLight.castShadow = true;
+    this.keyLight.shadow.mapSize.set(2048, 2048);
+    this.keyLight.shadow.camera.near = 0.1;
+    this.keyLight.shadow.camera.far = 100;
+    this.keyLight.shadow.camera.left = -8;
+    this.keyLight.shadow.camera.right = 8;
+    this.keyLight.shadow.camera.top = 8;
+    this.keyLight.shadow.camera.bottom = -8;
+    this.keyLight.shadow.bias = -0.0004;
+    this.keyLight.shadow.normalBias = 0.02;
+    this.scene.add(this.keyLight, this.keyLight.target);
+    const fillLight = new THREE.DirectionalLight('#8db4ff', 0.7);
     fillLight.position.set(-5, -6, 7);
     this.scene.add(fillLight, fillLight.target);
+
+    this.shadowCatcher = new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShadowMaterial({ color: '#050709', opacity: 0.28 }),
+    );
+    this.shadowCatcher.name = 'studio-shadow-catcher';
+    this.shadowCatcher.receiveShadow = true;
+    this.shadowCatcher.visible = false;
+    this.scene.add(this.shadowCatcher);
 
     this.modelRoot.name = 'validated-scene';
     this.previewRoot.name = 'live-preview';
@@ -441,6 +485,8 @@ export class SceneViewer {
     this.renderer.domElement.removeEventListener('pointerup', this.handlePointerUp);
     this.clearModel();
     this.renderer.dispose();
+    this.environmentTarget?.dispose();
+    this.environmentTarget = null;
     this.renderer.domElement.remove();
   }
 
@@ -487,7 +533,11 @@ export class SceneViewer {
       }
       const renderGeometry = geometry.clone(true);
       renderGeometry.traverse((child) => {
-        if (child instanceof THREE.Mesh) child.material = this.materialFor(definition);
+        if (child instanceof THREE.Mesh) {
+          child.material = this.materialFor(definition);
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
       });
       group.add(renderGeometry);
     }
@@ -574,6 +624,23 @@ export class SceneViewer {
     this.controls.target.copy(center);
     this.controls.maxDistance = radius * 12;
     this.controls.update();
+
+    // Keep the studio light and contact shadow fitted to arbitrary CAD extents.
+    const shadowExtent = Math.max(radius * 1.8, 1);
+    this.keyLight.target.position.copy(center);
+    this.keyLight.position.copy(center).add(new THREE.Vector3(1.6, 2.6, 2.2).normalize().multiplyScalar(radius * 3.2));
+    this.keyLight.shadow.camera.near = Math.max(radius * 0.05, 0.01);
+    this.keyLight.shadow.camera.far = Math.max(radius * 8, 10);
+    this.keyLight.shadow.camera.left = -shadowExtent;
+    this.keyLight.shadow.camera.right = shadowExtent;
+    this.keyLight.shadow.camera.top = shadowExtent;
+    this.keyLight.shadow.camera.bottom = -shadowExtent;
+    this.keyLight.shadow.camera.updateProjectionMatrix();
+    this.keyLight.target.updateMatrixWorld();
+
+    this.shadowCatcher.position.set(center.x, center.y, box.min.z - Math.max(radius * 0.008, 0.02));
+    this.shadowCatcher.scale.setScalar(Math.max(radius * 3.2, 1));
+    this.shadowCatcher.visible = true;
   }
 
   private resize(container: HTMLElement): void {
@@ -629,6 +696,7 @@ export class SceneViewer {
     this.sceneNodes.clear();
     this.currentManifest = null;
     this.currentFiles = null;
+    this.shadowCatcher.visible = false;
     this.motionModel = null;
     this.motionRuntime.clear();
     this.motionAngles.clear();
