@@ -236,6 +236,10 @@ app.innerHTML = `
             <div id="viewer-loading" class="viewer-loading" hidden><span class="spinner"></span><span>Loading Scene Artifact</span></div>
             <div id="viewer-empty" class="viewer-empty"><span class="empty-mark">◇</span><strong id="viewer-empty-title">No Project selected</strong><span id="viewer-empty-copy">Select a Project to inspect its own Scene Artifact.</span></div>
             <div class="viewer-hint">Drag to rotate · right-drag to pan · scroll to zoom</div>
+            <div class="viewer-toolbar" aria-label="Preview controls">
+              <button id="viewer-rotate" class="viewer-tool-button is-active" type="button" aria-pressed="true">Auto-Rotate</button>
+              <button id="viewer-reset" class="viewer-tool-button" type="button">Reset View</button>
+            </div>
             <details id="preview-details" class="preview-details" hidden><summary>Preview diagnostics</summary><pre id="preview-log"></pre></details>
             <div id="viewer-status" class="viewer-status" aria-live="polite"><span id="viewer-status-dot" class="status-dot"></span><span id="viewer-status-text">Waiting for a Validated Result</span></div>
           </div>
@@ -298,6 +302,8 @@ const viewerEmptyTitle = document.querySelector<HTMLElement>('#viewer-empty-titl
 const viewerEmptyCopy = document.querySelector<HTMLElement>('#viewer-empty-copy')!;
 const viewerStatusText = document.querySelector<HTMLSpanElement>('#viewer-status-text')!;
 const viewerStatusDot = document.querySelector<HTMLSpanElement>('#viewer-status-dot')!;
+const viewerRotate = document.querySelector<HTMLButtonElement>('#viewer-rotate')!;
+const viewerReset = document.querySelector<HTMLButtonElement>('#viewer-reset')!;
 const viewerTitle = document.querySelector<HTMLElement>('#viewer-title')!;
 const previewToggleControl = document.querySelector<HTMLLabelElement>('#preview-toggle-control')!;
 const previewToggle = document.querySelector<HTMLInputElement>('#preview-toggle')!;
@@ -1622,6 +1628,13 @@ deleteButton.addEventListener('click', () => void deleteProject());
 previewToggle.addEventListener('change', () => void setLivePreviewPaused());
 previewRetry.addEventListener('click', () => void retryLivePreview());
 document.querySelector<HTMLButtonElement>('#fit-button')!.addEventListener('click', () => sceneViewer.fit());
+viewerRotate.addEventListener('click', () => {
+  const enabled = !sceneViewer.isAutoRotate();
+  sceneViewer.setAutoRotate(enabled);
+  viewerRotate.classList.toggle('is-active', enabled);
+  viewerRotate.setAttribute('aria-pressed', String(enabled));
+});
+viewerReset.addEventListener('click', () => sceneViewer.resetView());
 promptInput.addEventListener('input', () => {
   promptCounter.textContent = `${promptInput.value.length.toLocaleString()} / ${MAX_PROMPT_CHARS.toLocaleString()}`;
   const project = currentProject();

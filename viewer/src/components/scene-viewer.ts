@@ -202,16 +202,16 @@ export class SceneViewer {
   ) {
     this.onStatus = onStatus;
     this.onNodeSelected = onNodeSelected;
-    // Let the viewer panel's studio backdrop show through the transparent canvas.
-    this.scene.background = null;
+    // Match the reference's neutral white studio behind the stage overlays.
+    this.scene.background = new THREE.Color('#f7f8fa');
     this.camera.up.set(0, 0, 1);
     this.camera.position.set(2.4, 2.1, 3.0);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.setClearColor(0xf7f8fa, 1);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.toneMappingExposure = 1.18;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.append(this.renderer.domElement);
@@ -219,6 +219,8 @@ export class SceneViewer {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
+    this.controls.autoRotate = true;
+    this.controls.autoRotateSpeed = 0.55;
     this.controls.screenSpacePanning = true;
     this.controls.minDistance = 0.01;
     this.controls.maxDistance = 1000;
@@ -228,9 +230,9 @@ export class SceneViewer {
     this.scene.environment = this.environmentTarget.texture;
     pmrem.dispose();
 
-    this.scene.add(new THREE.HemisphereLight('#d9e9ff', '#10141b', 0.85));
-    this.keyLight = new THREE.DirectionalLight('#fff8e9', 2.0);
-    this.keyLight.position.set(4, 7, 5);
+    this.scene.add(new THREE.HemisphereLight('#ffffff', '#e6eaef', 0.9));
+    this.keyLight = new THREE.DirectionalLight('#ffffff', 1.25);
+    this.keyLight.position.set(2.6, 7.5, 2.2);
     this.keyLight.castShadow = true;
     this.keyLight.shadow.mapSize.set(2048, 2048);
     this.keyLight.shadow.camera.near = 0.1;
@@ -242,13 +244,19 @@ export class SceneViewer {
     this.keyLight.shadow.bias = -0.0004;
     this.keyLight.shadow.normalBias = 0.02;
     this.scene.add(this.keyLight, this.keyLight.target);
-    const fillLight = new THREE.DirectionalLight('#8db4ff', 0.7);
-    fillLight.position.set(-5, -6, 7);
+    const rimLight = new THREE.DirectionalLight('#dfe9ff', 0.95);
+    rimLight.position.set(-4.5, 2.5, -3.5);
+    this.scene.add(rimLight, rimLight.target);
+    const fillLight = new THREE.DirectionalLight('#ffffff', 0.5);
+    fillLight.position.set(-1, -3, 4);
     this.scene.add(fillLight, fillLight.target);
+    const sideLight = new THREE.DirectionalLight('#ffffff', 0.3);
+    sideLight.position.set(5.5, -1.2, -2.5);
+    this.scene.add(sideLight, sideLight.target);
 
     this.shadowCatcher = new THREE.Mesh(
       new THREE.PlaneGeometry(2, 2),
-      new THREE.ShadowMaterial({ color: '#050709', opacity: 0.28 }),
+      new THREE.ShadowMaterial({ color: '#10151c', opacity: 0.13 }),
     );
     this.shadowCatcher.name = 'studio-shadow-catcher';
     this.shadowCatcher.receiveShadow = true;
@@ -351,6 +359,18 @@ export class SceneViewer {
 
   fit(): void {
     this.frame(this.modelRoot.children.length > 0 ? this.modelRoot : this.previewRoot);
+  }
+
+  resetView(): void {
+    this.fit();
+  }
+
+  setAutoRotate(enabled: boolean): void {
+    this.controls.autoRotate = enabled;
+  }
+
+  isAutoRotate(): boolean {
+    return this.controls.autoRotate;
   }
 
   setMotionModel(model: ProductSemanticModel | null): void {
