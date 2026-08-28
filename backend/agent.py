@@ -15,7 +15,12 @@ from typing import Any, Callable, Literal, Mapping, Sequence, cast
 
 from langchain_core.tools import BaseTool, tool
 
-from .agent_logging import ConversationLog
+from .agent_logging import (
+    PRIMARY_AGENT_ID,
+    PRIMARY_AGENT_NAME,
+    PRIMARY_AGENT_ROLE,
+    ConversationLog,
+)
 from .agent_backend import create_agent_backend
 from .cad_executor import (
     CAD_EXECUTION_TIMEOUT_SECONDS,
@@ -1229,6 +1234,12 @@ def _invoke_agent_with_deadline(
         config: dict[str, Any] = {}
         if conversation_log is not None:
             config["callbacks"] = [conversation_log.callback_handler()]
+            config["metadata"] = {
+                "agent_id": PRIMARY_AGENT_ID,
+                "agent_name": PRIMARY_AGENT_NAME,
+                "agent_role": PRIMARY_AGENT_ROLE,
+            }
+            config["tags"] = ["cad-primary"]
         messages: list[dict[str, str]] = list(conversation_context or ())
         messages.append(
             {

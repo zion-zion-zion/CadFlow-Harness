@@ -21,6 +21,9 @@ type TraceEvent = {
   turn_id: string | null;
   type: string;
   role: string | null;
+  agent_id: string | null;
+  agent_name: string | null;
+  agent_role: string | null;
   title: string;
   summary: string;
   tool_name: string | null;
@@ -103,7 +106,7 @@ root.innerHTML = `
             <label class="search-field trace-search"><span class="sr-only">Search full trace</span><input id="trace-search" type="search" placeholder="Search full trace" autocomplete="off" /></label>
           </div>
           <div class="filter-row">
-            <div id="event-filters" class="event-filters" role="group" aria-label="Event filters"></div>
+            <div class="filter-controls"><label class="agent-filter"><span>Agent</span><select id="agent-filter"><option value="">All agents</option></select></label><div id="event-filters" class="event-filters" role="group" aria-label="Event filters"></div></div>
             <button id="live-follow" class="follow-toggle selected" type="button" aria-pressed="true"><span></span>Live follow</button>
           </div>
           <div id="timeline-scroll" class="timeline-scroll" tabindex="0">
@@ -140,6 +143,7 @@ const timelineSpacer = byId<HTMLDivElement>('timeline-spacer');
 const timelineEmpty = byId<HTMLDivElement>('timeline-empty');
 const trajectory = byId<HTMLDivElement>('track-lanes');
 const traceSearch = byId<HTMLInputElement>('trace-search');
+const agentFilter = byId<HTMLSelectElement>('agent-filter');
 const newEventsButton = byId<HTMLButtonElement>('new-events');
 const liveFollowButton = byId<HTMLButtonElement>('live-follow');
 const semanticButton = byId<HTMLButtonElement>('semantic-view');
@@ -165,6 +169,7 @@ let detail: TraceDetail | null = null;
 let resultDetail: TraceDetail | null = null;
 let detailTab: DetailTab = 'summary';
 let activeFilters = new Set<string>();
+let activeAgentFilter = '';
 let liveFollow = true;
 let unseenEvents = 0;
 let pollTimer: number | null = null;
@@ -325,7 +330,11 @@ function stopPolling(): void {
 }
 
 function displayEvents(): DisplayEvent[] {
-  const filtered = events.filter((event) => activeFilters.size === 0 || activeFilters.has(eventGroup(event)) || (event.is_error && activeFilters.has('Errors')));
+  const filtered = events.filter((event) => {
+    const matchesAgent = !activeAgentFilter || (event.agent_id ?? '') === activeAgentFilter;
+    const matchesType = activeFilters.size === 0 || activeFilters.has(eventGroup(event)) || (event.is_error && activeFilters.has('Errors'));
+    return matchesAgent && matchesType;
+  });
   if (rawMode) return filtered.map((event) => ({ event }));
   const display: DisplayEvent[] = [];
   const callsById = new Map<string, DisplayEvent>();
@@ -359,9 +368,26 @@ function displayEvents(): DisplayEvent[] {
 }
 
 function renderTrace(): void {
+  renderAgentFilter();
   renderMetrics();
   renderTrajectory();
   renderTimelineWindow();
+}
+
+function renderAgentFilter(): void {
+  const agents = new Map<string, string>();
+  for (const event of events) {
+    if (event.agent_id) agents.set(event.agent_id, eventAgentLabel(event));
+  }
+  const options = [
+    '<option value="">All agents</option>',
+    ...[...agents.entries()]
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([id, label]) => `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`),
+  ].join('');
+  if (agentFilter.innerHTML !== options) agentFilter.innerHTML = options;
+  if (!agents.has(activeAgentFilter)) activeAgentFilter = '';
+  agentFilter.value = activeAgentFilter;
 }
 
 function renderMetrics(): void {
@@ -391,7 +417,7 @@ function renderTrajectory(): void {
       const time = event.timestamp ? Date.parse(event.timestamp) : start;
       const left = trackMode === 'duration' ? ((time - start) / span) * 100 : (index / Math.max(1, events.length)) * 100;
       block.style.left = `${Math.max(0, Math.min(98.5, left))}%`;
-      block.title = `${event.title}: ${event.summary}`;
+      block.title = `${eventAgentLabel(event)} / ${event.title}: ${event.summary}`;
       block.setAttribute('aria-label', block.title);
       block.addEventListener('click', () => void selectEvent({ event }));
       row.append(block);
@@ -417,9 +443,10 @@ function renderTimelineWindow(): void {
     row.classList.toggle('selected', item.event.cursor === selectedCursor);
     row.classList.toggle('error', item.event.is_error || item.result?.is_error === true);
     row.style.transform = `translateY(${index * ROW_HEIGHT}px)`;
-    row.setAttribute('aria-label', `${item.event.title}: ${item.event.summary}`);
+    row.setAttribute('aria-label', `${eventAgentLabel(item.event)} / ${item.event.title}: ${item.event.summary}`);
     const resultStatus = item.result ? `<span class="result-status ${item.result.is_error ? 'failed' : ''}">${item.result.is_error ? 'Failed' : 'Completed'}</span>` : '';
-    row.innerHTML = `<span class="event-kind kind-${eventKind(item.event)}">${escapeHtml(eventLabel(item.event))}</span><span class="event-copy"><strong>${escapeHtml(item.event.title)}</strong><span>${escapeHtml(item.event.summary || 'No content')}</span></span>${resultStatus}<time>${formatTime(item.event.timestamp)}</time>`;
+    const agentLabel = eventAgentLabel(item.event);
+    row.innerHTML = `<span class="event-kind kind-${eventKind(item.event)}">${escapeHtml(eventLabel(item.event))}</span><span class="event-agent ${eventAgentKind(item.event)}" title="${escapeHtml(agentLabel)}">${escapeHtml(agentLabel)}</span><span class="event-copy"><strong>${escapeHtml(item.event.title)}</strong><span>${escapeHtml(item.event.summary || 'No content')}</span></span>${resultStatus}<time>${formatTime(item.event.timestamp)}</time>`;
     row.addEventListener('click', () => void selectEvent(item));
     timelineSpacer.append(row);
   }
@@ -464,7 +491,7 @@ function renderDetail(): void {
   inspectorKind.textContent = eventLabel(event);
   inspectorKind.className = `event-kind kind-${eventKind(event)}`;
   inspectorTitle.textContent = event.title;
-  inspectorHierarchy.textContent = `Sequence ${event.sequence ?? '--'}  /  ${event.type}`;
+  inspectorHierarchy.textContent = `${eventAgentLabel(event)}  /  Sequence ${event.sequence ?? '--'}  /  ${event.type}`;
   const availableTabs: DetailTab[] = ['summary', 'payload'];
   if (hasResultTab(selectedDisplay)) availableTabs.push('result');
   availableTabs.push('raw', 'timing');
@@ -668,6 +695,8 @@ function summaryPanel(tab: DetailTab): HTMLElement {
     addSummary(panel, 'Byte cursor', String(event.cursor));
     addSummary(panel, 'Record size', formatBytes(event.byte_size));
   } else {
+    addSummary(panel, 'Agent', eventAgentLabel(event));
+    if (event.agent_id) addSummary(panel, 'Agent ID', event.agent_id);
     addSummary(panel, 'Hierarchy', event.type.replaceAll('_', ' '));
     addSummary(panel, 'Status', event.is_error || selectedDisplay!.result?.is_error ? 'Failed' : selectedDisplay!.result ? 'Completed' : 'Recorded');
     if (event.tool_name) addSummary(panel, 'Tool', event.tool_name);
@@ -705,6 +734,20 @@ function eventLabel(event: TraceEvent): string {
   if (event.type === 'model_response' || event.type === 'assistant_message') return 'ASSISTANT';
   if (event.type.includes('tool')) return 'TOOL';
   return 'RUN';
+}
+
+function eventAgentLabel(event: TraceEvent): string {
+  if (event.agent_name) return event.agent_name;
+  if (event.agent_id) return event.agent_id;
+  if (event.agent_role) return titleCase(event.agent_role);
+  return 'Unattributed';
+}
+
+function eventAgentKind(event: TraceEvent): string {
+  if (event.agent_role === 'reviewer' || event.agent_id === 'cad-reviewer') return 'agent-reviewer';
+  if (event.agent_role === 'primary' || event.agent_id === 'text-to-cad-primary') return 'agent-primary';
+  if (event.agent_role === 'orchestrator' || event.agent_id === 'cad-orchestrator') return 'agent-orchestrator';
+  return 'agent-unknown';
 }
 
 function currentProject(): TraceProject | null {
@@ -802,6 +845,10 @@ refreshButton.addEventListener('click', async () => {
   try { await loadCatalog(); await loadInitialTrace(); } finally { refreshButton.disabled = false; }
 });
 projectSearch.addEventListener('input', renderCatalog);
+agentFilter.addEventListener('change', () => {
+  activeAgentFilter = agentFilter.value;
+  renderTrace();
+});
 traceSearch.addEventListener('input', () => {
   if (searchTimer !== null) window.clearTimeout(searchTimer);
   searchTimer = window.setTimeout(() => void loadInitialTrace(), 250);

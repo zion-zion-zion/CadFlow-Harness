@@ -17,6 +17,33 @@ from .cad_executor import redact_credentials
 
 CONVERSATION_LOG_NAME = "conversation.jsonl"
 LEGACY_AGENT_RUN_LOG_NAME = "agent-run.jsonl"
+PRIMARY_AGENT_ID = "text-to-cad-primary"
+PRIMARY_AGENT_NAME = "Text-to-CAD Primary"
+PRIMARY_AGENT_ROLE = "primary"
+REVIEWER_AGENT_ID = "cad-reviewer"
+REVIEWER_AGENT_NAME = "CAD Reviewer"
+REVIEWER_AGENT_ROLE = "reviewer"
+ORCHESTRATOR_AGENT_ID = "cad-orchestrator"
+ORCHESTRATOR_AGENT_NAME = "CAD Orchestrator"
+ORCHESTRATOR_AGENT_ROLE = "orchestrator"
+ORCHESTRATOR_EVENT_TYPES = frozenset(
+    {
+        "assembly_pipeline_failed",
+        "assembly_pipeline_prepared",
+        "graph_initialized",
+        "work_order_dispatched",
+        "work_order_completed",
+        "graph_transition",
+        "node_failure",
+        "candidates_proposed",
+        "candidate_selected",
+        "failure_route",
+        "graph_replan",
+        "turn_succeeded",
+        "turn_failed",
+    }
+)
+REVIEWER_EVENT_TYPES = frozenset({"final_review"})
 DEFAULT_MAX_CONTEXT_CHARS = 200_000
 DEFAULT_RECENT_CONTEXT_TURNS = 6
 LARGE_TOOL_RESULT_CHARS = 64_000
@@ -55,11 +82,29 @@ class ConversationLog:
         base_url: str | None = None,
         reasoning_effort: str | None = None,
         reasoning_summary: str | None = None,
+        agent_id: str | None = None,
+        agent_name: str | None = None,
+        agent_role: str | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).expanduser().resolve()
         self.path = self.project_dir / CONVERSATION_LOG_NAME
         self.conversation_id = conversation_id or self.project_dir.name
         self.turn_id = turn_id
+        provided_agent_id = _clean_identity_value(agent_id)
+        provided_agent_role = _clean_identity_value(agent_role)
+        self.agent_id = provided_agent_id or PRIMARY_AGENT_ID
+        self.agent_name = _clean_identity_value(agent_name)
+        self.agent_role = provided_agent_role or (
+            PRIMARY_AGENT_ROLE if provided_agent_id is None else None
+        )
+        if self.agent_role in {
+            REVIEWER_AGENT_ROLE,
+            ORCHESTRATOR_AGENT_ROLE,
+        } and self.agent_id == PRIMARY_AGENT_ID:
+            self.agent_id = _agent_id_for_role(self.agent_role) or self.agent_id
+        self.agent_id, self.agent_name, self.agent_role = _complete_agent_identity(
+            self.agent_id, self.agent_name, self.agent_role
+        )
         self._lock = _conversation_lock(self.path)
         self._records: list[dict[str, Any]] = []
         self._tool_names: dict[str, str] = {}
@@ -359,6 +404,27 @@ class ConversationLog:
                 for key, value in fields.items()
                 if value is not None
             }
+            default_id, default_name, default_role = (
+                (
+                    ORCHESTRATOR_AGENT_ID,
+                    ORCHESTRATOR_AGENT_NAME,
+                    ORCHESTRATOR_AGENT_ROLE,
+                )
+                if event_type in ORCHESTRATOR_EVENT_TYPES
+                else (
+                    REVIEWER_AGENT_ID,
+                    REVIEWER_AGENT_NAME,
+                    REVIEWER_AGENT_ROLE,
+                )
+                if event_type in REVIEWER_EVENT_TYPES
+                else (self.agent_id, self.agent_name, self.agent_role)
+            )
+            _apply_agent_identity(
+                payload,
+                default_id=default_id,
+                default_name=default_name,
+                default_role=default_role,
+            )
             payload = self._externalize_large_tool_payload(event_type, payload)
             record = {
                 "conversation_id": self.conversation_id,
@@ -442,7 +508,7 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
 
     def __init__(self, trace: ConversationLog) -> None:
         self.trace = trace
-        self._model_roles: dict[str, str] = {}
+        self._run_identities: dict[str, dict[str, str]] = {}
 
     def on_chat_model_start(
         self,
@@ -454,18 +520,13 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         run_key = str(run_id)
-        metadata = kwargs.get("metadata")
-        role = metadata.get("agent_role") if isinstance(metadata, Mapping) else None
-        if not isinstance(role, str):
-            tags = kwargs.get("tags")
-            role = "reviewer" if isinstance(tags, list) and "cad-reviewer" in tags else None
-        if role is not None:
-            self._model_roles[run_key] = role
+        identity = self._callback_identity(kwargs, parent_run_id=parent_run_id)
+        self._run_identities[run_key] = identity
         for conversation in messages:
             self.trace.record_event(
                 "model_request",
                 messages=[_message_payload(message) for message in conversation],
-                agent_role=role,
+                **identity,
             )
         del parent_run_id
 
@@ -475,14 +536,16 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         *,
         run_id: Any,
         parent_run_id: Any = None,
-        **_: Any,
+        **kwargs: Any,
     ) -> None:
-        role = self._model_roles.pop(str(run_id), None)
+        identity = self._callback_identity(
+            kwargs, parent_run_id=parent_run_id, run_id=run_id
+        )
         self.trace.record_model_usage(response)
         self.trace.record_event(
             "model_response",
             messages=_response_messages(response),
-            agent_role=role,
+            **identity,
         )
         del parent_run_id
 
@@ -492,21 +555,26 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         *,
         run_id: Any,
         parent_run_id: Any = None,
-        **_: Any,
+        **kwargs: Any,
     ) -> None:
-        role = self._model_roles.pop(str(run_id), None)
+        identity = self._callback_identity(
+            kwargs, parent_run_id=parent_run_id, run_id=run_id
+        )
         self.trace.record_event(
             "model_error",
             error=str(error),
-            agent_role=role,
+            **identity,
         )
         del parent_run_id
 
-    def on_retry(self, retry_state: Any, *, run_id: Any, **_: Any) -> None:
-        del run_id
+    def on_retry(self, retry_state: Any, *, run_id: Any, **kwargs: Any) -> None:
+        identity = self._callback_identity(
+            kwargs, run_id=run_id, consume_run_id=False
+        )
         self.trace.record_event(
             "provider_retry",
             error=_retry_error(retry_state),
+            **identity,
         )
 
     def on_tool_start(
@@ -522,6 +590,8 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         tool_name = _tool_name(serialized, kwargs) or "unknown_tool"
         run_key = str(run_id)
         self.trace._tool_names[run_key] = tool_name
+        identity = self._callback_identity(kwargs, parent_run_id=parent_run_id)
+        self._run_identities[run_key] = identity
         arguments: Any = inputs
         if arguments is None:
             try:
@@ -533,6 +603,7 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
             tool_name=tool_name,
             call_id=run_key,
             arguments=arguments,
+            **identity,
         )
         del parent_run_id
 
@@ -545,6 +616,9 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         run_key = str(run_id)
+        identity = self._callback_identity(
+            kwargs, parent_run_id=parent_run_id, run_id=run_id
+        )
         self.trace.record_event(
             "tool_result",
             call_id=run_key,
@@ -554,6 +628,7 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
                 or "unknown_tool"
             ),
             result=_tool_result_payload(output),
+            **identity,
         )
         del parent_run_id
 
@@ -566,6 +641,9 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         run_key = str(run_id)
+        identity = self._callback_identity(
+            kwargs, parent_run_id=parent_run_id, run_id=run_id
+        )
         self.trace.record_event(
             "tool_error",
             call_id=run_key,
@@ -575,8 +653,37 @@ class _AgentRunCallbackHandler(BaseCallbackHandler):
                 or "unknown_tool"
             ),
             error=str(error),
+            **identity,
         )
         del parent_run_id
+
+    def _callback_identity(
+        self,
+        kwargs: Mapping[str, Any],
+        *,
+        parent_run_id: Any = None,
+        run_id: Any = None,
+        consume_run_id: bool = True,
+    ) -> dict[str, str]:
+        stored = (
+            self._run_identities.pop(str(run_id), None)
+            if run_id is not None and consume_run_id
+            else None
+        )
+        if stored is None and run_id is not None and not consume_run_id:
+            stored = self._run_identities.get(str(run_id))
+        identity = _agent_identity_from_callback(kwargs)
+        if identity is None:
+            identity = stored
+        if identity is None and parent_run_id is not None:
+            identity = self._run_identities.get(str(parent_run_id))
+        if identity is None:
+            identity = {
+                "agent_id": self.trace.agent_id,
+                "agent_name": self.trace.agent_name,
+                "agent_role": self.trace.agent_role,
+            }
+        return identity
 
 
 def _tool_name(
@@ -588,6 +695,120 @@ def _tool_name(
             if isinstance(value, str) and value:
                 return value
     return None
+
+
+def _clean_identity_value(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value[:120] if value else None
+
+
+def _complete_agent_identity(
+    agent_id: str | None,
+    agent_name: str | None,
+    agent_role: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Fill display metadata for the built-in agents while preserving custom IDs."""
+
+    if agent_id in {REVIEWER_AGENT_ID, "reviewer"}:
+        return (
+            REVIEWER_AGENT_ID,
+            agent_name or REVIEWER_AGENT_NAME,
+            agent_role or REVIEWER_AGENT_ROLE,
+        )
+    if agent_id in {PRIMARY_AGENT_ID, "primary"}:
+        return (
+            PRIMARY_AGENT_ID,
+            agent_name or PRIMARY_AGENT_NAME,
+            agent_role or PRIMARY_AGENT_ROLE,
+        )
+    if agent_id in {ORCHESTRATOR_AGENT_ID, "orchestrator"}:
+        return (
+            ORCHESTRATOR_AGENT_ID,
+            agent_name or ORCHESTRATOR_AGENT_NAME,
+            agent_role or ORCHESTRATOR_AGENT_ROLE,
+        )
+    if agent_id is None and agent_role == REVIEWER_AGENT_ROLE:
+        return REVIEWER_AGENT_ID, agent_name or REVIEWER_AGENT_NAME, agent_role
+    if agent_id is None and agent_role == PRIMARY_AGENT_ROLE:
+        return PRIMARY_AGENT_ID, agent_name or PRIMARY_AGENT_NAME, agent_role
+    if agent_id is None and agent_role == ORCHESTRATOR_AGENT_ROLE:
+        return ORCHESTRATOR_AGENT_ID, agent_name or ORCHESTRATOR_AGENT_NAME, agent_role
+    return agent_id, agent_name or agent_id, agent_role
+
+
+def _agent_id_for_role(role: str | None) -> str | None:
+    if role == REVIEWER_AGENT_ROLE:
+        return REVIEWER_AGENT_ID
+    if role == PRIMARY_AGENT_ROLE:
+        return PRIMARY_AGENT_ID
+    if role == ORCHESTRATOR_AGENT_ROLE:
+        return ORCHESTRATOR_AGENT_ID
+    return None
+
+
+def _apply_agent_identity(
+    payload: dict[str, Any],
+    *,
+    default_id: str | None,
+    default_name: str | None,
+    default_role: str | None,
+) -> None:
+    """Attach a small, stable identity envelope to every persisted event."""
+
+    agent_id = _clean_identity_value(payload.get("agent_id"))
+    agent_name = _clean_identity_value(payload.get("agent_name"))
+    agent_role = _clean_identity_value(payload.get("agent_role"))
+    has_explicit_identity = any(
+        value is not None for value in (agent_id, agent_name, agent_role)
+    )
+    agent_id = agent_id or _agent_id_for_role(agent_role) or default_id
+    agent_id, agent_name, agent_role = _complete_agent_identity(
+        agent_id,
+        agent_name or (default_name if not has_explicit_identity else None),
+        agent_role or (default_role if not has_explicit_identity else None),
+    )
+    if agent_id:
+        payload["agent_id"] = agent_id
+    if agent_name:
+        payload["agent_name"] = agent_name
+    if agent_role:
+        payload["agent_role"] = agent_role
+
+
+def _agent_identity_from_callback(
+    kwargs: Mapping[str, Any],
+) -> dict[str, str] | None:
+    metadata = kwargs.get("metadata")
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    tags = kwargs.get("tags")
+    role = _clean_identity_value(metadata.get("agent_role"))
+    agent_id = _clean_identity_value(
+        metadata.get("agent_id") or metadata.get("agent_name")
+    )
+    agent_name = _clean_identity_value(metadata.get("agent_name"))
+    if (
+        role is None
+        and isinstance(tags, (list, tuple, set, frozenset))
+        and "cad-reviewer" in tags
+    ):
+        role = REVIEWER_AGENT_ROLE
+    if agent_id is None and role is None and agent_name is None:
+        return None
+    agent_id = agent_id or _agent_id_for_role(role)
+    agent_id, agent_name, role = _complete_agent_identity(agent_id, agent_name, role)
+    identity = {
+        key: value
+        for key, value in (
+            ("agent_id", agent_id),
+            ("agent_name", agent_name),
+            ("agent_role", role),
+        )
+        if value is not None
+    }
+    return identity or None
 
 
 def _message_payload(message: Any) -> dict[str, Any]:
@@ -871,6 +1092,17 @@ __all__ = [
     "CONVERSATION_LOG_NAME",
     "DEFAULT_MAX_CONTEXT_CHARS",
     "LEGACY_AGENT_RUN_LOG_NAME",
+    "ORCHESTRATOR_AGENT_ID",
+    "ORCHESTRATOR_AGENT_NAME",
+    "ORCHESTRATOR_AGENT_ROLE",
+    "ORCHESTRATOR_EVENT_TYPES",
+    "PRIMARY_AGENT_ID",
+    "PRIMARY_AGENT_NAME",
+    "PRIMARY_AGENT_ROLE",
+    "REVIEWER_AGENT_ID",
+    "REVIEWER_AGENT_NAME",
+    "REVIEWER_AGENT_ROLE",
+    "REVIEWER_EVENT_TYPES",
     "ConversationLog",
     "ConversationLogError",
 ]

@@ -10,7 +10,21 @@ from .cad_executor import (
     redact_credentials,
 )
 from .contracts import ToolUseRecord
-from .agent_logging import CONVERSATION_LOG_NAME, ConversationLog
+from .agent_logging import (
+    CONVERSATION_LOG_NAME,
+    ORCHESTRATOR_AGENT_ID,
+    ORCHESTRATOR_AGENT_NAME,
+    ORCHESTRATOR_AGENT_ROLE,
+    ORCHESTRATOR_EVENT_TYPES,
+    PRIMARY_AGENT_ID,
+    PRIMARY_AGENT_NAME,
+    PRIMARY_AGENT_ROLE,
+    REVIEWER_AGENT_ID,
+    REVIEWER_AGENT_NAME,
+    REVIEWER_AGENT_ROLE,
+    REVIEWER_EVENT_TYPES,
+    ConversationLog,
+)
 from .cad_review import ReviewFinding, ReviewResult, review_cad
 from .harnesses import (
     AgentHarness,
@@ -109,6 +123,10 @@ __all__ = [
     "CADExecutor",
     "CancellationToken",
     "CONVERSATION_LOG_NAME",
+    "ORCHESTRATOR_AGENT_ID",
+    "ORCHESTRATOR_AGENT_NAME",
+    "ORCHESTRATOR_AGENT_ROLE",
+    "ORCHESTRATOR_EVENT_TYPES",
     "CURRENT_ARTIFACT_NAME",
     "ConversationLog",
     "DEFAULT_OUTPUT_BYTES",
@@ -139,12 +157,19 @@ __all__ = [
     "ProjectStateError",
     "ProjectStore",
     "PromptValidationError",
+    "PRIMARY_AGENT_ID",
+    "PRIMARY_AGENT_NAME",
+    "PRIMARY_AGENT_ROLE",
     "ProgressEvent",
     "ProgressEventError",
     "ProgressEventStore",
     "ProgressUpdate",
     "RESTART_RECOVERY_REASON",
     "ReferenceGroundedAgent",
+    "REVIEWER_AGENT_ID",
+    "REVIEWER_AGENT_NAME",
+    "REVIEWER_AGENT_ROLE",
+    "REVIEWER_EVENT_TYPES",
     "ReviewFinding",
     "ReviewResult",
     "RestrictedAgentTools",

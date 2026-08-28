@@ -116,6 +116,10 @@ code, pre, time, .trace-eyebrow, .trace-count, .event-kind, .project-row-meta, .
 .timeline-tabs button.selected::after { background: var(--accent); }
 .trace-search { width: min(280px, 38%); }
 .filter-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; border-bottom: 1px solid #2d3136; background: #15171a; }
+.filter-controls { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.agent-filter { display: flex; align-items: center; gap: 6px; color: #7f878f; font: 9px "SFMono-Regular", Consolas, monospace; white-space: nowrap; }
+.agent-filter select { max-width: 155px; min-height: 27px; padding: 0 22px 0 7px; border: 1px solid #34393e; border-radius: 3px; color: #bcc3c9; background: #202428; font: 9px "SFMono-Regular", Consolas, monospace; }
+.agent-filter select:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .event-filters { display: flex; align-items: center; gap: 5px; }
 .event-filters button, .follow-toggle { min-height: 27px; padding: 0 8px; border: 1px solid #34393e; border-radius: 3px; color: #8f969e; background: transparent; font-size: 9px; cursor: pointer; }
 .event-filters button:hover, .follow-toggle:hover { color: #dddfe2; border-color: #515860; }
@@ -126,7 +130,7 @@ code, pre, time, .trace-eyebrow, .trace-count, .event-kind, .project-row-meta, .
 .follow-toggle.selected span { background: var(--success); }
 .timeline-scroll { position: relative; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .timeline-spacer { position: relative; min-width: 0; }
-.timeline-row { position: absolute; top: 0; right: 0; left: 0; display: grid; width: 100%; height: 58px; grid-template-columns: 86px minmax(0, 1fr) auto 76px; align-items: center; gap: 9px; padding: 0 13px; border: 0; border-bottom: 1px solid #292d31; color: var(--text); background: var(--surface-1); text-align: left; cursor: pointer; }
+.timeline-row { position: absolute; top: 0; right: 0; left: 0; display: grid; width: 100%; height: 58px; grid-template-columns: 86px 126px minmax(0, 1fr) auto 76px; align-items: center; gap: 9px; padding: 0 13px; border: 0; border-bottom: 1px solid #292d31; color: var(--text); background: var(--surface-1); text-align: left; cursor: pointer; }
 .timeline-row:hover { background: #202328; }
 .timeline-row.selected { background: #242c33; box-shadow: inset 2px 0 var(--accent); }
 .timeline-row.error { box-shadow: inset 2px 0 var(--error); }
@@ -136,6 +140,11 @@ code, pre, time, .trace-eyebrow, .trace-count, .event-kind, .project-row-meta, .
 .kind-tools { color: #efad61; background: #412e1b; }
 .kind-run { color: #9fc6eb; background: #23384b; }
 .kind-error { color: #f39a9c; background: #492426; }
+.event-agent { display: block; min-width: 0; overflow: hidden; padding: 4px 6px; border: 1px solid #3b434b; border-radius: 2px; color: #b8c0c8; background: #252a2f; font: 9px "SFMono-Regular", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.event-agent.agent-primary { border-color: #385544; color: #9bd2ad; background: #20352a; }
+.event-agent.agent-reviewer { border-color: #665031; color: #e5b56f; background: #392b1b; }
+.event-agent.agent-orchestrator { border-color: #38536c; color: #9fc7e9; background: #213345; }
+.event-agent.agent-unknown { color: #9aa1a8; background: #25282c; }
 .event-copy { display: block; min-width: 0; }
 .event-copy strong, .event-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .event-copy strong { color: #dfe2e5; font-size: 11px; font-weight: 550; }
@@ -205,7 +214,7 @@ code, pre, time, .trace-eyebrow, .trace-count, .event-kind, .project-row-meta, .
   .trace-shell { grid-template-columns: 220px minmax(0, 1fr); }
   .trace-topbar { grid-template-columns: 220px minmax(0, 1fr) auto; }
   .trace-metrics div { min-width: 91px; padding-right: 12px; }
-  .timeline-row { grid-template-columns: 76px minmax(0, 1fr) 68px; }
+  .timeline-row { grid-template-columns: 76px 108px minmax(0, 1fr) 68px; }
   .result-status { display: none; }
 }
 

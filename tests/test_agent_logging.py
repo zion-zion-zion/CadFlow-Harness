@@ -6,7 +6,12 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
-from backend.agent_logging import ConversationLog
+from backend.agent_logging import (
+    ORCHESTRATOR_AGENT_ID,
+    PRIMARY_AGENT_ID,
+    REVIEWER_AGENT_ID,
+    ConversationLog,
+)
 from backend.cad_executor import redact_credentials
 
 
@@ -110,6 +115,10 @@ def test_conversation_log_persists_turn_model_and_tool_lifecycle(tmp_path: Path)
         "reasoning_summary": "auto",
     }
     assert records[-1]["payload"]["status"] == "succeeded"
+    assert records[0]["payload"]["agent_id"] == PRIMARY_AGENT_ID
+    assert records[0]["payload"]["agent_role"] == "primary"
+    assert records[-1]["payload"]["agent_id"] == ORCHESTRATOR_AGENT_ID
+    assert records[-1]["payload"]["agent_role"] == "orchestrator"
     assert set(payload) == {
         "conversation_id",
         "payload",
@@ -152,6 +161,73 @@ def test_conversation_log_persists_turn_model_and_tool_lifecycle(tmp_path: Path)
     assert "sk-secret-value" not in serialized
     assert "sk-system-secret" not in serialized
     assert "sk-another-secret" not in serialized
+
+
+def test_conversation_log_attributes_nested_events_to_the_emitting_agent(
+    tmp_path: Path,
+) -> None:
+    trace = ConversationLog(tmp_path, turn_id="turn-1")
+    handler = trace.callback_handler()
+    handler.on_chat_model_start(
+        {"name": "primary"},
+        [[HumanMessage(content="Build it.")]],
+        run_id="primary-model",
+        metadata={
+            "agent_id": PRIMARY_AGENT_ID,
+            "agent_name": "Text-to-CAD Primary",
+            "agent_role": "primary",
+        },
+    )
+    handler.on_tool_start(
+        {"name": "write_file"},
+        "{}",
+        run_id="primary-tool",
+        parent_run_id="primary-model",
+        inputs={},
+    )
+    handler.on_tool_end({}, run_id="primary-tool", parent_run_id="primary-model")
+
+    reviewer = trace.callback_handler()
+    reviewer.on_chat_model_start(
+        {"name": "reviewer"},
+        [[HumanMessage(content="Review it.")]],
+        run_id="reviewer-model",
+        metadata={"agent_role": "reviewer"},
+    )
+    reviewer.on_llm_end(
+        {"generations": [[{"message": {"role": "assistant", "content": "pass"}}]]},
+        run_id="reviewer-model",
+    )
+
+    records = trace.data["records"]
+    by_type = {
+        (record["type"], record["payload"].get("call_id")): record["payload"]
+        for record in records
+    }
+    assert by_type[("tool_call", "primary-tool")]["agent_id"] == PRIMARY_AGENT_ID
+    assert by_type[("tool_result", "primary-tool")]["agent_id"] == PRIMARY_AGENT_ID
+    reviewer_payloads = [
+        record["payload"]
+        for record in records
+        if record["type"] in {"model_request", "model_response"}
+        and record["payload"].get("agent_id") == REVIEWER_AGENT_ID
+    ]
+    assert len(reviewer_payloads) == 2
+
+
+def test_conversation_log_assigns_reviewer_and_orchestrator_events(
+    tmp_path: Path,
+) -> None:
+    trace = ConversationLog(tmp_path)
+    trace.record_event("final_review", status="pass")
+    trace.record_event("assembly_pipeline_failed", status="failed")
+
+    records = trace.data["records"]
+
+    assert records[0]["payload"]["agent_id"] == REVIEWER_AGENT_ID
+    assert records[0]["payload"]["agent_role"] == "reviewer"
+    assert records[1]["payload"]["agent_id"] == ORCHESTRATOR_AGENT_ID
+    assert records[1]["payload"]["agent_role"] == "orchestrator"
 
 
 def test_conversation_log_accumulates_cached_and_uncached_token_usage(

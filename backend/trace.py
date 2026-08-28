@@ -9,7 +9,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .agent_logging import CONVERSATION_LOG_NAME
+from .agent_logging import (
+    CONVERSATION_LOG_NAME,
+    ORCHESTRATOR_AGENT_ID,
+    ORCHESTRATOR_AGENT_NAME,
+    ORCHESTRATOR_AGENT_ROLE,
+    ORCHESTRATOR_EVENT_TYPES as _ORCHESTRATOR_EVENT_TYPES,
+    PRIMARY_AGENT_ID,
+    PRIMARY_AGENT_NAME,
+    PRIMARY_AGENT_ROLE,
+    REVIEWER_AGENT_ID,
+    REVIEWER_AGENT_NAME,
+    REVIEWER_AGENT_ROLE,
+    REVIEWER_EVENT_TYPES as _REVIEWER_EVENT_TYPES,
+)
 from .cad_executor import redact_credentials
 
 
@@ -21,6 +34,19 @@ _SENSITIVE_KEY = re.compile(
 )
 _ERROR_TYPES = frozenset(
     {"model_error", "provider_retry", "tool_error", "parse_error"}
+)
+_AGENT_EVENT_TYPES = frozenset(
+    {
+        "model_request",
+        "model_response",
+        "model_error",
+        "provider_retry",
+        "tool_call",
+        "tool_result",
+        "tool_error",
+        "backend_tool",
+        "assistant_message",
+    }
 )
 
 
@@ -104,6 +130,7 @@ def read_trace(
     events: list[dict[str, Any]] = []
     next_offset = offset
     has_incomplete_tail = False
+    agents_by_turn: dict[str, tuple[str | None, str | None, str | None]] = {}
     with path.open("rb") as stream:
         stream.seek(offset)
         while True:
@@ -118,10 +145,32 @@ def read_trace(
             if not raw_line.strip():
                 continue
             record = _decode_record(raw_line, cursor)
-            searchable = json.dumps(record, ensure_ascii=False, sort_keys=True)
+            turn_id = _optional_text(record.get("turn_id"))
+            summary = _event_summary(
+                record,
+                cursor,
+                len(raw_line),
+                fallback_identity=agents_by_turn.get(turn_id) if turn_id else None,
+            )
+            identity = (
+                summary["agent_id"],
+                summary["agent_name"],
+                summary["agent_role"],
+            )
+            if (
+                turn_id
+                and record.get("type") in _AGENT_EVENT_TYPES
+                and any(value is not None for value in identity)
+            ):
+                agents_by_turn[turn_id] = identity
+            searchable = json.dumps(
+                {"record": record, "summary": summary},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
             if normalized_query and normalized_query not in searchable.casefold():
                 continue
-            events.append(_event_summary(record, cursor, len(raw_line)))
+            events.append(summary)
 
     return TraceBatch(
         events=tuple(events),
@@ -217,11 +266,18 @@ def _redact_value(value: Any, *, key: str | None = None) -> Any:
 
 
 def _event_summary(
-    record: Mapping[str, Any], cursor: int, byte_size: int
+    record: Mapping[str, Any],
+    cursor: int,
+    byte_size: int,
+    *,
+    fallback_identity: tuple[str | None, str | None, str | None] | None = None,
 ) -> dict[str, Any]:
     event_type = str(record.get("type") or "unknown")
     payload = _payload(record)
     tool_name = _optional_text(payload.get("tool_name"))
+    agent_id, agent_name, agent_role = _event_agent_identity(
+        record, payload, fallback_identity=fallback_identity
+    )
     role = _event_role(record)
     title = _event_title(event_type, tool_name, role, record)
     summary = _summary_text(event_type, record)
@@ -237,6 +293,9 @@ def _event_summary(
         "turn_id": _optional_text(record.get("turn_id")),
         "type": event_type,
         "role": role,
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "agent_role": agent_role,
         "title": title,
         "summary": summary,
         "tool_name": tool_name,
@@ -259,6 +318,117 @@ def _event_role(record: Mapping[str, Any]) -> str | None:
     first = messages[0]
     if isinstance(first, Mapping):
         return _optional_text(first.get("role"))
+    return None
+
+
+def _event_agent_identity(
+    record: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    *,
+    fallback_identity: tuple[str | None, str | None, str | None] | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    """Read agent identity from new payloads and tolerate older traces."""
+
+    agent_id = _optional_text(payload.get("agent_id")) or _optional_text(
+        record.get("agent_id")
+    )
+    agent_name = _optional_text(payload.get("agent_name")) or _optional_text(
+        record.get("agent_name")
+    )
+    agent_role = _optional_text(payload.get("agent_role")) or _optional_text(
+        record.get("agent_role")
+    )
+    message_identity = _message_agent_identity(payload.get("messages"))
+    agent_id = agent_id or (message_identity[0] if message_identity else None)
+    agent_name = agent_name or (message_identity[1] if message_identity else None)
+    agent_role = agent_role or (message_identity[2] if message_identity else None)
+    if agent_id in {"primary", PRIMARY_AGENT_ID}:
+        agent_id, agent_name, agent_role = (
+            PRIMARY_AGENT_ID,
+            agent_name or PRIMARY_AGENT_NAME,
+            agent_role or PRIMARY_AGENT_ROLE,
+        )
+    elif agent_id in {"reviewer", REVIEWER_AGENT_ID}:
+        agent_id, agent_name, agent_role = (
+            REVIEWER_AGENT_ID,
+            agent_name or REVIEWER_AGENT_NAME,
+            agent_role or REVIEWER_AGENT_ROLE,
+        )
+    elif agent_id in {"orchestrator", ORCHESTRATOR_AGENT_ID}:
+        agent_id, agent_name, agent_role = (
+            ORCHESTRATOR_AGENT_ID,
+            agent_name or ORCHESTRATOR_AGENT_NAME,
+            agent_role or ORCHESTRATOR_AGENT_ROLE,
+        )
+    event_type = str(record.get("type") or "")
+    if agent_id is None and event_type in _ORCHESTRATOR_EVENT_TYPES:
+        agent_id, agent_name, agent_role = (
+            ORCHESTRATOR_AGENT_ID,
+            ORCHESTRATOR_AGENT_NAME,
+            ORCHESTRATOR_AGENT_ROLE,
+        )
+    if agent_id is None and event_type in _REVIEWER_EVENT_TYPES:
+        agent_id, agent_name, agent_role = (
+            REVIEWER_AGENT_ID,
+            REVIEWER_AGENT_NAME,
+            REVIEWER_AGENT_ROLE,
+        )
+    if agent_id is None and agent_role == REVIEWER_AGENT_ROLE:
+        agent_id, agent_name = REVIEWER_AGENT_ID, agent_name or REVIEWER_AGENT_NAME
+    if agent_id is None and agent_role == ORCHESTRATOR_AGENT_ROLE:
+        agent_id, agent_name = (
+            ORCHESTRATOR_AGENT_ID,
+            agent_name or ORCHESTRATOR_AGENT_NAME,
+        )
+    if agent_id is None and agent_role == PRIMARY_AGENT_ROLE:
+        agent_id, agent_name = PRIMARY_AGENT_ID, agent_name or PRIMARY_AGENT_NAME
+    if agent_id is None and fallback_identity is not None:
+        fallback_id, fallback_name, fallback_role = fallback_identity
+        agent_id = fallback_id
+        agent_name = agent_name or fallback_name
+        agent_role = agent_role or fallback_role
+    if agent_id is None and event_type in _AGENT_EVENT_TYPES:
+        agent_id, agent_name, agent_role = (
+            PRIMARY_AGENT_ID,
+            PRIMARY_AGENT_NAME,
+            PRIMARY_AGENT_ROLE,
+        )
+    if agent_name is None:
+        if agent_id == PRIMARY_AGENT_ID:
+            agent_name = PRIMARY_AGENT_NAME
+        elif agent_id == REVIEWER_AGENT_ID:
+            agent_name = REVIEWER_AGENT_NAME
+        elif agent_id is not None:
+            agent_name = agent_id
+    return agent_id, agent_name, agent_role
+
+
+def _message_agent_identity(
+    messages: Any,
+) -> tuple[str | None, str | None, str | None] | None:
+    """Recover the agent name emitted by LangGraph in older message payloads."""
+
+    if not isinstance(messages, list):
+        return None
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        role = _optional_text(message.get("role"))
+        name = _optional_text(message.get("name"))
+        if not name or role not in {"assistant", "ai"}:
+            continue
+        normalized_name = name.casefold()
+        if normalized_name in {PRIMARY_AGENT_ID, PRIMARY_AGENT_ROLE}:
+            return PRIMARY_AGENT_ID, PRIMARY_AGENT_NAME, PRIMARY_AGENT_ROLE
+        if normalized_name in {REVIEWER_AGENT_ID, REVIEWER_AGENT_ROLE}:
+            return REVIEWER_AGENT_ID, REVIEWER_AGENT_NAME, REVIEWER_AGENT_ROLE
+        if normalized_name in {ORCHESTRATOR_AGENT_ID, ORCHESTRATOR_AGENT_ROLE}:
+            return (
+                ORCHESTRATOR_AGENT_ID,
+                ORCHESTRATOR_AGENT_NAME,
+                ORCHESTRATOR_AGENT_ROLE,
+            )
+        return name, name, None
     return None
 
 

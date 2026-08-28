@@ -39,6 +39,121 @@ def test_trace_summary_extracts_responses_reasoning_summary() -> None:
     )
 
 
+def test_trace_summary_recovers_legacy_agent_names_and_infers_tool_owner(
+    tmp_path: Path,
+) -> None:
+    app = create_app(projects_root=tmp_path)
+    client = TestClient(app)
+    project = client.post("/api/projects", json={"name": "Legacy agent run"}).json()
+    trace_path = tmp_path / project["project_id"] / "conversation.jsonl"
+    trace_path.write_bytes(
+        _line(
+            {
+                "sequence": 1,
+                "timestamp": "2026-08-19T00:00:00.000+00:00",
+                "type": "graph_initialized",
+                "turn_id": "turn-1",
+                "payload": {"graph_id": "graph-1"},
+            }
+        )
+        + _line(
+            {
+                "sequence": 2,
+                "timestamp": "2026-08-19T00:00:00.500+00:00",
+                "type": "model_response",
+                "turn_id": "turn-1",
+                "payload": {
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "name": "text-to-cad-primary",
+                            "content": "ready",
+                        }
+                    ]
+                },
+            }
+        )
+        + _line(
+            {
+                "sequence": 3,
+                "timestamp": "2026-08-19T00:00:01.000+00:00",
+                "type": "tool_call",
+                "turn_id": "turn-1",
+                "payload": {"tool_name": "write_file", "call_id": "tool-1", "arguments": {}},
+            }
+        )
+    )
+
+    events = client.get(f"/api/projects/{project['project_id']}/trace").json()["events"]
+
+    assert events[0]["agent_id"] == "cad-orchestrator"
+    assert events[0]["agent_name"] == "CAD Orchestrator"
+    assert events[1]["agent_id"] == "text-to-cad-primary"
+    assert events[2]["agent_id"] == "text-to-cad-primary"
+
+
+def test_trace_summary_preserves_legacy_reviewer_role(
+    tmp_path: Path,
+) -> None:
+    app = create_app(projects_root=tmp_path)
+    client = TestClient(app)
+    project = client.post("/api/projects", json={"name": "Legacy reviewer run"}).json()
+    trace_path = tmp_path / project["project_id"] / "conversation.jsonl"
+    trace_path.write_bytes(
+        _line(
+            {
+                "sequence": 1,
+                "timestamp": "2026-08-19T00:00:00.000+00:00",
+                "type": "model_request",
+                "turn_id": "turn-1",
+                "payload": {
+                    "agent_role": "reviewer",
+                    "messages": [{"role": "system", "content": "Review this."}],
+                },
+            }
+        )
+        + _line(
+            {
+                "sequence": 2,
+                "timestamp": "2026-08-19T00:00:01.000+00:00",
+                "type": "model_response",
+                "turn_id": "turn-1",
+                "payload": {
+                    "agent_role": "reviewer",
+                    "messages": [{"role": "assistant", "content": "Pass."}],
+                },
+            }
+        )
+        + _line(
+            {
+                "sequence": 3,
+                "timestamp": "2026-08-19T00:00:01.100+00:00",
+                "type": "final_review",
+                "turn_id": "turn-1",
+                "payload": {"status": "pass", "summary": "Review passed."},
+            }
+        )
+    )
+
+    events = client.get(f"/api/projects/{project['project_id']}/trace").json()["events"]
+
+    assert [event["agent_id"] for event in events] == [
+        "cad-reviewer",
+        "cad-reviewer",
+        "cad-reviewer",
+    ]
+    assert [event["agent_name"] for event in events] == [
+        "CAD Reviewer",
+        "CAD Reviewer",
+        "CAD Reviewer",
+    ]
+    assert [event["agent_role"] for event in events] == [
+        "reviewer",
+        "reviewer",
+        "reviewer",
+    ]
+
+
 def test_trace_api_lists_projects_reads_incrementally_and_redacts(
     tmp_path: Path,
 ) -> None:
@@ -72,6 +187,9 @@ def test_trace_api_lists_projects_reads_incrementally_and_redacts(
         "payload": {
             "tool_name": "read_file",
             "call_id": "tool-1",
+            "agent_id": "text-to-cad-primary",
+            "agent_name": "Text-to-CAD Primary",
+            "agent_role": "primary",
             "arguments": {"authorization": "Bearer abcdefghijklmnop", "path": "/code/model.py"},
         },
     }
@@ -108,6 +226,9 @@ def test_trace_api_lists_projects_reads_incrementally_and_redacts(
         "tool_call",
     ]
     assert batch["events"][1]["call_id"] == "tool-1"
+    assert batch["events"][1]["agent_id"] == "text-to-cad-primary"
+    assert batch["events"][1]["agent_name"] == "Text-to-CAD Primary"
+    assert batch["events"][1]["agent_role"] == "primary"
     assert batch["has_incomplete_tail"] is True
 
     detail = client.get(

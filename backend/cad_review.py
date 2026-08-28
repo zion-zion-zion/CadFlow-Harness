@@ -17,6 +17,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
 
 from .cad_executor import ExecutionResult
+from .agent_logging import (
+    REVIEWER_AGENT_ID,
+    REVIEWER_AGENT_NAME,
+    REVIEWER_AGENT_ROLE,
+)
 from .product_artifact import ProductArtifactError, load_product_artifact
 
 
@@ -558,7 +563,11 @@ def _model_findings(
     if reviewer_callbacks:
         invoke_config = {
             "callbacks": list(reviewer_callbacks),
-            "metadata": {"agent_role": "reviewer"},
+            "metadata": {
+                "agent_id": REVIEWER_AGENT_ID,
+                "agent_name": REVIEWER_AGENT_NAME,
+                "agent_role": REVIEWER_AGENT_ROLE,
+            },
             "tags": ["cad-reviewer"],
         }
     runnable = (
