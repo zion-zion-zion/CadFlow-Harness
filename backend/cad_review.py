@@ -441,6 +441,7 @@ def _review_prompt(
     model_source: str,
     manifest: Mapping[str, Any],
     execution_result: ExecutionResult,
+    design_contract: Mapping[str, Any] | None = None,
 ) -> str:
     execution_evidence = {
         "result_kind": execution_result.result_kind,
@@ -467,8 +468,12 @@ def _review_prompt(
         "Return JSON with status (pass or fail), summary, findings, and "
         "checked_requirements. Any clear conflict is fail; otherwise pass.\n\n"
         f"USER REQUEST:\n{request_text[:MAX_REQUEST_CHARS]}\n\n"
-        f"MODEL SOURCES:\n{model_source[:MAX_MODEL_SOURCE_CHARS]}\n\n"
-        "DETERMINISTIC EVIDENCE:\n"
+        "Design Contract (host-validated intent for this request; this does not "
+        "replace PRODUCT_SPEC in Model Source):\n"
+        + json.dumps(dict(design_contract or {}), sort_keys=True)
+        + "\n\n"
+        + f"MODEL SOURCES:\n{model_source[:MAX_MODEL_SOURCE_CHARS]}\n\n"
+        + "DETERMINISTIC EVIDENCE:\n"
         + json.dumps(
             {"execution": execution_evidence, "review_manifest": manifest},
             sort_keys=True,
@@ -527,6 +532,7 @@ def _model_findings(
     review_root: Path,
     reviewer_factory: Callable[[Any], Any] | None,
     reviewer_callbacks: Sequence[Any] | None,
+    design_contract: Mapping[str, Any] | None,
 ) -> tuple[str, str, list[ReviewFinding], tuple[str, ...]]:
     if settings is None:
         raise RuntimeError("reviewer model settings are not configured")
@@ -550,6 +556,7 @@ def _model_findings(
                         model_source,
                         manifest,
                         execution_result,
+                        design_contract,
                     ),
                 },
                 {"type": "text", "text": "Single isometric evidence:"},
@@ -592,6 +599,7 @@ def review_cad(
     settings: Any = None,
     reviewer_factory: Callable[[Any], Any] | None = None,
     reviewer_callbacks: Sequence[Any] | None = None,
+    design_contract: Mapping[str, Any] | None = None,
 ) -> ReviewResult:
     """Review one validated model and persist only the review result."""
 
@@ -634,6 +642,7 @@ def review_cad(
                 review_root=review_root,
                 reviewer_factory=reviewer_factory,
                 reviewer_callbacks=reviewer_callbacks,
+                design_contract=design_contract,
             )
             findings.extend(model_findings)
             checked = model_checked or checked

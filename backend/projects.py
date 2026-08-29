@@ -31,6 +31,7 @@ from .product_artifact import (
     accept_product_artifact,
     load_product_artifact,
 )
+from .repair_state import ProjectRepairState, REPAIR_STATE_DIRECTORY_NAME
 from .scene_validation import validate_scene_artifact
 
 
@@ -437,6 +438,14 @@ class ProjectStore:
     def conversation_turns(self, project_id: str) -> list[dict[str, Any]]:
         return self.conversation_log(project_id).turns()
 
+    def repair_state(self, project_id: str) -> ProjectRepairState:
+        """Return the durable progressive-repair state for one Project."""
+
+        project_dir = self.project_directory(project_id)
+        with self._lock:
+            self.get_project(project_id)
+            return ProjectRepairState(project_dir)
+
     def current_artifact_version(self, project_id: str) -> int | None:
         path = self.project_directory(project_id) / CURRENT_ARTIFACT_NAME
         if not path.is_file() or path.is_symlink():
@@ -492,6 +501,7 @@ class ProjectStore:
                 "large_tool_results",
                 "previews",
                 ".cad-review",
+                REPAIR_STATE_DIRECTORY_NAME,
                 "__pycache__",
             ):
                 path = project_dir / name

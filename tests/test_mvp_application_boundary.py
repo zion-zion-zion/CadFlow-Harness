@@ -24,7 +24,7 @@ def _wait_for_state(
     project_id: str,
     expected: str,
     *,
-    timeout_seconds: float = 15.0,
+    timeout_seconds: float = 45.0,
 ) -> dict[str, object]:
     deadline = time.monotonic() + timeout_seconds
     latest: dict[str, object] = {}

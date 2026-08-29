@@ -11,6 +11,7 @@ from backend.cad_executor import CADExecutor, ExecutionResult
 from backend.cad_review import _default_reviewer_factory, _review_prompt, review_cad
 from backend.agent import create_agent_tools
 from backend.model_source import create_model_source
+from backend.repair_state import ProjectRepairState, RunIdentity
 from backend.restricted_tools import AgentModelValidator
 from backend.scene_validation import SceneParseResult
 
@@ -277,11 +278,85 @@ def test_cad_review_tool_reviews_the_latest_validation(tmp_path: Path) -> None:
         )
     }
 
+    tools["submit_design_contract"].invoke(
+        {
+            "task_type": "single_part",
+            "explicit_requirements": ["A rectangular block."],
+            "key_components": ["rectangular block"],
+            "assumptions": [],
+            "implementation_stages": ["Create the block"],
+        }
+    )
     tools["validate_model"].invoke({})
     result = tools["cad_review"].invoke({})
 
     assert result["status"] == "pass"
     assert any(record.tool_name == "cad_review" for record in validator.tool_use_records)
+
+
+def test_cad_review_receives_the_current_request_design_contract(
+    tmp_path: Path,
+) -> None:
+    execution = _build_project(tmp_path)
+    identity = RunIdentity(
+        project_id=tmp_path.name,
+        turn_id="turn-review-contract",
+        request_id="request-review-contract",
+        request_text="A 10 x 20 x 30 mm rectangular block.",
+    )
+    repair_state = ProjectRepairState(tmp_path)
+    contract = repair_state.submit_design_contract(
+        identity,
+        task_type="single_part",
+        explicit_requirements=["A 10 x 20 x 30 mm rectangular block."],
+        key_components=["rectangular block"],
+        assumptions=[],
+        implementation_stages=["Create the dimensioned block"],
+    )
+
+    class _ContractReviewer:
+        saw_contract = False
+
+        def invoke(self, messages: object, config: object = None) -> object:
+            del config
+            rendered = str(messages)
+            type(self).saw_contract = (
+                "Design Contract" in rendered
+                and contract.contract_id in rendered
+                and '"task_type": "single_part"' in rendered
+            )
+            return {
+                "status": "pass",
+                "summary": "The contracted block is present.",
+                "findings": [],
+                "checked_requirements": ["10 x 20 x 30 mm rectangular block"],
+            }
+
+    class _Executor:
+        def execute(self, *_args: object, **_kwargs: object) -> ExecutionResult:
+            return execution
+
+    validator = AgentModelValidator(project_dir=tmp_path, executor=_Executor())
+    validator.begin_run()
+    tools = {
+        item.name: item
+        for item in create_agent_tools(
+            validator,
+            request_text=identity.request_text,
+            repair_state=repair_state,
+            run_identity=identity,
+            review_settings=object(),
+            reviewer_factory=lambda _settings: _ContractReviewer(),
+        )
+    }
+
+    tools["validate_model"].invoke({})
+    result = tools["cad_review"].invoke({})
+
+    assert result["status"] == "pass"
+    assert _ContractReviewer.saw_contract is True
+    attempts = repair_state.attempts(identity)
+    assert [attempt.attempt_kind for attempt in attempts] == ["validation", "review"]
 
 
 def test_reviewer_usage_is_added_to_the_conversation_log(tmp_path: Path) -> None:

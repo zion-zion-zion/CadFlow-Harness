@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import importlib.metadata
 import math
@@ -34,6 +35,13 @@ from .events import ProgressUpdate
 from .harnesses import AgentHarness
 from .projects import ProjectStore
 from .projects import ProjectState
+from .repair_state import (
+    AttemptRecord,
+    DesignContract,
+    LastPassingSource,
+    ProjectRepairState,
+    RunIdentity,
+)
 from .restricted_tools import AgentModelValidator
 from .scene_validation import SceneParseResult
 
@@ -221,6 +229,9 @@ class AgentRunOutcome:
     harness: AgentHarness = AgentHarness.DEEPAGENTS
     implementation_version: str | None = DEEPAGENTS_IMPLEMENTATION_VERSION
     review_result: ReviewResult | None = None
+    design_contract: DesignContract | None = None
+    attempt_ledger: tuple[AttemptRecord, ...] = ()
+    last_passing_source: LastPassingSource | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "harness", AgentHarness(self.harness))
@@ -271,6 +282,19 @@ class AgentRunOutcome:
             ],
             "review_result": (
                 self.review_result.to_dict() if self.review_result is not None else None
+            ),
+            "design_contract": (
+                self.design_contract.to_dict()
+                if self.design_contract is not None
+                else None
+            ),
+            "attempt_ledger": [
+                attempt.to_dict() for attempt in self.attempt_ledger
+            ],
+            "last_passing_source": (
+                self.last_passing_source.to_dict()
+                if self.last_passing_source is not None
+                else None
             ),
         }
 
@@ -381,6 +405,13 @@ work progresses: mark the active step, complete finished steps, and add or
 adjust steps when validation reveals new work. Do not write or edit Project
 source before the initial todo plan exists.
 
+After inspecting the existing source and creating the todo plan, call `submit_design_contract` exactly once with the task type, every explicit user
+requirement, the key components, only necessary assumptions, and the planned
+implementation stages. The host binds and validates it against this Project,
+turn, and request. It must be accepted before the first `validate_model` call.
+This Design Contract is review intent and does not replace the source-level `PRODUCT_SPEC`; continue to maintain `PRODUCT_SPEC` where the executor contract
+requires it.
+
 ## Implementation and validation loop
 
 Choose a workflow before implementing the requested geometry:
@@ -417,6 +448,16 @@ comment-only cleanup, and unrequested detail, then call `cad_review` in the same
 turn. Leave enough of the reported run budget to complete the final review.
 
 For every validation, treat the structured result as the source of truth.
+Read the `failure_packet` before the raw diagnostics. It gives the stable
+failure type and signature, key evidence, likely source scope, conditions to
+preserve, and the recommended next repair. Then use the complete raw result for
+details. Read `attempt_feedback` on every attempt: when the same stable failure repeats,
+choose a materially different repair; when it reports oscillation, stop cycling
+between prior states; when it reports broken conditions or a regression from
+Last Passing Source, preserve or restore those passing conditions while fixing
+only the relevant changed files. An `INFRASTRUCTURE_ERROR` explicitly disallows
+source edits and must not trigger a CAD source edit; retry the host operation or
+report the infrastructure blocker instead.
 Inspect the reported status, failure type, location, preflight result,
 imported modules, geometry facts, Scene Artifact status, and diagnostic
 output. For product validation, also inspect `result_kind`, component and Part
@@ -519,6 +560,8 @@ def create_agent_tools(
     validator: AgentModelValidator,
     *,
     request_text: str | None = None,
+    repair_state: ProjectRepairState | None = None,
+    run_identity: RunIdentity | None = None,
     review_settings: Any | None = None,
     reviewer_factory: Callable[[Any], Any] | None = None,
     reviewer_callbacks: Sequence[Any] | None = None,
@@ -531,12 +574,24 @@ def create_agent_tools(
     cancellation_token: object | None = None,
     on_progress: Callable[[ProgressUpdate], None] | None = None,
 ) -> tuple[BaseTool, ...]:
-    """Expose zero-argument CAD validation and review tools."""
+    """Expose the contract, CAD validation, and review tools for one run."""
 
     execution_attempts = 0
     latest_execution: ExecutionResult | None = None
     last_executed_source_revision: str | None = None
     timeout_message = _agent_run_timeout_message(run_timeout_seconds)
+    active_identity = run_identity or RunIdentity(
+        project_id=validator.project_dir.name,
+        turn_id="direct-run",
+        request_id=hashlib.sha256((request_text or "direct-run").encode()).hexdigest(),
+        request_text=request_text or "Direct CAD validation request",
+    )
+    if run_identity is not None and request_text is not None:
+        if run_identity.request_text != request_text:
+            raise AgentRunError(
+                "Run identity request does not match the current Agent request"
+            )
+    active_repair_state = repair_state or ProjectRepairState(validator.project_dir)
 
     def require_time_remaining() -> float | None:
         if _is_cancellation_requested(cancellation_token):
@@ -548,12 +603,47 @@ def create_agent_tools(
             raise AgentRunError(timeout_message)
         return remaining
 
+    @tool("submit_design_contract")
+    def submit_design_contract(
+        task_type: str,
+        explicit_requirements: list[str],
+        key_components: list[str],
+        assumptions: list[str],
+        implementation_stages: list[str],
+    ) -> dict[str, Any]:
+        """Submit the required host-validated Design Contract for this request.
+
+        ``task_type`` must be one of ``single_part``, ``assembly``,
+        ``modify_part``, or ``modify_assembly``. Requirements and stages must
+        be explicit non-empty lists. Assumptions may be empty and do not
+        replace ``PRODUCT_SPEC`` in the Python source.
+        """
+
+        require_time_remaining()
+        contract = active_repair_state.submit_design_contract(
+            active_identity,
+            task_type=task_type,
+            explicit_requirements=explicit_requirements,
+            key_components=key_components,
+            assumptions=assumptions,
+            implementation_stages=implementation_stages,
+        )
+        validator.record_tool_use(
+            "submit_design_contract", "host-bound design contract"
+        )
+        return {"status": "accepted", "contract": contract.to_dict()}
+
     @tool("validate_model")
     def validate_model() -> dict[str, Any]:
         """Validate the product and return bounded, structured failure evidence."""
 
         nonlocal execution_attempts, latest_execution, last_executed_source_revision
         remaining = require_time_remaining()
+        if active_repair_state.design_contract(active_identity) is None:
+            raise AgentRunError(
+                "A host-validated Design Contract bound to the current request "
+                "is required before the first validate_model call."
+            )
         source_revision = validator.source_revision()
         if source_revision == last_executed_source_revision:
             raise AgentRunError(
@@ -576,20 +666,19 @@ def create_agent_tools(
             )
             structured_result_received = isinstance(result, ExecutionResult)
         except Exception as exc:
-            if on_execution_error is None:
-                raise
             result = _execution_failure_result(exc)
-            on_execution_error(result)
+            if on_execution_error is not None:
+                on_execution_error(result)
             execution_recorded = True
         if not isinstance(result, ExecutionResult):
             error = AgentRunError("validate_model returned an invalid structured result")
-            if on_execution_error is None:
-                raise error
             result = _execution_failure_result(error)
-            on_execution_error(result)
+            if on_execution_error is not None:
+                on_execution_error(result)
             execution_recorded = True
         if structured_result_received:
             last_executed_source_revision = source_revision
+        attempt_record = active_repair_state.record_validation(active_identity, result)
         if on_execution is not None and not execution_recorded:
             on_execution(result)
         latest_execution = result
@@ -603,6 +692,12 @@ def create_agent_tools(
                 )
             )
         payload = result.to_dict()
+        payload["failure_packet"] = (
+            attempt_record.failure_packet.to_dict()
+            if attempt_record.failure_packet is not None
+            else None
+        )
+        payload["attempt_feedback"] = attempt_record.signals.to_dict()
         if run_deadline is not None:
             payload["run_time_remaining_seconds"] = max(
                 0.0,
@@ -625,6 +720,12 @@ def create_agent_tools(
 
         remaining = require_time_remaining()
         del remaining  # The reviewer client owns its own bounded timeout.
+        contract = active_repair_state.design_contract(active_identity)
+        if contract is None:
+            raise AgentRunError(
+                "A host-validated Design Contract bound to the current request "
+                "is required before cad_review."
+            )
         if latest_execution is None:
             result = ReviewResult(
                 status="fail",
@@ -650,12 +751,21 @@ def create_agent_tools(
                     settings=review_settings,
                     reviewer_factory=reviewer_factory,
                     reviewer_callbacks=reviewer_callbacks,
+                    design_contract=contract.to_dict(),
                 )
+        attempt_record = active_repair_state.record_review(active_identity, result)
         if on_review is not None:
             on_review(result)
-        return result.to_dict()
+        payload = result.to_dict()
+        payload["failure_packet"] = (
+            attempt_record.failure_packet.to_dict()
+            if attempt_record.failure_packet is not None
+            else None
+        )
+        payload["attempt_feedback"] = attempt_record.signals.to_dict()
+        return payload
 
-    return (validate_model, cad_review)
+    return (submit_design_contract, validate_model, cad_review)
 
 
 def build_deep_agent(
@@ -733,6 +843,8 @@ class ReferenceGroundedAgent:
         executor: Any | None = None,
         model: Any | None = None,
         conversation_log: ConversationLog | None = None,
+        repair_state: ProjectRepairState | None = None,
+        run_identity: RunIdentity | None = None,
     ) -> None:
         self.settings = settings
         self.repo_root = repo_root
@@ -740,6 +852,8 @@ class ReferenceGroundedAgent:
         self.executor = executor
         self.model = model
         self.conversation_log = conversation_log
+        self.repair_state = repair_state or ProjectRepairState(project_dir)
+        self.run_identity = run_identity
 
     def run(
         self,
@@ -756,6 +870,12 @@ class ReferenceGroundedAgent:
         timeout_message = _agent_run_timeout_message(run_timeout_seconds)
         deadline = started + run_timeout_seconds
         token = cancellation_token or CancellationToken()
+        active_identity = self.run_identity or RunIdentity(
+            project_id=Path(self.project_dir).expanduser().resolve().name,
+            turn_id="direct-run",
+            request_id=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            request_text=prompt,
+        )
 
         def emit(update: ProgressUpdate) -> None:
             if progress_callback is None:
@@ -808,6 +928,8 @@ class ReferenceGroundedAgent:
         agent_tools = create_agent_tools(
             validator,
             request_text=prompt,
+            repair_state=self.repair_state,
+            run_identity=active_identity,
             review_settings=self.settings,
             reviewer_callbacks=(
                 [self.conversation_log.callback_handler()]
@@ -963,6 +1085,24 @@ class AgentRunService:
             harness=AgentHarness.DEEPAGENTS.value,
             implementation_version=DEEPAGENTS_IMPLEMENTATION_VERSION,
         )
+        current_turn = log.turn(active_turn_id) or {}
+        persisted_request_id = current_turn.get("request_id")
+        active_request_id = (
+            persisted_request_id
+            if isinstance(persisted_request_id, str) and persisted_request_id
+            else hashlib.sha256(
+                f"{project.project_id}:{active_turn_id}:{project.prompt or prompt}".encode(
+                    "utf-8"
+                )
+            ).hexdigest()
+        )
+        run_identity = RunIdentity(
+            project_id=project.project_id,
+            turn_id=active_turn_id,
+            request_id=active_request_id,
+            request_text=project.prompt or prompt,
+        )
+        repair_state = self.store.repair_state(project.project_id)
         if token.cancelled:
             outcome = AgentRunOutcome(
                 validated=False,
@@ -1027,6 +1167,10 @@ class AgentRunService:
                 or accepts_factory_kwargs
             ):
                 factory_kwargs["conversation_log"] = log
+            if "repair_state" in factory_parameters or accepts_factory_kwargs:
+                factory_kwargs["repair_state"] = repair_state
+            if "run_identity" in factory_parameters or accepts_factory_kwargs:
+                factory_kwargs["run_identity"] = run_identity
             agent = self.agent_factory(**factory_kwargs)
             conversation_context = log.context_messages(
                 exclude_turn_id=active_turn_id
@@ -1041,6 +1185,7 @@ class AgentRunService:
         except Exception as exc:
             reason = _safe_failure_reason(exc)
             outcome = AgentRunOutcome(validated=False, failure_reason=reason)
+        outcome = _attach_repair_state(outcome, repair_state, run_identity)
         if log.token_usage is not None:
             outcome = replace(outcome, token_usage=log.token_usage)
         if (
@@ -1117,6 +1262,21 @@ def _invoke_agent_run(
     if accepts_kwargs or "conversation_context" in parameters:
         kwargs["conversation_context"] = conversation_context
     return run(prompt, **kwargs)
+
+
+def _attach_repair_state(
+    outcome: AgentRunOutcome,
+    repair_state: ProjectRepairState,
+    identity: RunIdentity,
+) -> AgentRunOutcome:
+    """Attach a safe terminal projection of the durable repair state."""
+
+    return replace(
+        outcome,
+        design_contract=repair_state.design_contract(identity),
+        attempt_ledger=repair_state.attempts(identity),
+        last_passing_source=repair_state.last_passing_source(),
+    )
 
 
 def _finish_conversation_turn(
@@ -1209,6 +1369,7 @@ def _execution_failure_result(error: Exception) -> ExecutionResult:
         ),
         artifact_entries=(),
         duration_seconds=0.0,
+        error_type="infrastructure",
     )
 
 

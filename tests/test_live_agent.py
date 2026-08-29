@@ -7,8 +7,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.agent import resolve_agent_run_timeout_seconds
+from backend.agent import AgentSettings
 from backend.app import create_app
 from backend.projects import ProjectState
+from backend.repair_state import RunIdentity
 from backend.scene_validation import validate_scene_artifact
 from tests.support import process_exists
 
@@ -23,6 +25,12 @@ LIVE_CANCELLATION_PROMPT = (
     "并导出 canonical Scene Artifact。"
 )
 LIVE_AGENT_TIMEOUT_SECONDS = resolve_agent_run_timeout_seconds()
+LIVE_CONTRACT_PLATE_PROMPT = (
+    "Create one rectangular plate measuring 60 mm long, 40 mm wide, and 8 mm "
+    "thick. Add exactly two 6 mm diameter through holes. Place both hole centers "
+    "on the plate width centerline, 30 mm apart along the length, symmetric about "
+    "the plate center. Return one rigid single solid with no extra features."
+)
 
 
 def _wait_for_terminal_project(
@@ -79,6 +87,92 @@ def test_live_agent_flange_smoke_crosses_service_and_scene_viewer_path(
     assert parsed.valid is True
     assert parsed.glb_asset_count >= 1
     assert parsed.model_json_present is False
+
+
+@pytest.mark.live_agent
+def test_live_agent_contract_repair_state_and_review_production_path(
+    tmp_path: Path,
+) -> None:
+    """Exercise the production path and verify every progressive-repair artifact."""
+
+    app = create_app(projects_root=tmp_path)
+    client = TestClient(app)
+    project = client.post(
+        "/api/projects", json={"name": "Contract plate E2E"}
+    ).json()
+    project_id = str(project["project_id"])
+
+    started = client.post(
+        f"/api/projects/{project_id}/run",
+        json={"prompt": LIVE_CONTRACT_PLATE_PROMPT},
+    )
+    assert started.status_code == 202
+    finished = _wait_for_terminal_project(
+        client,
+        project_id,
+        timeout_seconds=LIVE_AGENT_TIMEOUT_SECONDS + 30.0,
+    )
+
+    assert finished["state"] == ProjectState.SUCCEEDED.value
+    store = app.state.project_store
+    project_dir = store.project_directory(project_id)
+    model_source = (project_dir / "code" / "model.py").read_text(encoding="utf-8")
+    assert model_source.strip()
+    assert "build_model" in model_source
+
+    turns = store.conversation_turns(project_id)
+    assert len(turns) == 1
+    turn = turns[0]
+    identity = RunIdentity(
+        project_id=project_id,
+        turn_id=str(turn["turn_id"]),
+        request_id=str(turn["request_id"]),
+        request_text=LIVE_CONTRACT_PLATE_PROMPT,
+    )
+    repair_state = store.repair_state(project_id)
+    contract = repair_state.design_contract(identity)
+    assert contract is not None
+    assert contract.task_type == "single_part"
+    assert contract.explicit_requirements
+
+    attempts = repair_state.attempts(identity)
+    validations = [item for item in attempts if item.attempt_kind == "validation"]
+    reviews = [item for item in attempts if item.attempt_kind == "review"]
+    assert validations
+    assert validations[-1].validation_status == "passed"
+    assert reviews
+    assert reviews[-1].review_status == "pass"
+
+    last_passing = repair_state.last_passing_source()
+    assert last_passing is not None
+    assert last_passing.source_revision == validations[-1].source_revision
+    assert last_passing.archive_path.is_file()
+    import zipfile
+
+    with zipfile.ZipFile(last_passing.archive_path) as archive:
+        assert archive.testzip() is None
+        assert "code/model.py" in archive.namelist()
+        assert archive.read("code/model.py").decode("utf-8") == model_source
+
+    diagnostics = store.read_diagnostics(project_id)
+    assert diagnostics is not None
+    assert diagnostics["cad_execution_count"] == len(validations)
+    assert diagnostics["execution_result"]["product_validation_status"] == "Passed"
+    assert diagnostics["review_result"]["status"] == "pass"
+    assert diagnostics["design_contract"]["contract_id"] == contract.contract_id
+    assert len(diagnostics["attempt_ledger"]) == len(attempts)
+
+    product = store.product_artifact(project_id)
+    product.require_complete()
+    scene = store.scene_artifact(project_id)
+    parsed = validate_scene_artifact(scene)
+    assert parsed.valid is True
+    assert parsed.glb_asset_count >= 1
+
+    api_key = AgentSettings.from_environment().api_key
+    for path in project_dir.rglob("*"):
+        if path.is_file() and path.suffix in {".json", ".jsonl", ".txt", ".py"}:
+            assert api_key not in path.read_text(encoding="utf-8", errors="replace")
 
 
 @pytest.mark.live_agent

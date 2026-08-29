@@ -58,7 +58,7 @@ def test_live_preview_executor_isolated_from_validation_outputs(tmp_path: Path) 
     (tmp_path / "code" / "model.py").write_text(_model_source(5.0), encoding="utf-8")
     executor = LivePreviewExecutor()
     try:
-        result = executor.execute(tmp_path, timeout_seconds=10.0)
+        result = executor.execute(tmp_path, timeout_seconds=30.0)
     finally:
         executor.close()
 

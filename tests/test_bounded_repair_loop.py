@@ -54,6 +54,15 @@ def _validation_tools(tmp_path: Path, executor: object, **kwargs: object):
     restricted.begin_run()
     tools = create_agent_tools(restricted, **kwargs)
     by_name = {item.name: item for item in tools}
+    by_name["submit_design_contract"].invoke(
+        {
+            "task_type": "single_part",
+            "explicit_requirements": ["Create the requested test part."],
+            "key_components": ["test part"],
+            "assumptions": [],
+            "implementation_stages": ["Create and validate the test part"],
+        }
+    )
     return restricted, by_name
 
 

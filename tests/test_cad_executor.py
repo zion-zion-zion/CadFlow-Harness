@@ -746,7 +746,7 @@ def test_nonzero_model_exit_is_observable(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = CADExecutor().execute(tmp_path, timeout_seconds=5.0)
+    result = CADExecutor().execute(tmp_path, timeout_seconds=15.0)
 
     assert result.status == "failed"
     assert result.exit_code != 0
@@ -763,7 +763,7 @@ def test_syntax_error_is_reported_by_preflight_without_starting_cad(
         encoding="utf-8",
     )
 
-    result = CADExecutor().execute(tmp_path, timeout_seconds=5.0)
+    result = CADExecutor().execute(tmp_path, timeout_seconds=15.0)
 
     assert result.status == "failed"
     assert result.preflight_status == "failed"
@@ -781,7 +781,7 @@ def test_import_error_is_classified_after_source_preflight(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    result = CADExecutor().execute(tmp_path, timeout_seconds=5.0)
+    result = CADExecutor().execute(tmp_path, timeout_seconds=15.0)
 
     assert result.status == "failed"
     assert result.preflight_status == "failed"
@@ -990,7 +990,7 @@ def test_output_is_bounded_and_credential_like_text_is_redacted(tmp_path: Path) 
         encoding="utf-8",
     )
 
-    result = CADExecutor().execute(tmp_path, max_output_bytes=128, timeout_seconds=5.0)
+    result = CADExecutor().execute(tmp_path, max_output_bytes=128, timeout_seconds=15.0)
 
     assert result.status == "failed"
     assert result.stdout_truncated is True

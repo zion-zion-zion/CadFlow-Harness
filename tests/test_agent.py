@@ -263,7 +263,15 @@ def test_agent_tools_include_the_cad_specific_surface(
 
     tools = create_agent_tools(restricted)
 
-    assert {tool.name for tool in tools} == {"validate_model", "cad_review"}
+    assert {tool.name for tool in tools} == {
+        "submit_design_contract",
+        "validate_model",
+        "cad_review",
+    }
+    contract_tool = next(
+        tool for tool in tools if tool.name == "submit_design_contract"
+    )
+    assert "host-validated Design Contract" in contract_tool.description
     validate_tool = next(tool for tool in tools if tool.name == "validate_model")
     assert "bounded, structured failure evidence" in validate_tool.description
     review_tool = next(tool for tool in tools if tool.name == "cad_review")
@@ -274,7 +282,9 @@ def test_agent_tools_include_the_cad_specific_surface(
     )
 
 
-def test_validator_has_no_reference_or_source_write_gate(tmp_path: Path) -> None:
+def test_validator_requires_only_the_design_contract_before_execution(
+    tmp_path: Path,
+) -> None:
     class RecordingExecutor:
         def execute(self, *_args: object, **_kwargs: object) -> object:
             raise RuntimeError("dedicated executor reached")
@@ -286,9 +296,20 @@ def test_validator_has_no_reference_or_source_write_gate(tmp_path: Path) -> None
     )
     restricted.begin_run()
     tools = {tool.name: tool for tool in create_agent_tools(restricted)}
+    tools["submit_design_contract"].invoke(
+        {
+            "task_type": "single_part",
+            "explicit_requirements": ["Create a test part."],
+            "key_components": ["test part"],
+            "assumptions": [],
+            "implementation_stages": ["Create the test part"],
+        }
+    )
 
-    with pytest.raises(RuntimeError, match="dedicated executor reached"):
-        tools["validate_model"].invoke({})
+    result = tools["validate_model"].invoke({})
+
+    assert result["failure_packet"]["primary_type"] == "INFRASTRUCTURE_ERROR"
+    assert "dedicated executor reached" in result["error"]
 
 
 def test_agent_execution_can_retry_after_executor_raises(
@@ -310,12 +331,22 @@ def test_agent_execution_can_retry_after_executor_raises(
     )
     restricted.begin_run()
     tools = create_agent_tools(restricted)
-    execute_tool = next(tool for tool in tools if tool.name == "validate_model")
+    by_name = {tool.name: tool for tool in tools}
+    by_name["submit_design_contract"].invoke(
+        {
+            "task_type": "single_part",
+            "explicit_requirements": ["Create a test part."],
+            "key_components": ["test part"],
+            "assumptions": [],
+            "implementation_stages": ["Create the test part"],
+        }
+    )
+    execute_tool = by_name["validate_model"]
 
-    with pytest.raises(RuntimeError, match="executor failed"):
-        execute_tool.invoke({})
-    with pytest.raises(RuntimeError, match="executor failed"):
-        execute_tool.invoke({})
+    first = execute_tool.invoke({})
+    second = execute_tool.invoke({})
+    assert first["failure_packet"]["primary_type"] == "INFRASTRUCTURE_ERROR"
+    assert second["attempt_feedback"]["repeated_failure"] is True
     assert executor.calls == 2
 
 
@@ -414,6 +445,7 @@ def test_deep_agent_model_sees_only_the_confirmed_tool_surface(
         "ls",
         "delete",
         "write_todos",
+        "submit_design_contract",
         "validate_model",
         "cad_review",
     }
@@ -504,6 +536,10 @@ def test_agent_prompt_requires_diagnostic_repairs_before_retry(tmp_path: Path) -
     assert "fails only with `review_infrastructure` findings" in prompt
     assert "retry `cad_review` without\nediting or revalidating" in prompt
     assert "infrastructure failures are not CAD\ndefects" in prompt
+    assert "Read the `failure_packet` before the raw diagnostics" in prompt
+    assert "must not trigger a CAD source edit" in prompt
+    assert "same stable failure repeats" in prompt
+    assert "Last Passing Source" in prompt
 
 
 def test_agent_prompt_stages_complex_part_and_assembly_work(tmp_path: Path) -> None:
@@ -556,6 +592,9 @@ def test_agent_prompt_requires_todo_plan_before_source_edits(tmp_path: Path) -> 
     assert "required even when the request appears simple" in prompt
     assert "Do not write or edit Project\nsource before the initial todo plan exists." in prompt
     assert "Keep the plan current as the\nwork progresses" in prompt
+    assert "call `submit_design_contract` exactly once" in prompt
+    assert "before the first `validate_model` call" in prompt
+    assert "does not replace the source-level `PRODUCT_SPEC`" in prompt
 
 
 def test_missing_configuration_fails_a_project_without_calling_a_model(
