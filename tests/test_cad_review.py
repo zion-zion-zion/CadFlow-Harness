@@ -223,6 +223,9 @@ def test_reviewer_treats_host_validation_as_authoritative(tmp_path: Path) -> Non
     assert "Model Source is not required to call solve" in prompt
     assert "Do not fail because the source lacks a screw or universal joint coupling" in prompt
     assert "accept separate revolute and prismatic joints plus pitch/travel metadata" in prompt
+    assert "judge unexposed installation coordinates and clearance details from explicit source parameters" in prompt
+    assert "Still fail a genuinely missing required component or constraint" in prompt
+    assert "make_box_rsolid(width, height, depth, ...)" in prompt
     assert '"product_validation_status": "Passed"' in prompt
 
 

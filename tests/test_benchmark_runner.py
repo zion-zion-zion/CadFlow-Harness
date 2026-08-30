@@ -17,6 +17,14 @@ def test_benchmark_prompt_catalog_contains_twenty_stable_cases() -> None:
     assert all(case.prompt.strip() for case in cases)
 
 
+def test_pump_benchmark_accepts_replayable_flow_and_blade_proxies() -> None:
+    pump = next(case for case in parse_cases() if case.case_id == "assembly-09")
+
+    assert "允许用圆盘/圆柱等可回放实体代理" in pump.prompt
+    assert "不要求生成高保真叶片曲面或独立流道实体" in pump.prompt
+    assert "叶片数量、后弯方向、通道轴线和包络" in pump.prompt
+
+
 def test_case_result_files_are_json_objects(tmp_path: Path) -> None:
     result = {
         "case_id": "single_part-01",
