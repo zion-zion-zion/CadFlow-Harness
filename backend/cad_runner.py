@@ -16,9 +16,6 @@ import zipfile
 from pathlib import Path
 from typing import Any, Mapping
 
-import cadflow as cad
-
-
 PREFLIGHT_PREFIX = "__CADFLOW_PREFLIGHT__"
 RESULT_PREFIX = "__CADFLOW_EXECUTION_RESULT__"
 PHASE_PREFIX = "__CADFLOW_EXECUTION_PHASE__"
@@ -41,6 +38,15 @@ def _report_phase(phase: str) -> None:
         PHASE_PREFIX + json.dumps({"phase": phase}, separators=(",", ":")),
         flush=True,
     )
+
+
+# CadFlow's native import can take several seconds on a cold worker. Report
+# that initialization as part of model construction so bounded callers still
+# receive an actionable phase when the process is terminated during startup.
+if __name__ == "__main__":
+    _report_phase("model_build")
+
+import cadflow as cad
 
 
 def _source_manifest(
@@ -95,7 +101,9 @@ def _assembly_inventory(root: Any) -> dict[str, Any]:
         if identity in ancestors:
             raise ValueError("Assembly component graph must not contain cycles")
         if not assembly.components:
-            raise ValueError("Assembly and nested subassemblies must contain components")
+            raise ValueError(
+                "Assembly and nested subassemblies must contain components"
+            )
         existing_identity = assembly_identities.get(assembly.assembly_id)
         if existing_identity is not None and existing_identity != identity:
             raise ValueError("Assembly IDs must identify one reusable definition")
@@ -123,16 +131,24 @@ def _assembly_inventory(root: Any) -> dict[str, Any]:
             if isinstance(component.item, cad.Part):
                 part = component.item
                 if not isinstance(part.body, cad.Solid):
-                    raise TypeError("every Assembly leaf Part must contain one cad.Solid")
+                    raise TypeError(
+                        "every Assembly leaf Part must contain one cad.Solid"
+                    )
                 volume = float(part.body.get_volume())
                 if not math.isfinite(volume) or volume <= 0.0:
-                    raise ValueError("every Assembly leaf Part must have positive volume")
+                    raise ValueError(
+                        "every Assembly leaf Part must have positive volume"
+                    )
                 existing_part_identity = part_identities.get(part.part_id)
-                if existing_part_identity is not None and existing_part_identity != id(part):
+                if existing_part_identity is not None and existing_part_identity != id(
+                    part
+                ):
                     raise ValueError("Part IDs must identify one reusable definition")
                 part_identities[part.part_id] = id(part)
                 part_definitions.setdefault(part.part_id, part)
-                occurrences.setdefault(part.part_id, []).append("/".join(component_path))
+                occurrences.setdefault(part.part_id, []).append(
+                    "/".join(component_path)
+                )
                 collision_occurrences.setdefault(part.part_id, []).append(
                     "/".join(component_path[1:])
                 )
@@ -141,7 +157,9 @@ def _assembly_inventory(root: Any) -> dict[str, Any]:
             elif isinstance(component.item, cad.Assembly):
                 visit(component.item, next_ancestors, component_path)
             else:
-                raise TypeError("Assembly components must contain cad.Part or cad.Assembly")
+                raise TypeError(
+                    "Assembly components must contain cad.Part or cad.Assembly"
+                )
 
     visit(root, set(), (root.assembly_id,))
     return {
@@ -211,9 +229,7 @@ def _product_spec(namespace: Mapping[str, Any]) -> tuple[dict[str, Any], list[st
         try:
             json.dumps(item, ensure_ascii=True)
         except (TypeError, ValueError):
-            failures.append(
-                f"PRODUCT_SPEC.{key} must contain JSON-compatible values"
-            )
+            failures.append(f"PRODUCT_SPEC.{key} must contain JSON-compatible values")
             continue
         normalized[key] = item
     assumptions = normalized.get("assumptions", ())
@@ -252,15 +268,14 @@ def _base_validation_report(
                 "solid_count": inventory["solid_count"],
                 "volume_mm3": inventory["solid_volume"],
             },
-        }
+        },
     ]
     blocking_failures: list[str] = list(spec_failures)
     if result_kind == "assembly":
         envelope = spec.get("envelope")
         if not isinstance(envelope, Mapping):
             message = (
-                "Assembly validation requires "
-                "PRODUCT_SPEC.envelope.max_size_mm"
+                "Assembly validation requires " "PRODUCT_SPEC.envelope.max_size_mm"
             )
             checks.append(
                 {"check_id": "envelope_spec", "status": "failed", "message": message}
@@ -296,7 +311,9 @@ def _base_validation_report(
                     {
                         "check_id": "envelope_spec",
                         "status": "passed",
-                        "evidence": {"max_size_mm": [float(value) for value in max_size]},
+                        "evidence": {
+                            "max_size_mm": [float(value) for value in max_size]
+                        },
                     }
                 )
     return {
@@ -371,13 +388,17 @@ def _short_circuit_validation_checks(
 
 def _component_path(value: Any, root_id: str, valid_paths: set[str]) -> tuple[str, ...]:
     if not isinstance(value, str) or not value.strip():
-        raise ValueError("collision exclusion component paths must be non-empty strings")
+        raise ValueError(
+            "collision exclusion component paths must be non-empty strings"
+        )
     parts = tuple(part for part in value.strip().split("/") if part)
     if parts and parts[0] == root_id:
         parts = parts[1:]
     normalized = "/".join(parts)
     if not parts or normalized not in valid_paths:
-        raise ValueError(f"collision exclusion references unknown leaf component: {value}")
+        raise ValueError(
+            f"collision exclusion references unknown leaf component: {value}"
+        )
     return parts
 
 
@@ -391,9 +412,7 @@ def _collision_exclusions(
     if not isinstance(raw_exclusions, (list, tuple)):
         raise ValueError("PRODUCT_SPEC.collision_exclusions must be a list")
     valid_paths = {
-        path
-        for paths in inventory["collision_occurrences"].values()
-        for path in paths
+        path for paths in inventory["collision_occurrences"].values() for path in paths
     }
     pairs: list[Any] = []
     evidence: list[dict[str, Any]] = []
@@ -451,8 +470,7 @@ def _validate_assembly(
             assembly=solved_assembly
         )
         strict_passed = bool(
-            constraint_report.solved
-            and not constraint_report.unsolved_component_ids
+            constraint_report.solved and not constraint_report.unsolved_component_ids
         )
         checks.append(
             {
@@ -464,7 +482,9 @@ def _validate_assembly(
                     "grounded_component_ids": list(
                         constraint_report.grounded_component_ids
                     ),
-                    "solved_component_ids": list(constraint_report.solved_component_ids),
+                    "solved_component_ids": list(
+                        constraint_report.solved_component_ids
+                    ),
                     "unsolved_component_ids": list(
                         constraint_report.unsolved_component_ids
                     ),
@@ -504,9 +524,7 @@ def _validate_assembly(
             )
         except Exception as diagnostic_exception:
             diagnostic_error = (
-                type(diagnostic_exception).__name__
-                + ": "
-                + str(diagnostic_exception)
+                type(diagnostic_exception).__name__ + ": " + str(diagnostic_exception)
             )
             diagnostic_evidence["diagnostic_error"] = diagnostic_error
         checks.append(
@@ -606,9 +624,7 @@ def _validate_assembly(
                 max_contacts_per_pair=16,
             ),
         )
-        expected_pair_count = leaf_count * (leaf_count - 1) // 2 - len(
-            exclusion_pairs
-        )
+        expected_pair_count = leaf_count * (leaf_count - 1) // 2 - len(exclusion_pairs)
         warnings = [
             {
                 "code": warning.code,
@@ -751,7 +767,9 @@ def _complete_export_validation(
         checks.append({"check_id": "envelope", "status": "not_applicable"})
     else:
         envelope = spec.get("envelope")
-        max_size = envelope.get("max_size_mm") if isinstance(envelope, Mapping) else None
+        max_size = (
+            envelope.get("max_size_mm") if isinstance(envelope, Mapping) else None
+        )
         if product_inspection is None or not isinstance(max_size, (list, tuple)):
             checks.append(
                 {
@@ -1088,7 +1106,6 @@ def main(argv: list[str] | None = None) -> int:
         imported_modules.add(name)
         return real_import(name, globals, locals, fromlist, level)
 
-    _report_phase("source_import")
     builtins.__import__ = tracking_import
     try:
         namespace = runpy.run_path(str(model_path), run_name="cadflow_model_source")
@@ -1161,7 +1178,9 @@ def main(argv: list[str] | None = None) -> int:
             except (TypeError, ValueError) as error:
                 topology_error = str(error)
         else:
-            raise TypeError("Model Source must return one CadFlow Shape or cad.Assembly")
+            raise TypeError(
+                "Model Source must return one CadFlow Shape or cad.Assembly"
+            )
 
         if inventory is not None:
             spec, spec_failures = _product_spec(namespace)
@@ -1183,9 +1202,7 @@ def main(argv: list[str] | None = None) -> int:
                 solid_count = inventory["solid_count"]
                 solid_volume = inventory["solid_volume"]
             product_validation_status = validation_report["status"]
-            product_validation_failures = list(
-                validation_report["blocking_failures"]
-            )
+            product_validation_failures = list(validation_report["blocking_failures"])
             product_validation_checks = list(validation_report["checks"])
             validation_short_circuited = bool(
                 result_kind == "assembly"

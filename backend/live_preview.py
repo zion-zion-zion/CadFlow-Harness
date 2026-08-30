@@ -38,6 +38,7 @@ PREVIEW_OUTPUT_BYTES = 64 * 1024
 LIVE_PREVIEW_DIRECTORY = "previews/live"
 LIVE_PREVIEW_STATUS_NAME = "status.json"
 LIVE_PREVIEW_MODEL_NAME = "model.glb"
+_PREVIEW_READY_MARKER = "__CADFLOW_PREVIEW_READY__"
 
 
 def resolve_preview_timeout_seconds(
@@ -61,6 +62,7 @@ def resolve_preview_timeout_seconds(
         )
     return timeout_seconds
 
+
 _EXCLUDED_ROOT_NAMES = frozenset(
     {
         ".cad-review",
@@ -72,6 +74,8 @@ _EXCLUDED_ROOT_NAMES = frozenset(
         "previews",
     }
 )
+
+
 @dataclass(frozen=True)
 class LivePreviewStatus:
     state: str = "waiting"
@@ -278,7 +282,9 @@ class LivePreviewExecutor:
                 _prepare_preview_source(root)
             except (OSError, ValueError) as exc:
                 return LivePreviewResult("failed", error=redact_credentials(str(exc)))
-            with tempfile.TemporaryDirectory(prefix="cadflow-live-preview-") as temporary:
+            with tempfile.TemporaryDirectory(
+                prefix="cadflow-live-preview-"
+            ) as temporary:
                 snapshot = Path(temporary) / "project"
                 _copy_preview_inputs(root, snapshot)
                 model_path = snapshot / CODE_DIRECTORY_NAME / MODEL_SOURCE_NAME
@@ -380,7 +386,24 @@ class LivePreviewExecutor:
         )
         self._process = process
         self._worker_stderr = worker_stderr
+        self._wait_for_worker_ready_locked(process)
         return process
+
+    def _wait_for_worker_ready_locked(self, process: subprocess.Popen[bytes]) -> None:
+        """Exclude one-time CadFlow import latency from a preview build budget."""
+
+        deadline = time.monotonic() + 60.0
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                return
+            if self._worker_stderr is not None:
+                self._worker_stderr.flush()
+                self._worker_stderr.seek(0)
+                output = self._worker_stderr.read()
+                if _PREVIEW_READY_MARKER.encode() in output:
+                    self._worker_stderr.seek(0, os.SEEK_END)
+                    return
+            time.sleep(0.01)
 
     def _worker_failure(self, process: subprocess.Popen[bytes]) -> str:
         with self._process_lock:
@@ -506,9 +529,7 @@ class LivePreviewScheduler:
                 raise PreviewError("live preview is not active")
             if not _preview_source_ready(root):
                 return
-            self._pending_hash = self._observed_hash or _source_hash(
-                root
-            )
+            self._pending_hash = self._observed_hash or _source_hash(root)
             self._due_at = time.monotonic()
             self._condition.notify_all()
 
@@ -568,7 +589,10 @@ class LivePreviewScheduler:
                     token: CancellationToken | None = None
                     changed = False
                     with self._condition:
-                        if self._active_project_id == project_id and digest != self._observed_hash:
+                        if (
+                            self._active_project_id == project_id
+                            and digest != self._observed_hash
+                        ):
                             self._observed_hash = digest
                             self._pending_hash = digest if source_ready else None
                             self._due_at = (
@@ -576,7 +600,10 @@ class LivePreviewScheduler:
                                 if source_ready
                                 else None
                             )
-                            if self._running_hash is not None and self._running_hash != digest:
+                            if (
+                                self._running_hash is not None
+                                and self._running_hash != digest
+                            ):
                                 token = self._running_token
                             changed = True
                             self._condition.notify_all()
@@ -647,7 +674,9 @@ class LivePreviewScheduler:
                 try:
                     status = store.publish(result.payload, source_hash)
                 except (OSError, PreviewError) as exc:
-                    status = store.write_status("failed", source_hash=source_hash, error=str(exc))
+                    status = store.write_status(
+                        "failed", source_hash=source_hash, error=str(exc)
+                    )
             else:
                 status = store.write_status(
                     "failed",
@@ -693,8 +722,7 @@ def _source_hash(project_dir: Path) -> str:
         if path.is_file()
         and not path.is_symlink()
         and not any(
-            part in _EXCLUDED_ROOT_NAMES
-            for part in path.relative_to(source_root).parts
+            part in _EXCLUDED_ROOT_NAMES for part in path.relative_to(source_root).parts
         )
     )
     for path in paths:
@@ -845,7 +873,7 @@ def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
-_PREVIEW_WORKER = r'''
+_PREVIEW_WORKER = r"""
 import contextlib
 import importlib
 import json
@@ -857,6 +885,8 @@ from pathlib import Path
 
 import cadflow as cad
 from backend.preview_glb import assembly_preview_glb
+
+print("__CADFLOW_PREVIEW_READY__", file=sys.stderr, flush=True)
 
 def clear_snapshot_modules(snapshot):
     for name, module in tuple(sys.modules.items()):
@@ -937,7 +967,7 @@ for line in sys.stdin.buffer:
         temporary_response = response_path.with_suffix(".tmp")
         temporary_response.write_text(json.dumps(response), encoding="utf-8")
         temporary_response.replace(response_path)
-'''
+"""
 
 
 __all__ = [
