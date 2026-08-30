@@ -221,6 +221,8 @@ def test_reviewer_treats_host_validation_as_authoritative(tmp_path: Path) -> Non
 
     assert "trusted host executor owns strict Assembly solving" in prompt
     assert "Model Source is not required to call solve" in prompt
+    assert "Do not fail because the source lacks a screw or universal joint coupling" in prompt
+    assert "accept separate revolute and prismatic joints plus pitch/travel metadata" in prompt
     assert '"product_validation_status": "Passed"' in prompt
 
 
