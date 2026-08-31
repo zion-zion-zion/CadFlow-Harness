@@ -7,7 +7,6 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 from backend.agent_logging import (
-    ORCHESTRATOR_AGENT_ID,
     PRIMARY_AGENT_ID,
     REVIEWER_AGENT_ID,
     ConversationLog,
@@ -115,10 +114,13 @@ def test_conversation_log_persists_turn_model_and_tool_lifecycle(tmp_path: Path)
         "reasoning_summary": "auto",
     }
     assert records[-1]["payload"]["status"] == "succeeded"
-    assert records[0]["payload"]["agent_id"] == PRIMARY_AGENT_ID
-    assert records[0]["payload"]["agent_role"] == "primary"
-    assert records[-1]["payload"]["agent_id"] == ORCHESTRATOR_AGENT_ID
-    assert records[-1]["payload"]["agent_role"] == "orchestrator"
+    assert "agent_id" not in records[0]["payload"]
+    assert "agent_role" not in records[0]["payload"]
+    assert "agent_id" not in records[-1]["payload"]
+    assert "agent_role" not in records[-1]["payload"]
+    backend_tool = next(record for record in records if record["type"] == "backend_tool")
+    assert "agent_id" not in backend_tool["payload"]
+    assert "agent_role" not in backend_tool["payload"]
     assert set(payload) == {
         "conversation_id",
         "payload",
@@ -215,7 +217,7 @@ def test_conversation_log_attributes_nested_events_to_the_emitting_agent(
     assert len(reviewer_payloads) == 2
 
 
-def test_conversation_log_assigns_reviewer_and_orchestrator_events(
+def test_conversation_log_assigns_reviewer_but_not_retired_pipeline_events(
     tmp_path: Path,
 ) -> None:
     trace = ConversationLog(tmp_path)
@@ -226,8 +228,52 @@ def test_conversation_log_assigns_reviewer_and_orchestrator_events(
 
     assert records[0]["payload"]["agent_id"] == REVIEWER_AGENT_ID
     assert records[0]["payload"]["agent_role"] == "reviewer"
-    assert records[1]["payload"]["agent_id"] == ORCHESTRATOR_AGENT_ID
-    assert records[1]["payload"]["agent_role"] == "orchestrator"
+    assert "agent_id" not in records[1]["payload"]
+    assert "agent_name" not in records[1]["payload"]
+    assert "agent_role" not in records[1]["payload"]
+
+
+def test_conversation_log_leaves_user_and_run_lifecycle_unattributed(
+    tmp_path: Path,
+) -> None:
+    succeeded = ConversationLog(
+        tmp_path / "succeeded",
+        turn_id="turn-1",
+        user_message="Create a part.",
+    )
+    succeeded.finish(
+        status="succeeded",
+        assistant_message="The part is ready.",
+        artifact_version=1,
+    )
+    failed = ConversationLog(
+        tmp_path / "failed",
+        turn_id="turn-2",
+        user_message="Create another part.",
+    )
+    failed.finish(status="failed", failure_reason="CAD execution failed")
+
+    lifecycle_types = {
+        "turn_started",
+        "user_message",
+        "artifact_committed",
+        "turn_succeeded",
+        "turn_failed",
+    }
+    records = succeeded.data["records"] + failed.data["records"]
+    for record in records:
+        if record["type"] not in lifecycle_types:
+            continue
+        assert "agent_id" not in record["payload"]
+        assert "agent_name" not in record["payload"]
+        assert "agent_role" not in record["payload"]
+
+    assistant = next(
+        record
+        for record in succeeded.data["records"]
+        if record["type"] == "assistant_message"
+    )
+    assert assistant["payload"]["agent_id"] == PRIMARY_AGENT_ID
 
 
 def test_conversation_log_accumulates_cached_and_uncached_token_usage(

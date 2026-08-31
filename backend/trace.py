@@ -11,10 +11,6 @@ from typing import Any
 
 from .agent_logging import (
     CONVERSATION_LOG_NAME,
-    ORCHESTRATOR_AGENT_ID,
-    ORCHESTRATOR_AGENT_NAME,
-    ORCHESTRATOR_AGENT_ROLE,
-    ORCHESTRATOR_EVENT_TYPES as _ORCHESTRATOR_EVENT_TYPES,
     PRIMARY_AGENT_ID,
     PRIMARY_AGENT_NAME,
     PRIMARY_AGENT_ROLE,
@@ -44,7 +40,6 @@ _AGENT_EVENT_TYPES = frozenset(
         "tool_call",
         "tool_result",
         "tool_error",
-        "backend_tool",
         "assistant_message",
     }
 )
@@ -354,19 +349,7 @@ def _event_agent_identity(
             agent_name or REVIEWER_AGENT_NAME,
             agent_role or REVIEWER_AGENT_ROLE,
         )
-    elif agent_id in {"orchestrator", ORCHESTRATOR_AGENT_ID}:
-        agent_id, agent_name, agent_role = (
-            ORCHESTRATOR_AGENT_ID,
-            agent_name or ORCHESTRATOR_AGENT_NAME,
-            agent_role or ORCHESTRATOR_AGENT_ROLE,
-        )
     event_type = str(record.get("type") or "")
-    if agent_id is None and event_type in _ORCHESTRATOR_EVENT_TYPES:
-        agent_id, agent_name, agent_role = (
-            ORCHESTRATOR_AGENT_ID,
-            ORCHESTRATOR_AGENT_NAME,
-            ORCHESTRATOR_AGENT_ROLE,
-        )
     if agent_id is None and event_type in _REVIEWER_EVENT_TYPES:
         agent_id, agent_name, agent_role = (
             REVIEWER_AGENT_ID,
@@ -375,24 +358,20 @@ def _event_agent_identity(
         )
     if agent_id is None and agent_role == REVIEWER_AGENT_ROLE:
         agent_id, agent_name = REVIEWER_AGENT_ID, agent_name or REVIEWER_AGENT_NAME
-    if agent_id is None and agent_role == ORCHESTRATOR_AGENT_ROLE:
-        agent_id, agent_name = (
-            ORCHESTRATOR_AGENT_ID,
-            agent_name or ORCHESTRATOR_AGENT_NAME,
-        )
     if agent_id is None and agent_role == PRIMARY_AGENT_ROLE:
         agent_id, agent_name = PRIMARY_AGENT_ID, agent_name or PRIMARY_AGENT_NAME
-    if agent_id is None and fallback_identity is not None:
-        fallback_id, fallback_name, fallback_role = fallback_identity
-        agent_id = fallback_id
-        agent_name = agent_name or fallback_name
-        agent_role = agent_role or fallback_role
     if agent_id is None and event_type in _AGENT_EVENT_TYPES:
-        agent_id, agent_name, agent_role = (
-            PRIMARY_AGENT_ID,
-            PRIMARY_AGENT_NAME,
-            PRIMARY_AGENT_ROLE,
-        )
+        if fallback_identity is not None:
+            fallback_id, fallback_name, fallback_role = fallback_identity
+            agent_id = fallback_id
+            agent_name = agent_name or fallback_name
+            agent_role = agent_role or fallback_role
+        else:
+            agent_id, agent_name, agent_role = (
+                PRIMARY_AGENT_ID,
+                PRIMARY_AGENT_NAME,
+                PRIMARY_AGENT_ROLE,
+            )
     if agent_name is None:
         if agent_id == PRIMARY_AGENT_ID:
             agent_name = PRIMARY_AGENT_NAME
@@ -422,12 +401,6 @@ def _message_agent_identity(
             return PRIMARY_AGENT_ID, PRIMARY_AGENT_NAME, PRIMARY_AGENT_ROLE
         if normalized_name in {REVIEWER_AGENT_ID, REVIEWER_AGENT_ROLE}:
             return REVIEWER_AGENT_ID, REVIEWER_AGENT_NAME, REVIEWER_AGENT_ROLE
-        if normalized_name in {ORCHESTRATOR_AGENT_ID, ORCHESTRATOR_AGENT_ROLE}:
-            return (
-                ORCHESTRATOR_AGENT_ID,
-                ORCHESTRATOR_AGENT_NAME,
-                ORCHESTRATOR_AGENT_ROLE,
-            )
         return name, name, None
     return None
 

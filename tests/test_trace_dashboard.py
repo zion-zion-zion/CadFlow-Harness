@@ -39,7 +39,7 @@ def test_trace_summary_extracts_responses_reasoning_summary() -> None:
     )
 
 
-def test_trace_summary_recovers_legacy_agent_names_and_infers_tool_owner(
+def test_trace_summary_ignores_retired_event_names_and_infers_tool_owner(
     tmp_path: Path,
 ) -> None:
     app = create_app(projects_root=tmp_path)
@@ -82,14 +82,55 @@ def test_trace_summary_recovers_legacy_agent_names_and_infers_tool_owner(
                 "payload": {"tool_name": "write_file", "call_id": "tool-1", "arguments": {}},
             }
         )
+        + _line(
+            {
+                "sequence": 4,
+                "timestamp": "2026-08-19T00:00:02.000+00:00",
+                "type": "turn_failed",
+                "turn_id": "turn-1",
+                "payload": {"status": "failed"},
+            }
+        )
     )
 
     events = client.get(f"/api/projects/{project['project_id']}/trace").json()["events"]
 
-    assert events[0]["agent_id"] == "cad-orchestrator"
-    assert events[0]["agent_name"] == "CAD Orchestrator"
+    assert events[0]["agent_id"] is None
+    assert events[0]["agent_name"] is None
+    assert events[0]["agent_role"] is None
     assert events[1]["agent_id"] == "text-to-cad-primary"
     assert events[2]["agent_id"] == "text-to-cad-primary"
+    assert events[3]["agent_id"] is None
+    assert events[3]["agent_name"] is None
+    assert events[3]["agent_role"] is None
+
+
+def test_trace_summary_reads_explicit_legacy_orchestrator_id_as_plain_identity(
+    tmp_path: Path,
+) -> None:
+    app = create_app(projects_root=tmp_path)
+    client = TestClient(app)
+    project = client.post("/api/projects", json={"name": "Historical trace"}).json()
+    trace_path = tmp_path / project["project_id"] / "conversation.jsonl"
+    trace_path.write_bytes(
+        _line(
+            {
+                "sequence": 1,
+                "timestamp": "2026-08-19T00:00:00.000+00:00",
+                "type": "work_order_completed",
+                "turn_id": "turn-1",
+                "payload": {"agent_id": "cad-orchestrator"},
+            }
+        )
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/trace")
+
+    assert response.status_code == 200
+    event = response.json()["events"][0]
+    assert event["agent_id"] == "cad-orchestrator"
+    assert event["agent_name"] == "cad-orchestrator"
+    assert event["agent_role"] is None
 
 
 def test_trace_summary_preserves_legacy_reviewer_role(
@@ -225,6 +266,9 @@ def test_trace_api_lists_projects_reads_incrementally_and_redacts(
         "turn_started",
         "tool_call",
     ]
+    assert batch["events"][0]["agent_id"] is None
+    assert batch["events"][0]["agent_name"] is None
+    assert batch["events"][0]["agent_role"] is None
     assert batch["events"][1]["call_id"] == "tool-1"
     assert batch["events"][1]["agent_id"] == "text-to-cad-primary"
     assert batch["events"][1]["agent_name"] == "Text-to-CAD Primary"

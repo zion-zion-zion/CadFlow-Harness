@@ -23,26 +23,6 @@ PRIMARY_AGENT_ROLE = "primary"
 REVIEWER_AGENT_ID = "cad-reviewer"
 REVIEWER_AGENT_NAME = "CAD Reviewer"
 REVIEWER_AGENT_ROLE = "reviewer"
-ORCHESTRATOR_AGENT_ID = "cad-orchestrator"
-ORCHESTRATOR_AGENT_NAME = "CAD Orchestrator"
-ORCHESTRATOR_AGENT_ROLE = "orchestrator"
-ORCHESTRATOR_EVENT_TYPES = frozenset(
-    {
-        "assembly_pipeline_failed",
-        "assembly_pipeline_prepared",
-        "graph_initialized",
-        "work_order_dispatched",
-        "work_order_completed",
-        "graph_transition",
-        "node_failure",
-        "candidates_proposed",
-        "candidate_selected",
-        "failure_route",
-        "graph_replan",
-        "turn_succeeded",
-        "turn_failed",
-    }
-)
 REVIEWER_EVENT_TYPES = frozenset({"final_review"})
 DEFAULT_MAX_CONTEXT_CHARS = 200_000
 DEFAULT_RECENT_CONTEXT_TURNS = 6
@@ -97,10 +77,10 @@ class ConversationLog:
         self.agent_role = provided_agent_role or (
             PRIMARY_AGENT_ROLE if provided_agent_id is None else None
         )
-        if self.agent_role in {
-            REVIEWER_AGENT_ROLE,
-            ORCHESTRATOR_AGENT_ROLE,
-        } and self.agent_id == PRIMARY_AGENT_ID:
+        if (
+            self.agent_role == REVIEWER_AGENT_ROLE
+            and self.agent_id == PRIMARY_AGENT_ID
+        ):
             self.agent_id = _agent_id_for_role(self.agent_role) or self.agent_id
         self.agent_id, self.agent_name, self.agent_role = _complete_agent_identity(
             self.agent_id, self.agent_name, self.agent_role
@@ -412,18 +392,16 @@ class ConversationLog:
             }
             default_id, default_name, default_role = (
                 (
-                    ORCHESTRATOR_AGENT_ID,
-                    ORCHESTRATOR_AGENT_NAME,
-                    ORCHESTRATOR_AGENT_ROLE,
-                )
-                if event_type in ORCHESTRATOR_EVENT_TYPES
-                else (
                     REVIEWER_AGENT_ID,
                     REVIEWER_AGENT_NAME,
                     REVIEWER_AGENT_ROLE,
                 )
                 if event_type in REVIEWER_EVENT_TYPES
-                else (self.agent_id, self.agent_name, self.agent_role)
+                else (
+                    (self.agent_id, self.agent_name, self.agent_role)
+                    if event_type == "assistant_message"
+                    else (None, None, None)
+                )
             )
             _apply_agent_identity(
                 payload,
@@ -729,18 +707,10 @@ def _complete_agent_identity(
             agent_name or PRIMARY_AGENT_NAME,
             agent_role or PRIMARY_AGENT_ROLE,
         )
-    if agent_id in {ORCHESTRATOR_AGENT_ID, "orchestrator"}:
-        return (
-            ORCHESTRATOR_AGENT_ID,
-            agent_name or ORCHESTRATOR_AGENT_NAME,
-            agent_role or ORCHESTRATOR_AGENT_ROLE,
-        )
     if agent_id is None and agent_role == REVIEWER_AGENT_ROLE:
         return REVIEWER_AGENT_ID, agent_name or REVIEWER_AGENT_NAME, agent_role
     if agent_id is None and agent_role == PRIMARY_AGENT_ROLE:
         return PRIMARY_AGENT_ID, agent_name or PRIMARY_AGENT_NAME, agent_role
-    if agent_id is None and agent_role == ORCHESTRATOR_AGENT_ROLE:
-        return ORCHESTRATOR_AGENT_ID, agent_name or ORCHESTRATOR_AGENT_NAME, agent_role
     return agent_id, agent_name or agent_id, agent_role
 
 
@@ -749,8 +719,6 @@ def _agent_id_for_role(role: str | None) -> str | None:
         return REVIEWER_AGENT_ID
     if role == PRIMARY_AGENT_ROLE:
         return PRIMARY_AGENT_ID
-    if role == ORCHESTRATOR_AGENT_ROLE:
-        return ORCHESTRATOR_AGENT_ID
     return None
 
 
@@ -761,7 +729,7 @@ def _apply_agent_identity(
     default_name: str | None,
     default_role: str | None,
 ) -> None:
-    """Attach a small, stable identity envelope to every persisted event."""
+    """Attach an identity only when an event has a known Agent source."""
 
     agent_id = _clean_identity_value(payload.get("agent_id"))
     agent_name = _clean_identity_value(payload.get("agent_name"))
@@ -1098,10 +1066,6 @@ __all__ = [
     "CONVERSATION_LOG_NAME",
     "DEFAULT_MAX_CONTEXT_CHARS",
     "LEGACY_AGENT_RUN_LOG_NAME",
-    "ORCHESTRATOR_AGENT_ID",
-    "ORCHESTRATOR_AGENT_NAME",
-    "ORCHESTRATOR_AGENT_ROLE",
-    "ORCHESTRATOR_EVENT_TYPES",
     "PRIMARY_AGENT_ID",
     "PRIMARY_AGENT_NAME",
     "PRIMARY_AGENT_ROLE",

@@ -17,18 +17,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .agent import (
-    DEEPAGENTS_IMPLEMENTATION_VERSION,
     AgentRunService,
     AgentSettings,
     ReferenceGroundedAgent,
 )
 from .events import ProgressEventStore
-from .harnesses import (
-    AgentHarness,
-    AgentRunAdapter,
-    AgentRunAdapterRegistry,
-    HarnessUnavailableError,
-)
+from .harnesses import AgentHarness
 from .live_preview import LivePreviewScheduler, LivePreviewStore
 from .previews import PreviewError
 from .product_artifact import ProductArtifact, ProductArtifactError
@@ -93,8 +87,7 @@ def create_app(
     projects_root: str | Path = DEFAULT_PROJECTS_ROOT,
     repo_root: str | Path | None = None,
     store: ProjectStore | None = None,
-    run_service: Any | None = None,
-    adapter_registry: AgentRunAdapterRegistry | None = None,
+    run_service: AgentRunService | None = None,
     settings_factory: Callable[[], AgentSettings] | None = None,
     agent_factory: Callable[..., ReferenceGroundedAgent] = ReferenceGroundedAgent,
     frontend_dist: str | Path | None = None,
@@ -133,21 +126,11 @@ def create_app(
         settings_factory=settings_factory,
         agent_factory=agent_factory,
     )
-    adapters = adapter_registry or AgentRunAdapterRegistry(
-        (
-            AgentRunAdapter(
-                AgentHarness.DEEPAGENTS,
-                service,
-                DEEPAGENTS_IMPLEMENTATION_VERSION,
-            ),
-        )
-    )
     coordinator = AgentRunCoordinator(
         store=project_store,
         repo_root=resolved_repo_root,
         event_store=event_store,
         run_service=service,
-        adapter_registry=adapters,
         preview_scheduler=scheduler,
     )
     coordinator.recover_interrupted_runs()
@@ -227,8 +210,6 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PromptValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except HarnessUnavailableError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ProjectStateError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _project_payload(project_store, project)
@@ -266,8 +247,6 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PromptValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except HarnessUnavailableError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ProjectStateError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         coordinator.wait_for_turn(submission.turn_id)

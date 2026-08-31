@@ -143,7 +143,6 @@ code, pre, time, .trace-eyebrow, .trace-count, .event-kind, .project-row-meta, .
 .event-agent { display: block; min-width: 0; overflow: hidden; padding: 4px 6px; border: 1px solid #3b434b; border-radius: 2px; color: #b8c0c8; background: #252a2f; font: 9px "SFMono-Regular", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .event-agent.agent-primary { border-color: #385544; color: #9bd2ad; background: #20352a; }
 .event-agent.agent-reviewer { border-color: #665031; color: #e5b56f; background: #392b1b; }
-.event-agent.agent-orchestrator { border-color: #38536c; color: #9fc7e9; background: #213345; }
 .event-agent.agent-unknown { color: #9aa1a8; background: #25282c; }
 .event-copy { display: block; min-width: 0; }
 .event-copy strong, .event-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -18,11 +18,7 @@ from .agent import (
 from .agent_logging import ConversationLog
 from .cad_executor import CancellationToken, redact_credentials
 from .events import ProgressEventStore, ProgressUpdate
-from .harnesses import (
-    AgentHarness,
-    AgentRunAdapter,
-    AgentRunAdapterRegistry,
-)
+from .harnesses import AgentHarness
 from .live_preview import LivePreviewScheduler, LivePreviewStatus
 from .projects import (
     Project,
@@ -48,7 +44,6 @@ class _ActiveRun:
     conversation_log: ConversationLog
     cancellation_token: CancellationToken
     finished: threading.Event
-    adapter: AgentRunAdapter
     thread: threading.Thread | None = None
     stopping: bool = False
     finalized: bool = False
@@ -71,8 +66,7 @@ class AgentRunCoordinator:
         store: ProjectStore,
         repo_root: str | Path,
         event_store: ProgressEventStore | None = None,
-        run_service: Any | None = None,
-        adapter_registry: AgentRunAdapterRegistry | None = None,
+        run_service: AgentRunService | None = None,
         settings_factory: Callable[[], Any] | None = None,
         agent_factory: Callable[..., Any] | None = None,
         preview_scheduler: LivePreviewScheduler | None = None,
@@ -88,15 +82,6 @@ class AgentRunCoordinator:
             repo_root=self.repo_root,
             settings_factory=settings_factory,
             agent_factory=agent_factory or ReferenceGroundedAgent,
-        )
-        self.adapters = adapter_registry or AgentRunAdapterRegistry(
-            (
-                AgentRunAdapter(
-                    AgentHarness.DEEPAGENTS,
-                    self.run_service,
-                    DEEPAGENTS_IMPLEMENTATION_VERSION,
-                ),
-            )
         )
         self._lock = threading.RLock()
         self._active: _ActiveRun | None = None
@@ -168,8 +153,7 @@ class AgentRunCoordinator:
         retry_of: str | None = None,
         harness: AgentHarness | str = AgentHarness.DEEPAGENTS,
     ) -> MessageSubmission:
-        adapter = self.adapters.get(harness)
-        adapter.require_available()
+        selected_harness = AgentHarness(harness)
         with self._lock:
             conversation = self.store.conversation_log(project_id)
             existing = conversation.turn_for_request(request_id)
@@ -184,7 +168,7 @@ class AgentRunCoordinator:
                 raise RunConflictError("another Agent Run is already active")
             if retry_of is not None and conversation.turn(retry_of) is None:
                 raise ProjectStateError("retry_of does not identify a Project turn")
-            project = self.store.submit_prompt(project_id, prompt, adapter.harness)
+            project = self.store.submit_prompt(project_id, prompt, selected_harness)
             turn_id = uuid.uuid4().hex
             conversation_log = self.store.conversation_log(
                 project.project_id,
@@ -192,8 +176,8 @@ class AgentRunCoordinator:
                 request_id=request_id,
                 user_message=prompt,
                 retry_of=retry_of,
-                harness=adapter.harness.value,
-                implementation_version=adapter.implementation_version,
+                harness=selected_harness.value,
+                implementation_version=DEEPAGENTS_IMPLEMENTATION_VERSION,
             )
             token = CancellationToken()
             active = _ActiveRun(
@@ -204,14 +188,13 @@ class AgentRunCoordinator:
                 conversation_log=conversation_log,
                 cancellation_token=token,
                 finished=threading.Event(),
-                adapter=adapter,
             )
             self._active = active
             self.events.append(
                 project.project_id,
                 stage="preparing",
                 tool="service",
-                result=f"{adapter.label} Agent Run accepted",
+                result="Agent Run accepted",
             )
             self._preview_call("activate", project.project_id)
             thread = threading.Thread(
@@ -258,7 +241,7 @@ class AgentRunCoordinator:
                 active.cancellation_token.cancel()
                 self._preview_call("deactivate", project_id)
         if not active.finished.wait(RUN_STOP_WAIT_SECONDS):
-            force_stop = getattr(active.adapter.service, "force_stop", None)
+            force_stop = getattr(self.run_service, "force_stop", None)
             if callable(force_stop):
                 force_stop(project_id)
                 active.finished.wait(1.0)
@@ -286,7 +269,7 @@ class AgentRunCoordinator:
 
         if active is not None and active.project_id == project_id:
             if not active.finished.wait(RUN_STOP_WAIT_SECONDS):
-                force_stop = getattr(active.adapter.service, "force_stop", None)
+                force_stop = getattr(self.run_service, "force_stop", None)
                 if callable(force_stop):
                     force_stop(project_id)
                     active.finished.wait(1.0)
@@ -325,7 +308,7 @@ class AgentRunCoordinator:
                     self._active = None
 
     def _invoke_service(self, active: _ActiveRun) -> AgentRunOutcome:
-        result = active.adapter.service.run(
+        result = self.run_service.run(
             active.project_id,
             active.prompt,
             cancellation_token=active.cancellation_token,
@@ -336,8 +319,8 @@ class AgentRunCoordinator:
             raise AgentRunError("Agent Run service returned an invalid outcome")
         return replace(
             result,
-            harness=active.adapter.harness,
-            implementation_version=active.adapter.implementation_version,
+            harness=AgentHarness.DEEPAGENTS,
+            implementation_version=DEEPAGENTS_IMPLEMENTATION_VERSION,
         )
 
     def _progress_callback(self, project_id: str) -> Callable[[ProgressUpdate], None]:

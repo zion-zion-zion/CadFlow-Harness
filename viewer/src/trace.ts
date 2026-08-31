@@ -740,13 +740,14 @@ function eventAgentLabel(event: TraceEvent): string {
   if (event.agent_name) return event.agent_name;
   if (event.agent_id) return event.agent_id;
   if (event.agent_role) return titleCase(event.agent_role);
-  return 'Unattributed';
+  if (event.role === 'user') return 'User';
+  if (event.type === 'backend_tool') return 'CAD Runtime';
+  return eventGroup(event) === 'Run' ? 'Run' : 'System';
 }
 
 function eventAgentKind(event: TraceEvent): string {
   if (event.agent_role === 'reviewer' || event.agent_id === 'cad-reviewer') return 'agent-reviewer';
   if (event.agent_role === 'primary' || event.agent_id === 'text-to-cad-primary') return 'agent-primary';
-  if (event.agent_role === 'orchestrator' || event.agent_id === 'cad-orchestrator') return 'agent-orchestrator';
   return 'agent-unknown';
 }
 
