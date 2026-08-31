@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -14,7 +13,7 @@ from backend.agent import (
     build_chat_model,
     create_agent_tools,
 )
-from backend.cad_executor import ExecutionResult
+from backend.cad_executor import CancellationToken, ExecutionResult
 from backend.projects import ProjectState, ProjectStateError, ProjectStore
 from backend.restricted_tools import RestrictedAgentTools
 from backend.scene_validation import SceneParseResult
@@ -250,7 +249,7 @@ def test_failed_project_retains_all_attempt_diagnostics_but_never_exposes_scene(
     assert not artifact.exists()
 
 
-def test_agent_run_service_persists_three_attempts_and_removes_partial_output(
+def test_agent_run_service_returns_three_attempts_without_project_writes(
     tmp_path: Path,
 ) -> None:
     store = ProjectStore(tmp_path)
@@ -260,7 +259,15 @@ def test_agent_run_service_persists_three_attempts_and_removes_partial_output(
         def __init__(self, **_kwargs: object) -> None:
             pass
 
-        def run(self, _prompt: str) -> AgentRunOutcome:
+        def run(
+            self,
+            _prompt: str,
+            *,
+            cancellation_token: object,
+            progress_callback: object,
+            conversation_context: object,
+        ) -> AgentRunOutcome:
+            del cancellation_token, progress_callback, conversation_context
             results = tuple(
                 _execution_result(error=f"failure {i}") for i in range(1, 4)
             )
@@ -278,24 +285,29 @@ def test_agent_run_service_persists_three_attempts_and_removes_partial_output(
         ),
         agent_factory=ReturningAgent,
     )
-    outcome = service.run(project.project_id, "Make a part.")
+    store.submit_prompt(project.project_id, "Make a part.")
+    conversation_log = store.conversation_log(
+        project.project_id,
+        turn_id="turn-1",
+        request_id="request-1",
+        user_message="Make a part.",
+    )
+    outcome = service.run(
+        project.project_id,
+        "Make a part.",
+        cancellation_token=CancellationToken(),
+        progress_callback=lambda _update: None,
+        conversation_log=conversation_log,
+    )
 
     assert outcome.validated is False
-    assert store.get_project(project.project_id).state is ProjectState.FAILED
-    diagnostics = store.read_diagnostics(project.project_id)
-    assert diagnostics is not None
-    assert diagnostics["cad_execution_count"] == 3
-    assert [item["attempt"] for item in diagnostics["execution_results"]] == [1, 2, 3]
-    assert not (tmp_path / project.project_id / "artifacts").exists() or not any(
-        (tmp_path / project.project_id / "artifacts").iterdir()
-    )
-    agent_log = tmp_path / project.project_id / "conversation.jsonl"
-    assert agent_log.is_file()
-    records = [
-        json.loads(line)
-        for line in agent_log.read_text(encoding="utf-8").splitlines()
-    ]
-    assert records[-1]["payload"]["status"] == "failed"
+    assert store.get_project(project.project_id).state is ProjectState.RUNNING
+    assert store.read_diagnostics(project.project_id) is None
+    assert outcome.diagnostics()["cad_execution_count"] == 3
+    assert [
+        item["attempt"] for item in outcome.diagnostics()["execution_results"]
+    ] == [1, 2, 3]
+    assert conversation_log.turn("turn-1")["status"] == "running"  # type: ignore[index]
 
 
 @pytest.mark.parametrize(

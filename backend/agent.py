@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import importlib.metadata
 import math
 import os
 import time
-import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence, cast
@@ -33,7 +31,6 @@ from .contracts import ToolUseRecord
 from .events import ProgressUpdate
 from .harnesses import AgentHarness
 from .projects import ProjectStore
-from .projects import ProjectState
 from .restricted_tools import AgentModelValidator
 from .scene_validation import SceneParseResult
 
@@ -907,7 +904,12 @@ class ReferenceGroundedAgent:
 
 
 class AgentRunService:
-    """Execute one turn within a durable Project conversation."""
+    """Execute Agent work for a coordinator-owned Project turn.
+
+    The coordinator owns Prompt submission, Conversation turns, terminal
+    Project state, and Artifact promotion. This service only loads execution
+    context and returns a structured outcome.
+    """
 
     def __init__(
         self,
@@ -927,45 +929,19 @@ class AgentRunService:
         project_id: str,
         prompt: str,
         *,
-        cancellation_token: CancellationToken | None = None,
-        progress_callback: Callable[[ProgressUpdate], None] | None = None,
-        prompt_submitted: bool = False,
-        conversation_log: ConversationLog | None = None,
-        turn_id: str | None = None,
+        cancellation_token: CancellationToken,
+        progress_callback: Callable[[ProgressUpdate], None],
+        conversation_log: ConversationLog,
     ) -> AgentRunOutcome:
-        project = (
-            self.store.get_project(project_id)
-            if prompt_submitted
-            else self.store.submit_prompt(project_id, prompt)
-        )
-        if prompt_submitted and project.state != ProjectState.RUNNING:
-            raise AgentRunError("Agent Run requires a Running Project")
-        token = cancellation_token or CancellationToken()
-        owns_conversation = conversation_log is None
-        active_turn_id = turn_id or uuid.uuid4().hex
-        log = conversation_log or ConversationLog(
-            self.store.project_directory(project.project_id),
-            conversation_id=project.project_id,
-            turn_id=active_turn_id,
-            request_id=uuid.uuid4().hex,
-            user_message=prompt,
-            harness=AgentHarness.DEEPAGENTS.value,
-            implementation_version=DEEPAGENTS_IMPLEMENTATION_VERSION,
-        )
+        project = self.store.get_project(project_id)
+        token = cancellation_token
+        log = conversation_log
         if token.cancelled:
-            outcome = AgentRunOutcome(
+            return AgentRunOutcome(
                 validated=False,
                 cancelled=True,
                 failure_reason="Agent Run stopped by caller",
             )
-            self.store.mark_stopped(
-                project.project_id,
-                outcome.failure_reason or "Agent Run stopped by caller",
-                outcome.diagnostics(),
-            )
-            if owns_conversation:
-                _finish_conversation_turn(log, outcome, self.store, project.project_id)
-            return outcome
         try:
             settings = self.settings_factory()
             log.configure(
@@ -984,17 +960,6 @@ class AgentRunService:
                     cancelled=True,
                     failure_reason="Agent Run stopped by caller",
                 )
-                self.store.mark_stopped(
-                    project.project_id,
-                    outcome.failure_reason or "Agent Run stopped by caller",
-                    outcome.diagnostics(),
-                )
-            else:
-                self.store.mark_failed(
-                    project.project_id, reason, outcome.diagnostics()
-                )
-            if owns_conversation:
-                _finish_conversation_turn(log, outcome, self.store, project.project_id)
             return outcome
 
         try:
@@ -1002,31 +967,20 @@ class AgentRunService:
                 "settings": settings,
                 "repo_root": self.repo_root,
                 "project_dir": self.store.project_directory(project.project_id),
+                "conversation_log": log,
             }
-            try:
-                factory_parameters = inspect.signature(self.agent_factory).parameters
-            except (TypeError, ValueError):
-                factory_parameters = {}
-            accepts_factory_kwargs = any(
-                item.kind is inspect.Parameter.VAR_KEYWORD
-                for item in factory_parameters.values()
-            )
-            if (
-                "conversation_log" in factory_parameters
-                or accepts_factory_kwargs
-            ):
-                factory_kwargs["conversation_log"] = log
             agent = self.agent_factory(**factory_kwargs)
             conversation_context = log.context_messages(
-                exclude_turn_id=active_turn_id
+                exclude_turn_id=log.turn_id
             )
-            outcome = _invoke_agent_run(
-                agent,
+            outcome = agent.run(
                 project.prompt or prompt,
                 cancellation_token=token,
                 progress_callback=progress_callback,
                 conversation_context=conversation_context,
             )
+            if not isinstance(outcome, AgentRunOutcome):
+                raise AgentRunError("Agent returned an invalid Run outcome")
         except Exception as exc:
             reason = _safe_failure_reason(exc)
             outcome = AgentRunOutcome(validated=False, failure_reason=reason)
@@ -1043,96 +997,7 @@ class AgentRunService:
                 cancelled=True,
                 failure_reason="Agent Run stopped by caller",
             )
-        if outcome.cancelled:
-            self.store.mark_stopped(
-                project.project_id,
-                outcome.failure_reason or "Agent Run stopped by caller",
-                outcome.diagnostics(),
-            )
-            if owns_conversation:
-                _finish_conversation_turn(log, outcome, self.store, project.project_id)
-            return outcome
-        if outcome.validated:
-            try:
-                self.store.mark_succeeded(project.project_id, outcome.diagnostics())
-            except Exception as exc:
-                reason = _safe_failure_reason(exc)
-                outcome = replace(
-                    outcome,
-                    validated=False,
-                    failure_reason=reason,
-                )
-                self.store.mark_failed(
-                    project.project_id,
-                    reason,
-                    outcome.diagnostics(),
-                )
-        else:
-            self.store.mark_failed(
-                project.project_id,
-                outcome.failure_reason or "Agent Run failed",
-                outcome.diagnostics(),
-            )
-        if owns_conversation:
-            _finish_conversation_turn(log, outcome, self.store, project.project_id)
         return outcome
-
-
-def _invoke_agent_run(
-    agent: Any,
-    prompt: str,
-    *,
-    cancellation_token: CancellationToken,
-    progress_callback: Callable[[ProgressUpdate], None] | None,
-    conversation_context: list[dict[str, str]] | None = None,
-) -> AgentRunOutcome:
-    """Call old issue-03 test adapters and the cancellable Agent uniformly."""
-
-    run: Any = agent.run
-    kwargs: dict[str, object] = {}
-    parameters: Mapping[str, inspect.Parameter]
-    try:
-        parameters = inspect.signature(run).parameters
-    except (TypeError, ValueError):
-        parameters = {}
-    accepts_kwargs = any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters.values()
-    )
-    if accepts_kwargs or "cancellation_token" in parameters:
-        kwargs["cancellation_token"] = cancellation_token
-    if accepts_kwargs or "progress_callback" in parameters:
-        kwargs["progress_callback"] = progress_callback
-    if accepts_kwargs or "conversation_context" in parameters:
-        kwargs["conversation_context"] = conversation_context
-    return run(prompt, **kwargs)
-
-
-def _finish_conversation_turn(
-    log: ConversationLog,
-    outcome: AgentRunOutcome,
-    store: ProjectStore,
-    project_id: str,
-) -> None:
-    assistant_message = log.latest_model_response_text()
-    if not assistant_message:
-        if outcome.validated:
-            version = store.current_artifact_version(project_id)
-            assistant_message = (
-                f"CAD model updated successfully. Artifact v{version:04d} is ready."
-                if version is not None
-                else "CAD model updated successfully."
-            )
-        else:
-            assistant_message = outcome.failure_reason or "The CAD turn failed."
-    log.finish(
-        status=outcome.status,
-        failure_reason=outcome.failure_reason,
-        assistant_message=assistant_message,
-        artifact_version=(
-            store.current_artifact_version(project_id) if outcome.validated else None
-        ),
-    )
 
 
 def _is_validated_result(result: ExecutionResult) -> bool:

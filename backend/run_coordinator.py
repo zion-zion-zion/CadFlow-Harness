@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import inspect
 import threading
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable
 
 from .agent import (
     AgentRunError,
@@ -52,6 +51,7 @@ class _ActiveRun:
     adapter: AgentRunAdapter
     thread: threading.Thread | None = None
     stopping: bool = False
+    finalized: bool = False
 
 
 @dataclass(frozen=True)
@@ -317,9 +317,6 @@ class AgentRunCoordinator:
                 failure_reason=_safe_reason(exc),
             )
         try:
-            self._preview_call(
-                "deactivate", active.project_id, validated=outcome.validated
-            )
             self._finish_project(active, outcome)
         finally:
             active.finished.set()
@@ -328,29 +325,13 @@ class AgentRunCoordinator:
                     self._active = None
 
     def _invoke_service(self, active: _ActiveRun) -> AgentRunOutcome:
-        run: Any = active.adapter.service.run
-        kwargs: dict[str, object] = {}
-        parameters: Mapping[str, inspect.Parameter]
-        try:
-            parameters = inspect.signature(run).parameters
-        except (TypeError, ValueError):
-            parameters = {}
-        accepts_kwargs = any(
-            item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters.values()
+        result = active.adapter.service.run(
+            active.project_id,
+            active.prompt,
+            cancellation_token=active.cancellation_token,
+            progress_callback=self._progress_callback(active.project_id),
+            conversation_log=active.conversation_log,
         )
-        if accepts_kwargs or "cancellation_token" in parameters:
-            kwargs["cancellation_token"] = active.cancellation_token
-        if accepts_kwargs or "progress_callback" in parameters:
-            kwargs["progress_callback"] = self._progress_callback(active.project_id)
-        if accepts_kwargs or "prompt_submitted" in parameters:
-            kwargs["prompt_submitted"] = True
-        if accepts_kwargs or "harness" in parameters:
-            kwargs["harness"] = active.adapter.harness
-        if accepts_kwargs or "conversation_log" in parameters:
-            kwargs["conversation_log"] = active.conversation_log
-        if accepts_kwargs or "turn_id" in parameters:
-            kwargs["turn_id"] = active.turn_id
-        result = run(active.project_id, active.prompt, **kwargs)
         if not isinstance(result, AgentRunOutcome):
             raise AgentRunError("Agent Run service returned an invalid outcome")
         return replace(
@@ -405,79 +386,112 @@ class AgentRunCoordinator:
             return
 
     def _finish_project(self, active: _ActiveRun, outcome: AgentRunOutcome) -> None:
-        project = self.store.get_project(active.project_id)
-        if project.state == ProjectState.RUNNING:
-            try:
-                if (
-                    active.cancellation_token.cancellation_reason == "caller"
+        # Serialize the terminal decision with Stop so a caller cancellation
+        # cannot be followed by a successful Artifact promotion.
+        with self._lock:
+            if active.finalized:
+                return
+            active.finalized = True
+            project = self.store.get_project(active.project_id)
+            if project.state == ProjectState.RUNNING:
+                stop_requested = (
+                    active.stopping
+                    or active.cancellation_token.cancellation_reason == "caller"
                     or outcome.cancelled
-                ):
-                    project = self.store.mark_stopped(
-                        active.project_id,
-                        outcome.failure_reason or "Agent Run stopped by user",
-                        outcome.diagnostics(),
-                    )
-                elif outcome.validated:
-                    project = self.store.mark_succeeded(
-                        active.project_id, outcome.diagnostics()
+                )
+                try:
+                    if stop_requested:
+                        project = self.store.mark_stopped(
+                            active.project_id,
+                            outcome.failure_reason or "Agent Run stopped by user",
+                            outcome.diagnostics(),
+                        )
+                    elif outcome.validated:
+                        try:
+                            project = self.store.mark_succeeded(
+                                active.project_id, outcome.diagnostics()
+                            )
+                        except Exception as exc:
+                            # Artifact promotion is part of the terminal
+                            # transition. A promotion error turns the Run
+                            # into Failed and never leaves a false success.
+                            reason = _safe_reason(exc)
+                            outcome = replace(
+                                outcome,
+                                validated=False,
+                                failure_reason=reason,
+                            )
+                            project = self.store.mark_failed(
+                                active.project_id,
+                                reason,
+                                outcome.diagnostics(),
+                            )
+                    else:
+                        project = self.store.mark_failed(
+                            active.project_id,
+                            outcome.failure_reason or "Agent Run failed",
+                            outcome.diagnostics(),
+                        )
+                except ProjectStateError as exc:
+                    project = self.store.get_project(active.project_id)
+                    if project.state == ProjectState.RUNNING:
+                        try:
+                            project = self.store.mark_failed(
+                                active.project_id,
+                                _safe_reason(exc),
+                                outcome.diagnostics(),
+                            )
+                        except ProjectStateError:
+                            project = self.store.get_project(active.project_id)
+
+            if project.state == ProjectState.SUCCEEDED:
+                final_stage = "completed"
+                final_result = "Validated Result is ready"
+            elif project.state == ProjectState.STOPPED:
+                final_stage = "stopped"
+                final_result = "Agent Run stopped; unvalidated Scene Artifact discarded"
+            elif project.state == ProjectState.FAILED:
+                final_stage = "failed"
+                final_result = project.failure_reason or "Agent Run failed"
+            else:
+                # This is only reachable if persistence itself failed before a
+                # terminal state could be written. Keep the turn consistent.
+                final_stage = "failed"
+                final_result = "Agent Run did not reach a terminal Project state"
+
+            self._preview_call(
+                "deactivate",
+                active.project_id,
+                validated=project.state == ProjectState.SUCCEEDED,
+            )
+            self.events.append(
+                active.project_id,
+                stage=final_stage,
+                tool="service",
+                result=final_result,
+            )
+            succeeded = project.state == ProjectState.SUCCEEDED
+            assistant_message = active.conversation_log.latest_model_response_text()
+            if not assistant_message:
+                if succeeded:
+                    version = self.store.current_artifact_version(active.project_id)
+                    assistant_message = (
+                        f"CAD model updated successfully. Artifact v{version:04d} is ready."
+                        if version is not None
+                        else "CAD model updated successfully."
                     )
                 else:
-                    project = self.store.mark_failed(
-                        active.project_id,
-                        outcome.failure_reason or "Agent Run failed",
-                        outcome.diagnostics(),
-                    )
-            except ProjectStateError as exc:
-                project = self.store.get_project(active.project_id)
-                if project.state == ProjectState.RUNNING:
-                    project = self.store.mark_failed(
-                        active.project_id,
-                        _safe_reason(exc),
-                        outcome.diagnostics(),
-                    )
-        if project.state == ProjectState.SUCCEEDED:
-            self.events.append(
-                active.project_id,
-                stage="completed",
-                tool="service",
-                result="Validated Result is ready",
+                    assistant_message = project.failure_reason or "The CAD turn failed."
+            active.conversation_log.finish(
+                status="succeeded" if succeeded else project.state.value.lower(),
+                failure_reason=None if succeeded else project.failure_reason,
+                assistant_message=assistant_message,
+                artifact_version=(
+                    self.store.current_artifact_version(active.project_id)
+                    if succeeded
+                    else None
+                ),
             )
-        elif project.state == ProjectState.STOPPED:
-            self.events.append(
-                active.project_id,
-                stage="stopped",
-                tool="service",
-                result="Agent Run stopped; unvalidated Scene Artifact discarded",
-            )
-        elif project.state == ProjectState.FAILED:
-            self.events.append(
-                active.project_id,
-                stage="failed",
-                tool="service",
-                result=project.failure_reason or "Agent Run failed",
-            )
-        succeeded = project.state == ProjectState.SUCCEEDED
-        assistant_message = active.conversation_log.latest_model_response_text()
-        if not assistant_message:
-            if succeeded:
-                version = self.store.current_artifact_version(active.project_id)
-                assistant_message = (
-                    f"CAD model updated successfully. Artifact v{version:04d} is ready."
-                    if version is not None
-                    else "CAD model updated successfully."
-                )
-            else:
-                assistant_message = project.failure_reason or "The CAD turn failed."
-        active.conversation_log.finish(
-            status="succeeded" if succeeded else project.state.value.lower(),
-            failure_reason=None if succeeded else project.failure_reason,
-            assistant_message=assistant_message,
-            artifact_version=(
-                self.store.current_artifact_version(active.project_id)
-                if succeeded
-                else None
-            ),
-        )
 
 
 def _safe_reason(error: Exception) -> str:

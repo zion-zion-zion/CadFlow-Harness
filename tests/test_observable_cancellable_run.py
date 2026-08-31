@@ -161,9 +161,9 @@ class _LifecycleRunHarness:
         *,
         cancellation_token: object,
         progress_callback: object,
-        prompt_submitted: bool,
+        conversation_log: object,
     ) -> AgentRunOutcome:
-        assert prompt_submitted is True
+        assert conversation_log is not None
         assert callable(progress_callback)
         progress_callback(ProgressUpdate(stage="reading_references", tool="reference"))  # type: ignore[operator]
         self.started.set()
@@ -184,9 +184,9 @@ class _TimeoutRunHarness:
         *,
         cancellation_token: CancellationToken,
         progress_callback: object,
-        prompt_submitted: bool,
+        conversation_log: object,
     ) -> AgentRunOutcome:
-        assert prompt_submitted is True
+        assert conversation_log is not None
         cancellation_token.cancel(reason="timeout")
         return AgentRunOutcome(
             validated=False,

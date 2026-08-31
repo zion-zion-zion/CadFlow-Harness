@@ -23,9 +23,9 @@ class _LifecycleRunHarness:
         *,
         cancellation_token: object,
         progress_callback: object,
-        prompt_submitted: bool,
+        conversation_log: object,
     ) -> AgentRunOutcome:
-        assert prompt_submitted is True
+        assert conversation_log is not None
         assert callable(progress_callback)
         self.started.set()
         while not getattr(cancellation_token, "cancelled"):

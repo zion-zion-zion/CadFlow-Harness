@@ -277,15 +277,21 @@ class ConversationLog:
         assistant_message: str | None = None,
         artifact_version: int | None = None,
     ) -> None:
-        if assistant_message:
-            self._append("assistant_message", content=assistant_message)
-        if artifact_version is not None:
-            self._append("artifact_committed", version=artifact_version)
-        self._append(
-            "turn_succeeded" if status == "succeeded" else "turn_failed",
-            status=status,
-            failure_reason=failure_reason,
-        )
+        # A coordinator/recovery retry must not append a second terminal
+        # event, assistant message, or artifact commit for the same turn.
+        with self._lock:
+            current = self.turn(self.turn_id) if self.turn_id is not None else None
+            if current is not None and current.get("status") != "running":
+                return
+            if assistant_message:
+                self._append("assistant_message", content=assistant_message)
+            if artifact_version is not None:
+                self._append("artifact_committed", version=artifact_version)
+            self._append(
+                "turn_succeeded" if status == "succeeded" else "turn_failed",
+                status=status,
+                failure_reason=failure_reason,
+            )
 
     def turns(self) -> list[dict[str, Any]]:
         """Build the user-facing turn projection from the canonical event stream."""

@@ -88,9 +88,9 @@ class _DeterministicSuccessHarness:
         *,
         cancellation_token: CancellationToken,
         progress_callback: Callable[[ProgressUpdate], None],
-        prompt_submitted: bool,
+        conversation_log: object,
     ) -> AgentRunOutcome:
-        assert prompt_submitted is True
+        assert conversation_log is not None
         project_dir = self.projects_root / project_id
         progress_callback(ProgressUpdate(stage="reading_references", tool="reference"))
         scaffold = create_model_source(project_dir)
@@ -141,9 +141,9 @@ class _DeterministicFailureHarness:
         *,
         cancellation_token: CancellationToken,
         progress_callback: Callable[[ProgressUpdate], None],
-        prompt_submitted: bool,
+        conversation_log: object,
     ) -> AgentRunOutcome:
-        assert prompt_submitted is True
+        assert conversation_log is not None
         assert cancellation_token.cancelled is False
         progress_callback(ProgressUpdate(stage="executing", tool="cad", attempt=1))
         return AgentRunOutcome(
@@ -201,7 +201,7 @@ class _SuccessFailureSuccessHarness:
             prompt,
             cancellation_token=kwargs["cancellation_token"],  # type: ignore[arg-type]
             progress_callback=kwargs["progress_callback"],  # type: ignore[arg-type]
-            prompt_submitted=bool(kwargs["prompt_submitted"]),
+            conversation_log=kwargs["conversation_log"],
         )
 
 
@@ -219,9 +219,9 @@ class _DeterministicBlockingCadHarness:
         *,
         cancellation_token: CancellationToken,
         progress_callback: Callable[[ProgressUpdate], None],
-        prompt_submitted: bool,
+        conversation_log: object,
     ) -> AgentRunOutcome:
-        assert prompt_submitted is True
+        assert conversation_log is not None
         project_dir = self.projects_root / project_id
         scaffold = create_model_source(project_dir)
         scaffold.model_path.write_text(

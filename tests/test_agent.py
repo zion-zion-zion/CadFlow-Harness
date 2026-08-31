@@ -571,11 +571,24 @@ def test_missing_configuration_fails_a_project_without_calling_a_model(
         settings_factory=missing_settings,
     )
     project = store.create_project("No credentials")
+    store.submit_prompt(project.project_id, "Create a box.")
+    conversation_log = store.conversation_log(
+        project.project_id,
+        turn_id="turn-1",
+        request_id="request-1",
+        user_message="Create a box.",
+    )
 
-    outcome = service.run(project.project_id, "Create a box.")
+    outcome = service.run(
+        project.project_id,
+        "Create a box.",
+        cancellation_token=CancellationToken(),
+        progress_callback=lambda _update: None,
+        conversation_log=conversation_log,
+    )
 
     assert outcome.validated is False
-    assert store.get_project(project.project_id).state is ProjectState.FAILED
+    assert store.get_project(project.project_id).state is ProjectState.RUNNING
     assert outcome.failure_reason == "OPENAI_API_KEY is required"
 
 
@@ -625,8 +638,21 @@ def test_agent_run_service_persists_provider_token_usage(tmp_path: Path) -> None
         agent_factory=UsageReportingAgent,
     )
     project = store.create_project("Measured run")
+    store.submit_prompt(project.project_id, "Create a box.")
+    conversation_log = store.conversation_log(
+        project.project_id,
+        turn_id="turn-1",
+        request_id="request-1",
+        user_message="Create a box.",
+    )
 
-    outcome = service.run(project.project_id, "Create a box.")
+    outcome = service.run(
+        project.project_id,
+        "Create a box.",
+        cancellation_token=CancellationToken(),
+        progress_callback=lambda _update: None,
+        conversation_log=conversation_log,
+    )
 
     assert outcome.token_usage == {
         "total_tokens": 100,
@@ -635,7 +661,6 @@ def test_agent_run_service_persists_provider_token_usage(tmp_path: Path) -> None
         "uncached_input_tokens": 30,
         "output_tokens": 20,
     }
-    diagnostics = store.read_diagnostics(project.project_id)
-    assert diagnostics is not None
-    assert diagnostics["duration_seconds"] == 1.25
-    assert diagnostics["token_usage"] == outcome.token_usage
+    assert store.get_project(project.project_id).state is ProjectState.RUNNING
+    assert store.read_diagnostics(project.project_id) is None
+    assert conversation_log.turn("turn-1")["status"] == "running"  # type: ignore[index]
