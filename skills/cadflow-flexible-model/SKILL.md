@@ -1,6 +1,6 @@
 ---
 name: cadflow-flexible-model
-description: Build static flexible-material geometry in CadFlow for cloth, leather, sheet goods, membranes, draped panels, and garments. Use when the deliverable is a static multi-face surface or thin shell with dense mesh output, wrinkles, sections, OBJ/STL/JSON, or rendered PNG views. Do not add gravity, collision, time integration, velocity, XPBD, or motion simulation.
+description: Build static flexible-material geometry in CadFlow for cloth, leather, sheet goods, membranes, draped panels, and garments. Use when the deliverable is a static multi-face surface or thin shell with dense mesh output, wrinkles, sections, OBJ/STL/JSON, or rendered PNG views. Do not add gravity, time integration, velocity, XPBD, or motion simulation.
 ---
 
 # CadFlow Static Flexible Modeling
@@ -54,8 +54,8 @@ Keep the boundary stateless and narrow:
 - Python (`python/cadflow/flexible.py`) owns material/design semantics,
   section construction, panel composition, validation, measurement, and file
   export.
-- Do not add C++ callbacks into Python, time state, scene state, collision
-  state, gravity, velocity, or an XPBD/deformable simulation API.
+- Do not add C++ callbacks into Python, time state, scene state, gravity,
+  velocity, or an XPBD/deformable simulation API.
 
 ## Minimal section-driven pattern
 

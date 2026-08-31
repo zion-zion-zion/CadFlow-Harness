@@ -38,6 +38,21 @@ def test_packaged_skill_references_exist() -> None:
             )
 
 
+def test_assembly_skill_has_no_collision_validation_contract() -> None:
+    skill_root = Path(__file__).parents[1] / "skills" / "cadflow-model-assembly"
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            skill_root / "SKILL.md",
+            skill_root / "references" / "assembly-api.md",
+            skill_root / "references" / "project-structure.md",
+        )
+    ).lower()
+
+    for removed_term in ("collision", "penetration", "interference"):
+        assert removed_term not in source
+
+
 def test_current_example_index_references_existing_paths() -> None:
     examples_root = Path(__file__).parents[1] / "examples"
     index = (examples_root / "README.md").read_text(encoding="utf-8")

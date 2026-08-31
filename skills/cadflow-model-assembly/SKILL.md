@@ -1,6 +1,6 @@
 ---
 name: cadflow-model-assembly
-description: Build and validate semantic multi-part mechanical products with CadFlow. Use for separately manufactured parts, repeated instances, nested subassemblies, connectors, constraints, BOM structure, envelopes, or collision checks. Use cadflow-model-part when the deliverable is one rigid manufactured solid.
+description: Build and validate semantic multi-part mechanical products with CadFlow. Use for separately manufactured parts, repeated instances, nested subassemblies, connectors, constraints, BOM structure, or envelopes. Use cadflow-model-part when the deliverable is one rigid manufactured solid.
 ---
 
 # CadFlow Assembly Modeling
@@ -30,9 +30,7 @@ BOM, assumptions, validation report, and deterministic source snapshot. Source
 code does not write those outputs.
 
 Define JSON-compatible `PRODUCT_SPEC` in `model.py`. Every Assembly declares
-`envelope.max_size_mm`; record inferred values in `assumptions`. Collision
-exclusions are optional, pair-specific full leaf paths with a physical reason.
-The fixed penetration tolerance is 0.02 mm.
+`envelope.max_size_mm`; record inferred values in `assumptions`.
 
 ## Workflow
 
@@ -53,7 +51,7 @@ The fixed penetration tolerance is 0.02 mm.
    prismatic freedom.
 6. Return the semantic Assembly and run `validate_model`. Treat strict solve,
    every residual's SDK tolerance, STEP replay, Scene parse, envelope, and
-   current-pose collision as blocking gates.
+   product structure as blocking gates.
 7. Repair one diagnosed failure at a time. A successful partial Assembly is a
    checkpoint; continue until the complete requested product is represented.
    Run `cad_review` only after deterministic validation reports `Passed`.
@@ -74,15 +72,14 @@ The fixed penetration tolerance is 0.02 mm.
   construct teeth, contact, backlash, or load capacity.
 - Keep fastener holes and locating features compatible even when fastener
   solids are intentionally omitted.
-- Current-pose collision is not swept-volume clearance. Do not claim motion
-  clearance, strength, bearing life, tolerance stack, thermal performance, or
-  manufacturability without corresponding analysis.
+- Do not claim motion clearance, strength, bearing life, tolerance stack,
+  thermal performance, or manufacturability without corresponding analysis.
 
 ## Failure handling
 
 - Read the failed entries in `product_validation_checks` before editing. Use
-  their solve message, residual IDs, collision paths and contacts, or envelope
-  measurements as the repair scope. A short-circuited diagnostic Draft omits
+  their solve message, residual IDs, or envelope measurements as the repair
+  scope. A short-circuited diagnostic Draft omits
   downstream artifacts; the complete report enters the product bundle after
   the early gates pass.
 - A failed strict solve may include non-strict diagnostic residuals. Use that
@@ -91,15 +88,10 @@ The fixed penetration tolerance is 0.02 mm.
 - For a strict-solve failure, inspect the first residual, missing connector,
   contradictory ground, duplicate reference, and constraint cycle before
   changing geometry.
-- For collision failure, correct unintended penetration. Exclude only a named
-  intentional-contact or fit pair, with its real leaf paths and physical
-  reason; never raise the global tolerance to obtain a pass. Treat the
-  reported failure pairs as the repair scope: first change one of those Parts
-  or its placement, and do not add exclusions for pairs absent from the report.
 - For envelope failure, repair shared dimensions or packaging while preserving
   the requested interfaces and function.
 - For STEP or Scene failure, simplify or repair the failing Part topology while
   retaining semantic Assembly boundaries.
 - For timeout, use `execution_phase` and the phase named in `error`. Repair the
   active phase instead of changing unrelated modules. Simplify nonfunctional
-  detail before retrying a slow build, collision, STEP, Scene, or review phase.
+  detail before retrying a slow build, STEP, Scene, or review phase.

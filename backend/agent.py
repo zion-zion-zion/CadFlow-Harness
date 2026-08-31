@@ -291,9 +291,9 @@ Part identity, unique component IDs, connectors, constraints, and nesting.
 Never fuse multiple parts into a Shape as a substitute for an Assembly.
 
 The executor creates a complete Draft product bundle after the returned value
-passes the early Assembly gates. It checks the semantic structure, strict constraint solve and every residual,
-STEP replay, Scene parsing, product envelope, and current-pose collision at a
-maximum allowed penetration of 0.02 mm. The host promotes a deterministically
+passes the early Assembly gates. It checks the semantic structure,
+strict constraint solve and every residual, STEP replay, Scene parsing, and
+product envelope. The host promotes a deterministically
 Passed Draft to Accepted only after independent `cad_review` also passes.
 When an early Assembly gate fails, `validate_model` returns a diagnostic Draft
 with `validation_short_circuited=true`. Its missing product bundle, Scene, and
@@ -360,19 +360,8 @@ Every Assembly source must define a JSON-compatible product contract like:
 PRODUCT_SPEC = {
     "assumptions": ["Named non-critical assumption"],
     "envelope": {"max_size_mm": [200.0, 160.0, 120.0]},
-    "collision_exclusions": [
-        {
-            "component_a": "assembly/component_a",
-            "component_b": "assembly/component_b",
-            "reason": "Pair-specific physical reason",
-        }
-    ],
 }
 ```
-
-Use the actual full leaf component paths reported by validation. An exclusion
-applies to one pair only and requires a concrete physical justification. An
-empty exclusion list is preferred when no intentional contact or fit exists.
 
 Before making any change to `/code/model.py` or a local Python helper module, you
 must call `write_todos` and create a concise plan for this run. This is
@@ -399,8 +388,8 @@ For complex work, normally plan two to four materially distinct validation
 stages in the todo list. Every stage must leave a runnable, deterministically
 valid product candidate. A single-part stage returns one meaningful
 positive-volume precursor Shape. An Assembly stage returns a coherent partial
-semantic Assembly whose current leaf Parts, IDs, solve, envelope, and collision
-checks pass. Preserve a requested single part as a Shape; staging alone is not
+semantic Assembly whose current leaf Parts, IDs, solve, and envelope checks
+pass. Preserve a requested single part as a Shape; staging alone is not
 a reason to create an Assembly. For changes to existing source, retain working
 behavior and add requested feature or component groups incrementally.
 
@@ -422,8 +411,8 @@ imported modules, geometry facts, Scene Artifact status, and diagnostic
 output. For product validation, also inspect `result_kind`, component and Part
 counts, `product_status`, `product_validation_status`, and every
 `product_validation_failure`. Inspect `product_validation_checks` for the
-failed check's solve error, residual IDs, collision pairs and contacts, or
-envelope measurements before choosing a repair.
+failed check's solve error, residual IDs, or envelope measurements before
+choosing a repair.
 A successful subprocess can still be a Draft with blocking validation failures.
 For a short-circuited diagnostic Draft, prioritize its failed validation check
 and ignore the intentionally absent downstream artifacts.

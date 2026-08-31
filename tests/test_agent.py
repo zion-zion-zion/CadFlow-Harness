@@ -463,7 +463,7 @@ def test_agent_prompt_routes_shape_and_assembly_through_applicable_skills(
     assert "Return a semantic `cad.Assembly`" in prompt
     assert "Never fuse multiple parts" in prompt
     assert "strict constraint solve and every residual" in prompt
-    assert "maximum allowed penetration of 0.02 mm" in prompt
+    assert "collision" not in prompt.lower()
     assert "Passed Draft to Accepted" in prompt
     assert "Use `product_validation_checks` for solve diagnosis" in prompt
     assert "`validation_short_circuited=true`" in prompt
@@ -494,7 +494,7 @@ def test_agent_prompt_requires_diagnostic_repairs_before_retry(tmp_path: Path) -
     assert "Identify the reported failure and its likely cause." in prompt
     assert "Make a concrete, material source change" in prompt
     assert "Inspect `product_validation_checks`" in prompt
-    assert "residual IDs, collision pairs and contacts" in prompt
+    assert "residual IDs, or envelope measurements" in prompt
     assert "Call `validate_model` again only after the source has materially changed." in prompt
     assert "Never retry an unchanged or semantically equivalent Model Source." in prompt
     assert "unrelated changes merely to continue the run." in prompt
@@ -538,8 +538,7 @@ def test_agent_prompt_defines_multi_file_product_contract(tmp_path: Path) -> Non
     assert "split `/code/` into focused Python modules" in prompt
     assert "`model.py` as the small orchestration entry point" in prompt
     assert '"envelope": {"max_size_mm":' in prompt
-    assert '"collision_exclusions"' in prompt
-    assert "actual full leaf component paths" in prompt
+    assert '"collision_exclusions"' not in prompt
     assert "A successful subprocess can still be a Draft" in prompt
     assert "configured wall-clock budget of\n37.5 seconds" in prompt
     assert "do not wait for\nhuman approval" in prompt

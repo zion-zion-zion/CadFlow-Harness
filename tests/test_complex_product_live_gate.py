@@ -36,8 +36,8 @@ _ASSEMBLY_SUFFIX = """
 这是复杂产品任务。返回真实 cad.Assembly，不得融合成单个 Shape。使用多个职责明确的
 Python 模块组织共享尺寸、零件族和最终装配，model.py 只保留稳定入口和 PRODUCT_SPEC。
 只使用公开 CadFlow API。所有叶子必须是独立的一体 cad.Part；添加物理连接器、关节和
-传动耦合，严格求解约束。重复件必须复用同一 Part 定义。只对真实接触或配合的具名组件
-对声明碰撞排除并说明物理理由。记录未执行的强度、寿命、公差等工程分析假设。
+传动耦合，严格求解约束。重复件必须复用同一 Part 定义。记录未执行的强度、寿命、公差
+等工程分析假设。
 """
 
 
@@ -221,7 +221,6 @@ def _hidden_oracle(
         for required in (
             "strict_constraint_solve",
             "constraint_residuals",
-            "current_pose_collision",
             "envelope",
         ):
             if checks.get(required, {}).get("status") != "passed":

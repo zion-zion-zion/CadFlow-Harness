@@ -62,7 +62,6 @@ _VALIDATION_DEPTH_LIMIT = 8
 _VALIDATION_NODE_LIMIT = 768
 _VALIDATION_SEQUENCE_LIMIT = 32
 _VALIDATION_SEQUENCE_LIMITS = {
-    "contacts": 4,
     "failures": 12,
     "residuals": 24,
     "warnings": 8,
@@ -833,9 +832,6 @@ def _timeout_error(timeout_seconds: float, phase: str | None) -> str:
     guidance = {
         "model_build": "simplify expensive booleans and build one representative Part first",
         "strict_constraint_solve": "simplify or repair the constraint graph",
-        "current_pose_collision": (
-            "reduce mesh complexity; exclude only named physical contact pairs"
-        ),
         "product_step_export": "simplify product geometry before STEP export",
         "unique_part_step_export": "simplify the slow unique Part geometry",
         "step_export_replay": "simplify exported topology",

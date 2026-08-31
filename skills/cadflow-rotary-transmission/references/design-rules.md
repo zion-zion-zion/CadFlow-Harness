@@ -104,7 +104,7 @@ gear's addendum or measured body extent projected onto the perpendicular shaft
 axis. Require
 
 ```text
-shaft_start > opposite_gear_axis_extent + collision_clearance
+shaft_start > opposite_gear_axis_extent + perpendicular_clearance
 own_hub_end >= shaft_start + required_engagement_length
 ```
 
@@ -112,10 +112,9 @@ For a standard full-depth first estimate,
 `opposite_gear_axis_extent = m * (z_opposite + 2) / 2`; the generated body's
 actual bound is authoritative. Extend the bored coaxial hub when needed so the
 shaft still has positive engagement with its own gear. Encode both the
-clearance and engagement inequalities in shared dimensions. Repair a reported
-shaft/gear pair rather than excluding it, then validate the coupling and these
-collision pairs before adding secondary detail. The ideal ratio alone does not
-prove bevel tooth contact, so also validate the actual bounds and current pose.
+clearance and engagement inequalities in shared dimensions. Validate the
+coupling and these bounds before adding secondary detail. The ideal ratio alone
+does not prove bevel tooth contact, so also validate the actual dimensions.
 
 ## Invariants to encode
 

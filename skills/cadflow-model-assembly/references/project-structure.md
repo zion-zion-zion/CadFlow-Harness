@@ -52,7 +52,6 @@ solid. Its errors should name the failed physical relationship and values.
 PRODUCT_SPEC = {
     "assumptions": ["Torque and bearing-life calculations are out of scope."],
     "envelope": {"max_size_mm": [80.0, 80.0, 120.0]},
-    "collision_exclusions": [],
 }
 ```
 
@@ -88,10 +87,8 @@ revolute interface just because the seed placements coincide.
 | Mating interfaces agree | shared dimensions, connector frames, strict solve |
 | Constraints are coherent | no unsolved components, every residual in tolerance |
 | Package fits | replayed product STEP bounds against `PRODUCT_SPEC` |
-| Static pose has no unapproved penetration | 0.02 mm collision gate and exclusions |
 | Result is reproducible | complete hash-bound Python source snapshot |
 
-The executor generates and verifies all product artifacts. A passing
-current-pose collision report does not prove swept motion clearance. Keep any
-unperformed stress, life, preload, tolerance, thermal, fatigue, or prototype
-analysis explicit in assumptions rather than presenting it as validated.
+The executor generates and verifies all product artifacts. Keep any unperformed
+stress, life, preload, tolerance, thermal, fatigue, or prototype analysis
+explicit in assumptions rather than presenting it as validated.

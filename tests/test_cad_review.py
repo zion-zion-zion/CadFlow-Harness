@@ -154,7 +154,6 @@ def test_review_accepts_a_deterministically_passed_assembly(tmp_path: Path) -> N
 PRODUCT_SPEC = {
     "assumptions": [],
     "envelope": {"max_size_mm": [20.0, 5.0, 5.0]},
-    "collision_exclusions": [],
 }
 
 def build_model(model: cad.Model):
@@ -221,6 +220,7 @@ def test_reviewer_treats_host_validation_as_authoritative(tmp_path: Path) -> Non
     assert "trusted host executor owns strict Assembly solving" in prompt
     assert "Model Source is not required to call solve" in prompt
     assert '"product_validation_status": "Passed"' in prompt
+    assert "collision" not in prompt.lower()
 
 
 def test_review_infrastructure_failure_is_a_structured_fail(tmp_path: Path) -> None:

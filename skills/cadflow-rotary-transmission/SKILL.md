@@ -37,19 +37,17 @@ standard ball bearing.
 7. Validate in stages: one representative Part per family, one functional
    stage, then the complete product. Repair strict-solve and packaging failures
    before adding detail.
-8. Declare only real intentional mesh/contact pairs as collision exclusions,
-   one full leaf-path pair and reason per entry. The product still must pass the
-   fixed 0.02 mm current-pose gate, envelope, STEP replay, Scene parse, and
-   independent review.
+8. Verify the complete product passes strict constraint solving, every residual,
+   envelope, STEP replay, Scene parse, and independent review.
 
 Complete shared dimensions and helper providers before editing their importers.
 After a multi-file repair, reconcile every changed import and call site before
 the next validation. Keep housing, frame, carrier, and belt support geometry as
 simple as the requested function permits; standard tooth geometry already
-dominates collision, STEP, and render cost. If validation times out, use its
+dominates STEP and render cost. If validation times out, use its
 reported `execution_phase`: reduce boolean detail for `model_build`, repair the
 constraint graph for `strict_constraint_solve`, and simplify nonfunctional
-mesh detail for collision/export/review phases. A timeout retry must materially
+mesh detail for export/review phases. A timeout retry must materially
 reduce the named phase's cost.
 
 ## Scope of claims

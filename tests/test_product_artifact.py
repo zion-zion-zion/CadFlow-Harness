@@ -155,7 +155,6 @@ def _accepted_assembly_validation_bytes(*, status: str = "Accepted") -> bytes:
         "envelope_spec",
         "strict_constraint_solve",
         "constraint_residuals",
-        "current_pose_collision",
         "step_export_replay",
         "envelope",
         "scene_parse",

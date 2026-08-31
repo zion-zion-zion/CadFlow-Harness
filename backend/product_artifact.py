@@ -285,7 +285,6 @@ def accept_product_artifact(
         required_passed.update(
             {
                 "constraint_residuals",
-                "current_pose_collision",
                 "envelope",
                 "envelope_spec",
                 "strict_constraint_solve",
@@ -879,7 +878,6 @@ def _require_accepted_validation(artifact: ProductArtifact) -> None:
         required_passed.update(
             {
                 "constraint_residuals",
-                "current_pose_collision",
                 "envelope",
                 "envelope_spec",
                 "strict_constraint_solve",

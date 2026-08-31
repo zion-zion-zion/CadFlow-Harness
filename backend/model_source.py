@@ -73,7 +73,7 @@ def migrate_legacy_sources(project_dir: str | Path) -> Path:
             raise ValueError(f"Legacy Python source must be a regular file: {relative}")
         candidates.append((legacy_path, code_dir / relative))
 
-    # Validate every collision before moving anything so a conflict cannot
+    # Validate every destination conflict before moving anything so one cannot
     # leave half of a legacy source tree migrated.
     replacements: list[tuple[Path, Path, bool]] = []
     for legacy_path, target in candidates:

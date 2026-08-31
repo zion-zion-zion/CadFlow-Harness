@@ -460,7 +460,7 @@ def _review_prompt(
         "Only report explicit missing features, visible dimensions, alignment, "
         "geometry, or manufacturability conflicts. Do not invent requirements. "
         "The trusted host executor owns strict Assembly solving, residual checks, "
-        "collision, envelope, STEP replay, Scene parsing, and artifact export. "
+        "envelope, STEP replay, Scene parsing, and artifact export. "
         "A Passed product_validation_status is authoritative evidence that those "
         "gates passed. Model Source is not required to call solve, validate, render, "
         "or export APIs itself; absence of those calls is not a finding. "

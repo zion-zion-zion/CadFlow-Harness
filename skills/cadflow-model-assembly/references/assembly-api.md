@@ -202,7 +202,7 @@ constraint graph.
 
 Inspect residuals rather than relying only on `report.solved`. When driving a
 motion pose, rebuild or update the relevant driven constraint through supported
-public functions, solve again, then rerun envelope and collision checks.
+public functions, solve again, then rerun residual and envelope checks.
 
 ## Runtime entry and product contract
 
@@ -215,7 +215,6 @@ from dimensions import validate_design_dimensions
 PRODUCT_SPEC = {
     "assumptions": ["Rated-load calculations require separate analysis."],
     "envelope": {"max_size_mm": [80.0, 80.0, 120.0]},
-    "collision_exclusions": [],
 }
 
 def build_model(model: cad.Model) -> cad.Assembly:
@@ -227,26 +226,3 @@ Keep `PRODUCT_SPEC` available in `model.py`'s global namespace. Its values must
 be JSON-compatible. The executor owns strict solving, flattened Scene
 projection, semantic serialization, STEP export and replay, unique-Part STEP
 export, BOM, validation, assumptions, and the complete source snapshot.
-
-## Automatic collision verification
-
-The executor checks every current-pose leaf pair at 0.02 mm maximum
-penetration. For one intentional contact or interference fit, declare the
-single excluded pair in `PRODUCT_SPEC`:
-
-```python
-PRODUCT_SPEC["collision_exclusions"] = [
-    {
-        "component_a": "drive_module/housing",
-        "component_b": "drive_module/press_fit_ring",
-        "reason": "Specified diametral press fit",
-    }
-]
-```
-
-Paths may include the root Assembly ID; nested paths include every component
-segment. Validation reports normalized paths when an entry is wrong. An
-exclusion skips the whole pair, so it must be unique, pair-specific, and
-physically justified. The verifier checks mesh penetration only at the current
-pose. It does not sweep motion or reliably detect complete containment without
-surface contact.

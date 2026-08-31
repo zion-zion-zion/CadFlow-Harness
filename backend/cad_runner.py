@@ -24,14 +24,12 @@ RESULT_PREFIX = "__CADFLOW_EXECUTION_RESULT__"
 PHASE_PREFIX = "__CADFLOW_EXECUTION_PHASE__"
 PRODUCT_MANIFEST_NAME = "product.json"
 PRODUCT_SCHEMA_VERSION = "cadflow-product/v1"
-COLLISION_PENETRATION_MM = 0.02
 SCENE_LINEAR_TOLERANCE_MM = 0.5
 SCENE_ANGULAR_TOLERANCE_RADIANS = 0.2
 _ASSEMBLY_EARLY_GATE_CHECK_IDS = frozenset(
     {
         "strict_constraint_solve",
         "constraint_residuals",
-        "current_pose_collision",
     }
 )
 
@@ -87,7 +85,6 @@ def _assembly_inventory(root: Any) -> dict[str, Any]:
     part_definitions: dict[str, Any] = {}
     part_identities: dict[str, int] = {}
     occurrences: dict[str, list[str]] = {}
-    collision_occurrences: dict[str, list[str]] = {}
 
     def visit(assembly: Any, ancestors: set[int], path: tuple[str, ...]) -> None:
         nonlocal component_count, solid_count, solid_volume
@@ -133,9 +130,6 @@ def _assembly_inventory(root: Any) -> dict[str, Any]:
                 part_identities[part.part_id] = id(part)
                 part_definitions.setdefault(part.part_id, part)
                 occurrences.setdefault(part.part_id, []).append("/".join(component_path))
-                collision_occurrences.setdefault(part.part_id, []).append(
-                    "/".join(component_path[1:])
-                )
                 solid_count += 1
                 solid_volume += volume
             elif isinstance(component.item, cad.Assembly):
@@ -152,7 +146,6 @@ def _assembly_inventory(root: Any) -> dict[str, Any]:
         "assembly_definitions": assembly_definitions,
         "part_definitions": part_definitions,
         "occurrences": occurrences,
-        "collision_occurrences": collision_occurrences,
     }
 
 
@@ -333,7 +326,6 @@ def _short_circuit_validation_checks(
         "failures": 12,
         "warnings": 8,
         "residuals": 24,
-        "exclusions": 32,
         "grounded_component_ids": 64,
         "solved_component_ids": 64,
         "unsolved_component_ids": 64,
@@ -354,86 +346,15 @@ def _short_circuit_validation_checks(
                 if isinstance(value, list) and len(value) > limit:
                     evidence[key] = value[:limit]
                     truncated = True
-            failures = evidence.get("failures")
-            if isinstance(failures, list):
-                for failure in failures:
-                    if not isinstance(failure, dict):
-                        continue
-                    contacts = failure.get("contacts")
-                    if isinstance(contacts, list) and len(contacts) > 4:
-                        failure["contacts"] = contacts[:4]
-                        truncated = True
         if truncated:
             check["evidence_truncated"] = True
         result.append(check)
     return result
 
 
-def _component_path(value: Any, root_id: str, valid_paths: set[str]) -> tuple[str, ...]:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("collision exclusion component paths must be non-empty strings")
-    parts = tuple(part for part in value.strip().split("/") if part)
-    if parts and parts[0] == root_id:
-        parts = parts[1:]
-    normalized = "/".join(parts)
-    if not parts or normalized not in valid_paths:
-        raise ValueError(f"collision exclusion references unknown leaf component: {value}")
-    return parts
-
-
-def _collision_exclusions(
-    *,
-    assembly: Any,
-    inventory: Mapping[str, Any],
-    spec: Mapping[str, Any],
-) -> tuple[tuple[Any, ...], list[dict[str, Any]]]:
-    raw_exclusions = spec.get("collision_exclusions", ())
-    if not isinstance(raw_exclusions, (list, tuple)):
-        raise ValueError("PRODUCT_SPEC.collision_exclusions must be a list")
-    valid_paths = {
-        path
-        for paths in inventory["collision_occurrences"].values()
-        for path in paths
-    }
-    pairs: list[Any] = []
-    evidence: list[dict[str, Any]] = []
-    observed: set[tuple[str, str]] = set()
-    for item in raw_exclusions:
-        if not isinstance(item, Mapping):
-            raise ValueError("each collision exclusion must be an object")
-        component_a = _component_path(
-            item.get("component_a"), assembly.assembly_id, valid_paths
-        )
-        component_b = _component_path(
-            item.get("component_b"), assembly.assembly_id, valid_paths
-        )
-        if component_a == component_b:
-            raise ValueError("collision exclusion components must be different")
-        reason = item.get("reason")
-        if not isinstance(reason, str) or not reason.strip():
-            raise ValueError("every collision exclusion requires a physical reason")
-        component_a_text = "/".join(component_a)
-        component_b_text = "/".join(component_b)
-        key = tuple(sorted((component_a_text, component_b_text)))
-        if key in observed:
-            raise ValueError("collision exclusion pairs must be unique")
-        observed.add(key)
-        pairs.append(cad.verifier.ComponentPair(component_a, component_b))
-        evidence.append(
-            {
-                "component_a": component_a_text,
-                "component_b": component_b_text,
-                "reason": reason.strip(),
-            }
-        )
-    return tuple(pairs), evidence
-
-
 def _validate_assembly(
     *,
     assembly: Any,
-    inventory: Mapping[str, Any],
-    spec: Mapping[str, Any],
     validation_report: dict[str, Any],
 ) -> tuple[Any, dict[str, Any]]:
     checks = validation_report["checks"]
@@ -589,94 +510,7 @@ def _validate_assembly(
                 "one or more Assembly constraint residuals exceed SDK tolerance",
             )
 
-    solved_inventory = _assembly_inventory(solved_assembly)
-    leaf_count = solved_inventory["leaf_part_count"]
-    _report_phase("current_pose_collision")
-    try:
-        exclusion_pairs, exclusion_evidence = _collision_exclusions(
-            assembly=solved_assembly,
-            inventory=solved_inventory,
-            spec=spec,
-        )
-        collision_report = cad.verifier.check_collision_rcollisionreport(
-            assembly=solved_assembly,
-            config=cad.verifier.CollisionCheckConfig(
-                max_allowed_penetration=COLLISION_PENETRATION_MM,
-                scope=cad.verifier.CollisionScope(exclude_pairs=exclusion_pairs),
-                max_contacts_per_pair=16,
-            ),
-        )
-        expected_pair_count = leaf_count * (leaf_count - 1) // 2 - len(
-            exclusion_pairs
-        )
-        warnings = [
-            {
-                "code": warning.code,
-                "component_path": list(warning.component_path or ()),
-                "message": warning.message,
-            }
-            for warning in collision_report.warnings
-        ]
-        failures = [
-            {
-                "component_a": list(failure.component_a),
-                "component_b": list(failure.component_b),
-                "penetration_depth_mm": float(failure.penetration_depth),
-                "allowed_penetration_mm": float(failure.allowed_penetration),
-                "contact_count": len(failure.contacts),
-                "contacts": [
-                    {
-                        "position_mm": [float(value) for value in contact.position],
-                        "normal": [float(value) for value in contact.normal],
-                        "penetration_depth_mm": float(contact.penetration_depth),
-                    }
-                    for contact in failure.contacts
-                ],
-            }
-            for failure in collision_report.failures
-        ]
-        collision_passed = bool(
-            collision_report.completed
-            and collision_report.passed
-            and collision_report.failed_pair_count == 0
-            and not warnings
-            and collision_report.checked_pair_count == expected_pair_count
-        )
-        checks.append(
-            {
-                "check_id": "current_pose_collision",
-                "status": "passed" if collision_passed else "failed",
-                "evidence": {
-                    "max_allowed_penetration_mm": COLLISION_PENETRATION_MM,
-                    "completed": bool(collision_report.completed),
-                    "passed": bool(collision_report.passed),
-                    "checked_pair_count": collision_report.checked_pair_count,
-                    "expected_pair_count": expected_pair_count,
-                    "failed_pair_count": collision_report.failed_pair_count,
-                    "warnings": warnings,
-                    "failures": failures,
-                    "exclusions": exclusion_evidence,
-                },
-            }
-        )
-        if not collision_passed:
-            _record_validation_failure(
-                validation_report,
-                "current-pose collision verification did not pass its full scope",
-            )
-    except Exception as error:
-        checks.append(
-            {
-                "check_id": "current_pose_collision",
-                "status": "failed",
-                "message": type(error).__name__ + ": " + str(error),
-            }
-        )
-        _record_validation_failure(
-            validation_report,
-            "current-pose collision verification could not be completed",
-        )
-    return solved_assembly, solved_inventory
+    return solved_assembly, _assembly_inventory(solved_assembly)
 
 
 def _complete_export_validation(
@@ -1148,7 +982,6 @@ def main(argv: list[str] | None = None) -> int:
                     "assembly_definitions": {},
                     "part_definitions": {"model": None},
                     "occurrences": {"model": ["model"]},
-                    "collision_occurrences": {"model": ["model"]},
                 }
         elif isinstance(final_result, cad.Assembly):
             result_kind = "assembly"
@@ -1174,8 +1007,6 @@ def main(argv: list[str] | None = None) -> int:
             if result_kind == "assembly":
                 final_result, inventory = _validate_assembly(
                     assembly=final_result,
-                    inventory=inventory,
-                    spec=spec,
                     validation_report=validation_report,
                 )
                 component_count = inventory["component_count"]
