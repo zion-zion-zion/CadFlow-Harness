@@ -1,17 +1,17 @@
-"""Durable Project, multi-turn conversation, and CAD artifact state."""
+"""Durable Project facade for conversation and CAD artifact state.
+
+``ProjectStore`` is intentionally the only persistence entry point used by
+the API and run services. Metadata, diagnostics, and artifact version details
+live in focused helpers, while this facade owns their consistency boundary.
+"""
 
 from __future__ import annotations
 
 import json
-import math
 import os
-import re
 import shutil
 import threading
 import uuid
-from dataclasses import dataclass, replace
-from datetime import datetime, timezone
-from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -31,99 +31,58 @@ from .product_artifact import (
     accept_product_artifact,
     load_product_artifact,
 )
+from .project_artifacts import (
+    ArtifactAcceptanceError,
+    ArtifactVersionStore,
+    CURRENT_ARTIFACT_NAME,
+    DEFAULT_ARTIFACT_VERSION_LIMIT,
+    acceptance_evidence,
+)
+from .project_diagnostics import (
+    DIAGNOSTICS_NAME,
+    DiagnosticsStore,
+    normalized_token_usage,
+    sum_token_usage,
+    token_usage_from_counts,
+)
+from .project_metadata import (
+    MAX_PROMPT_CHARS,
+    PROJECT_METADATA_NAME,
+    PROMPT_NAME,
+    Project,
+    ProjectError,
+    ProjectMetadataStore,
+    ProjectNotFoundError,
+    ProjectState,
+    ProjectStateError,
+    PromptValidationError,
+    _PROJECT_ID_PATTERN,
+    is_project_id,
+)
+from .project_artifacts import _ARTIFACT_VERSION_PATTERN
 from .scene_validation import validate_scene_artifact
 
 
-MAX_PROMPT_CHARS = 32_000
-PROJECT_METADATA_NAME = "project.json"
-PROMPT_NAME = "prompt.txt"
-DIAGNOSTICS_NAME = "diagnostics.json"
-CURRENT_ARTIFACT_NAME = "current.json"
-DEFAULT_ARTIFACT_VERSION_LIMIT = 10
 RESTART_RECOVERY_REASON = "Agent Run was interrupted by service restart"
-_PROJECT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
-_ARTIFACT_VERSION_PATTERN = re.compile(r"^v([0-9]{4,})$")
-
-
-class ProjectError(ValueError):
-    """Base class for invalid Project operations."""
-
-
-class ProjectNotFoundError(ProjectError):
-    """Raised when a Project ID is not present in the catalog."""
-
-
-class ProjectStateError(ProjectError):
-    """Raised when an operation does not match the Project State."""
-
-
-class PromptValidationError(ProjectError):
-    """Raised when a Prompt cannot be accepted by a Draft Project."""
-
-
-class ProjectState(str, Enum):
-    """The persisted lifecycle states used by the text-to-CAD domain."""
-
-    DRAFT = "Draft"
-    RUNNING = "Running"
-    SUCCEEDED = "Succeeded"
-    FAILED = "Failed"
-    STOPPED = "Stopped"
-
-    @classmethod
-    def values(cls) -> frozenset[str]:
-        return frozenset(
-            {
-                cls.DRAFT,
-                cls.RUNNING,
-                cls.SUCCEEDED,
-                cls.FAILED,
-                cls.STOPPED,
-            }
-        )
-
-
-@dataclass(frozen=True)
-class Project:
-    """A persisted Project summary and its optional complete Prompt."""
-
-    project_id: str
-    name: str
-    state: str
-    created_at: str
-    updated_at: str
-    prompt: str | None = None
-    failure_reason: str | None = None
-    harness: AgentHarness = AgentHarness.DEEPAGENTS
-
-    def __post_init__(self) -> None:
-        try:
-            normalized_state = ProjectState(self.state)
-        except ValueError as exc:
-            raise ProjectError(f"unknown Project State: {self.state}") from exc
-        try:
-            normalized_harness = AgentHarness(self.harness)
-        except ValueError as exc:
-            raise ProjectError(f"unknown Agent harness: {self.harness}") from exc
-        object.__setattr__(self, "state", normalized_state)
-        object.__setattr__(self, "harness", normalized_harness)
 
 
 class ProjectStore:
-    """Store Project metadata, conversation state, and versioned CAD results."""
+    """The single locked persistence facade for Project state."""
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self.artifact_version_limit = _artifact_version_limit()
+        self._metadata = ProjectMetadataStore(self.root)
+        self._diagnostics = DiagnosticsStore()
         for project_dir in self.root.iterdir():
-            if project_dir.is_dir() and _PROJECT_ID_PATTERN.fullmatch(project_dir.name):
+            if project_dir.is_dir() and is_project_id(project_dir.name):
                 try:
                     # Migrate legacy root-level model.py files while the
                     # Project is discovered. Runtime files remain outside the
                     # Agent's source mount.
-                    self._ensure_source_layout(project_dir)
+                    self._metadata.ensure_source_layout(project_dir)
                     ConversationLog(project_dir)
                 except (OSError, ValueError):
                     continue
@@ -158,10 +117,10 @@ class ProjectStore:
         with self._lock:
             projects: list[Project] = []
             for child in self.root.iterdir():
-                if not child.is_dir() or not _PROJECT_ID_PATTERN.fullmatch(child.name):
+                if not child.is_dir() or not is_project_id(child.name):
                     continue
                 try:
-                    self._ensure_source_layout(child)
+                    self._metadata.ensure_source_layout(child)
                     projects.append(self._read_project(child))
                 except (OSError, ProjectError, json.JSONDecodeError):
                     continue
@@ -173,41 +132,29 @@ class ProjectStore:
         with self._lock:
             if not project_dir.is_dir():
                 raise ProjectNotFoundError(f"Project does not exist: {project_id}")
-            self._ensure_source_layout(project_dir)
+            self._metadata.ensure_source_layout(project_dir)
             return self._read_project(project_dir)
 
     @staticmethod
     def _ensure_source_layout(project_dir: Path) -> None:
-        """Migrate only an absent or untouched canonical source scaffold."""
-
-        code_model = project_dir / CODE_DIRECTORY_NAME / MODEL_SOURCE_NAME
-        legacy_model = project_dir / MODEL_SOURCE_NAME
-        if not code_model.exists() or (
-            legacy_model.is_file() and code_model.is_file() and not code_model.read_bytes()
-        ):
-            create_model_source(project_dir, overwrite=False)
+        ProjectMetadataStore.ensure_source_layout(project_dir)
 
     def delete_project(self, project_id: str) -> None:
         """Permanently remove one Project directory from the Catalog."""
 
+        raw_project_dir = self.root / project_id if is_project_id(project_id) else None
         project_dir = self.project_directory(project_id)
         with self._lock:
-            if not project_dir.is_dir() or project_dir.is_symlink():
+            if (
+                raw_project_dir is None
+                or raw_project_dir.is_symlink()
+                or not project_dir.is_dir()
+            ):
                 raise ProjectNotFoundError(f"Project does not exist: {project_id}")
             shutil.rmtree(project_dir)
 
     def project_directory(self, project_id: str) -> Path:
-        if (
-            not isinstance(project_id, str)
-            or _PROJECT_ID_PATTERN.fullmatch(project_id) is None
-        ):
-            raise ProjectNotFoundError("invalid Project ID")
-        candidate = (self.root / project_id).resolve()
-        try:
-            candidate.relative_to(self.root)
-        except ValueError as exc:
-            raise ProjectNotFoundError("Project is outside the catalog") from exc
-        return candidate
+        return self._metadata.project_directory(project_id)
 
     def submit_prompt(
         self,
@@ -244,39 +191,52 @@ class ProjectStore:
         project_id: str,
         diagnostics: Mapping[str, Any] | None = None,
     ) -> Project:
-        project_dir = self.project_directory(project_id)
-        artifact_dir = project_dir / ARTIFACT_DIRECTORY_NAME
-        try:
-            candidate = load_product_artifact(artifact_dir)
-            candidate.require_complete()
-        except (OSError, ProductArtifactError) as exc:
-            raise ProjectStateError(
-                "cannot mark Project Succeeded without a complete product artifact"
-            ) from exc
-        if candidate.status is not ProductArtifactStatus.DRAFT:
-            raise ProjectStateError(
-                "cannot mark Project Succeeded without a Draft product candidate"
-            )
-        scene_evidence, review_evidence = _acceptance_evidence(
-            candidate,
-            diagnostics,
-        )
-        try:
-            self._commit_artifact_version(
+        # Acceptance and publication share the same lock as the terminal
+        # state transition, so concurrent finishers cannot publish two versions.
+        with self._lock:
+            project_dir = self.project_directory(project_id)
+            project = self.get_project(project_id)
+            if project.state != ProjectState.RUNNING:
+                raise ProjectStateError(
+                    f"Project {project_id} is {project.state}; only Running Projects can finish"
+                )
+            artifact_dir = project_dir / ARTIFACT_DIRECTORY_NAME
+            try:
+                candidate = load_product_artifact(artifact_dir)
+                candidate.require_complete()
+            except (OSError, ProductArtifactError) as exc:
+                raise ProjectStateError(
+                    "cannot mark Project Succeeded without a complete product artifact"
+                ) from exc
+            if candidate.status is not ProductArtifactStatus.DRAFT:
+                raise ProjectStateError(
+                    "cannot mark Project Succeeded without a Draft product candidate"
+                )
+            try:
+                scene_evidence, review_evidence = _acceptance_evidence(
+                    candidate,
+                    diagnostics,
+                )
+            except ArtifactAcceptanceError as exc:
+                raise ProjectStateError(str(exc)) from exc
+            try:
+                self._commit_artifact_version(
+                    project_id,
+                    scene_evidence=scene_evidence,
+                    review_evidence=review_evidence,
+                )
+            except (OSError, ProductArtifactError) as exc:
+                raise ProjectStateError(
+                    "product candidate could not be promoted to Accepted"
+                ) from exc
+            except ValueError as exc:
+                raise ProjectError(str(exc)) from exc
+            return self._mark_terminal(
                 project_id,
-                scene_evidence=scene_evidence,
-                review_evidence=review_evidence,
+                state=ProjectState.SUCCEEDED,
+                failure_reason=None,
+                diagnostics=diagnostics,
             )
-        except (OSError, ProductArtifactError) as exc:
-            raise ProjectStateError(
-                "product candidate could not be promoted to Accepted"
-            ) from exc
-        return self._mark_terminal(
-            project_id,
-            state=ProjectState.SUCCEEDED,
-            failure_reason=None,
-            diagnostics=diagnostics,
-        )
 
     def mark_failed(
         self,
@@ -341,130 +301,64 @@ class ProjectStore:
     def scene_artifact(self, project_id: str) -> Path:
         """Return the latest validated result, including after a failed later turn."""
 
-        project = self.get_project(project_id)
-        if project.state == ProjectState.DRAFT:
-            raise ProjectStateError(
-                "Scene Artifact is unavailable before the first successful turn"
-            )
-        project_dir = self.project_directory(project_id)
-        version = self.current_artifact_version(project_id)
-        if version is not None:
+        with self._lock:
+            project = self.get_project(project_id)
+            if project.state == ProjectState.DRAFT:
+                raise ProjectStateError(
+                    "Scene Artifact is unavailable before the first successful turn"
+                )
             try:
-                return self.product_artifact(project_id).file_path("scene")
-            except (ProductArtifactError, ProjectStateError):
-                pass
-        artifact = (
-            project_dir
-            / ARTIFACT_DIRECTORY_NAME
-            / f"v{version:04d}"
-            / "files"
-            / "model.scene.zip"
-            if version is not None
-            else project_dir / ARTIFACT_DIRECTORY_NAME / "model.scene.zip"
-        )
-        if not artifact.is_file() or artifact.is_symlink():
-            raise ProjectStateError("Succeeded Project has no canonical Scene Artifact")
-        return artifact
+                return self._artifact_store(project_id).scene()
+            except (ProductArtifactError, ValueError) as exc:
+                raise ProjectStateError(str(exc)) from exc
 
     def product_artifact(self, project_id: str) -> ProductArtifact:
         """Return the latest versioned Accepted product bundle."""
 
-        project = self.get_project(project_id)
-        if project.state == ProjectState.DRAFT:
-            raise ProjectStateError(
-                "Product Artifact is unavailable before the first successful turn"
-            )
-        version = self.current_artifact_version(project_id)
-        if version is None:
-            raise ProjectStateError("Project has no versioned Product Artifact")
-        bundle_root = (
-            self.project_directory(project_id)
-            / ARTIFACT_DIRECTORY_NAME
-            / f"v{version:04d}"
-            / "files"
-        )
-        try:
-            artifact = load_product_artifact(bundle_root)
-        except (OSError, ProductArtifactError) as exc:
-            raise ProjectStateError("versioned Product Artifact is invalid") from exc
-        if artifact.status is not ProductArtifactStatus.ACCEPTED:
-            raise ProjectStateError("versioned Product Artifact is not Accepted")
-        return artifact
+        with self._lock:
+            project = self.get_project(project_id)
+            if project.state == ProjectState.DRAFT:
+                raise ProjectStateError(
+                    "Product Artifact is unavailable before the first successful turn"
+                )
+            try:
+                return self._artifact_store(project_id).product()
+            except (ProductArtifactError, ValueError) as exc:
+                raise ProjectStateError(str(exc)) from exc
 
     def read_diagnostics(self, project_id: str) -> dict[str, Any] | None:
         """Read the bounded diagnostic record retained for a Project."""
 
-        path = self.project_directory(project_id) / DIAGNOSTICS_NAME
         with self._lock:
             self.get_project(project_id)
-            if not path.is_file():
-                return None
-            value = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(value, dict):
-                raise ProjectError("Project diagnostics must be an object")
-            return value
+            try:
+                return self._diagnostics.read(self.project_directory(project_id))
+            except ValueError as exc:
+                raise ProjectError(str(exc)) from exc
 
     def discard_unvalidated_artifacts(self, project_id: str) -> None:
         """Discard partial output and restore the latest validated artifact version."""
 
-        artifact_dir = self.project_directory(project_id) / "artifacts"
         with self._lock:
             self.get_project(project_id)
-            if artifact_dir.is_symlink():
-                artifact_dir.unlink()
-                return
-            if not artifact_dir.is_dir():
-                return
-            for child in artifact_dir.iterdir():
-                if _ARTIFACT_VERSION_PATTERN.fullmatch(child.name):
-                    continue
-                if child.is_dir() and not child.is_symlink():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
-            self._restore_current_artifact(project_id)
+            self._artifact_store(project_id).discard_unvalidated()
 
     def conversation_log(self, project_id: str, **kwargs: Any) -> ConversationLog:
         project_dir = self.project_directory(project_id)
         with self._lock:
             self.get_project(project_id)
-            return ConversationLog(
-                project_dir,
-                conversation_id=project_id,
-                **kwargs,
-            )
+            return ConversationLog(project_dir, conversation_id=project_id, **kwargs)
 
     def conversation_turns(self, project_id: str) -> list[dict[str, Any]]:
         return self.conversation_log(project_id).turns()
 
     def current_artifact_version(self, project_id: str) -> int | None:
-        path = self.project_directory(project_id) / CURRENT_ARTIFACT_NAME
-        if not path.is_file() or path.is_symlink():
-            return None
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return None
-        version = payload.get("version") if isinstance(payload, Mapping) else None
-        return version if isinstance(version, int) and not isinstance(version, bool) else None
+        with self._lock:
+            return self._artifact_store(project_id).current_version()
 
     def current_result_kind(self, project_id: str) -> str | None:
-        """Return the semantic type of the current versioned product."""
-
-        path = self.project_directory(project_id) / CURRENT_ARTIFACT_NAME
-        if not path.is_file() or path.is_symlink():
-            return None
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return None
-        if not isinstance(payload, Mapping):
-            return None
-        result_kind = payload.get("result_kind")
-        if result_kind in {"part", "assembly"}:
-            return str(result_kind)
-        version = payload.get("version")
-        return "part" if isinstance(version, int) and not isinstance(version, bool) else None
+        with self._lock:
+            return self._artifact_store(project_id).current_result_kind()
 
     def clear_conversation(self, project_id: str) -> Project:
         """Reset one non-running Project and remove its conversation and CAD data."""
@@ -512,6 +406,12 @@ class ProjectStore:
             self._write_metadata(project_dir, reset)
             return reset
 
+    def _artifact_store(self, project_id: str) -> ArtifactVersionStore:
+        return ArtifactVersionStore(
+            self.project_directory(project_id),
+            version_limit=self.artifact_version_limit,
+        )
+
     def _commit_artifact_version(
         self,
         project_id: str,
@@ -519,132 +419,19 @@ class ProjectStore:
         scene_evidence: Mapping[str, Any],
         review_evidence: Mapping[str, Any],
     ) -> int:
-        project_dir = self.project_directory(project_id)
-        artifact_dir = project_dir / ARTIFACT_DIRECTORY_NAME
-        versions = self._artifact_versions(project_id)
-        version = (versions[-1] if versions else 0) + 1
-        target = artifact_dir / f"v{version:04d}"
-        temporary = artifact_dir / f".v{version:04d}.{uuid.uuid4().hex}.tmp"
-        files_dir = temporary / "files"
-        source_dir = temporary / "source"
-        files_dir.mkdir(parents=True)
-        source_dir.mkdir(parents=True)
-        for child in artifact_dir.iterdir():
-            if child == temporary or _ARTIFACT_VERSION_PATTERN.fullmatch(child.name):
-                continue
-            destination = files_dir / child.name
-            if child.is_symlink():
-                continue
-            if child.is_dir():
-                shutil.copytree(child, destination)
-            elif child.is_file():
-                shutil.copy2(child, destination)
-        code_dir = project_dir / CODE_DIRECTORY_NAME
-        if code_dir.is_symlink():
-            raise ProjectError("Project code directory must not be a symlink")
-        if code_dir.exists() and not code_dir.is_dir():
-            raise ProjectError("Project code directory must be a directory")
-        if code_dir.is_dir():
-            for source in code_dir.rglob("*.py"):
-                relative = source.relative_to(code_dir)
-                if source.is_symlink():
-                    continue
-                destination = source_dir / CODE_DIRECTORY_NAME / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, destination)
-        accepted = accept_product_artifact(
-            files_dir,
+        return self._artifact_store(project_id).commit(
             scene_evidence=scene_evidence,
             review_evidence=review_evidence,
         )
 
-        def versioned_path(path: Path) -> str:
-            relative = path.relative_to(files_dir).as_posix()
-            return (
-                f"{ARTIFACT_DIRECTORY_NAME}/v{version:04d}/files/{relative}"
-            )
-
-        manifest = {
-            "schema_version": "cadflow-project-artifact/v1",
-            "version": version,
-            "created_at": _timestamp(),
-            "status": ProductArtifactStatus.ACCEPTED.value,
-            "result_kind": accepted.result_kind,
-            "product_manifest": versioned_path(
-                files_dir / PRODUCT_ARTIFACT_MANIFEST_NAME
-            ),
-            "scene": versioned_path(accepted.file_path("scene")),
-            "product_step": versioned_path(accepted.file_path("product_step")),
-            "bom": versioned_path(accepted.file_path("bom")),
-            "validation_report": versioned_path(
-                accepted.file_path("validation_report")
-            ),
-        }
-        _write_json(temporary / "manifest.json", manifest)
-        temporary.replace(target)
-        _write_json(project_dir / CURRENT_ARTIFACT_NAME, manifest)
-        self._prune_artifact_versions(project_id, current=version)
-        return version
-
     def _restore_current_artifact(self, project_id: str) -> None:
-        version = self.current_artifact_version(project_id)
-        if version is None:
-            return
-        project_dir = self.project_directory(project_id)
-        version_dir = project_dir / ARTIFACT_DIRECTORY_NAME / f"v{version:04d}"
-        files_dir = version_dir / "files"
-        source_dir = version_dir / "source"
-        artifact_dir = project_dir / ARTIFACT_DIRECTORY_NAME
-        if files_dir.is_dir():
-            for source in files_dir.iterdir():
-                destination = artifact_dir / source.name
-                if source.is_dir():
-                    shutil.copytree(source, destination)
-                else:
-                    shutil.copy2(source, destination)
-        if source_dir.is_dir():
-            saved_code_dir = source_dir / CODE_DIRECTORY_NAME
-            # Versions written before the code/ layout stored model.py
-            # directly under source/. Treat those files as legacy source and
-            # restore them into the canonical code/ directory.
-            source_root = saved_code_dir if saved_code_dir.is_dir() else source_dir
-            saved_sources = {
-                source.relative_to(source_root)
-                for source in source_root.rglob("*.py")
-                if source.is_file() and not source.is_symlink()
-            }
-            current_code_dir = project_dir / CODE_DIRECTORY_NAME
-            if current_code_dir.is_symlink():
-                current_code_dir.unlink()
-            current_code_dir.mkdir(parents=True, exist_ok=True)
-            for source in current_code_dir.rglob("*.py"):
-                relative = source.relative_to(current_code_dir)
-                if source.is_symlink() or relative not in saved_sources:
-                    source.unlink()
-            for source in source_root.rglob("*.py"):
-                relative = source.relative_to(source_root)
-                destination = current_code_dir / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, destination)
+        self._artifact_store(project_id).restore_current()
 
     def _artifact_versions(self, project_id: str) -> list[int]:
-        artifact_dir = self.project_directory(project_id) / ARTIFACT_DIRECTORY_NAME
-        versions: list[int] = []
-        if not artifact_dir.is_dir():
-            return versions
-        for child in artifact_dir.iterdir():
-            match = _ARTIFACT_VERSION_PATTERN.fullmatch(child.name)
-            if child.is_dir() and match:
-                versions.append(int(match.group(1)))
-        return sorted(versions)
+        return self._artifact_store(project_id).versions()
 
     def _prune_artifact_versions(self, project_id: str, *, current: int) -> None:
-        versions = self._artifact_versions(project_id)
-        removable = versions[: max(0, len(versions) - self.artifact_version_limit)]
-        artifact_dir = self.project_directory(project_id) / ARTIFACT_DIRECTORY_NAME
-        for version in removable:
-            if version != current:
-                shutil.rmtree(artifact_dir / f"v{version:04d}")
+        self._artifact_store(project_id).prune(current=current)
 
     def _mark_terminal(
         self,
@@ -672,135 +459,32 @@ class ProjectStore:
                 self.discard_unvalidated_artifacts(project_id)
             if diagnostics is not None:
                 previous_diagnostics = self.read_diagnostics(project_id)
-                _write_json(
-                    project_dir / DIAGNOSTICS_NAME,
-                    _merge_diagnostics(previous_diagnostics, diagnostics),
-                )
+                merged = self._diagnostics.merge(previous_diagnostics, diagnostics)
+                self._diagnostics.write(project_dir, merged)
             return updated
 
     def _read_project(self, project_dir: Path) -> Project:
-        metadata_path = project_dir / PROJECT_METADATA_NAME
-        data = json.loads(metadata_path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ProjectError("project metadata must be an object")
-        project_id = _required_text(data, "project_id")
-        name = _required_text(data, "name")
-        state = _required_text(data, "state")
-        created_at = _required_text(data, "created_at")
-        updated_at = _required_text(data, "updated_at")
-        if project_id != project_dir.name:
-            raise ProjectError("project metadata ID does not match its directory")
-        prompt_path = project_dir / PROMPT_NAME
-        prompt = (
-            prompt_path.read_text(encoding="utf-8") if prompt_path.is_file() else None
-        )
-        failure_reason = data.get("failure_reason")
-        if failure_reason is not None and not isinstance(failure_reason, str):
-            raise ProjectError("project failure reason is invalid")
-        persisted_harness = data.get("harness", AgentHarness.DEEPAGENTS.value)
-        if persisted_harness not in {item.value for item in AgentHarness}:
-            persisted_harness = AgentHarness.DEEPAGENTS.value
-        return Project(
-            project_id=project_id,
-            name=name,
-            state=ProjectState(state),
-            created_at=created_at,
-            updated_at=updated_at,
-            prompt=prompt,
-            failure_reason=failure_reason,
-            harness=persisted_harness,
-        )
+        return self._metadata.read(project_dir)
 
     @staticmethod
     def _write_metadata(project_dir: Path, project: Project) -> None:
-        metadata: dict[str, object] = {
-            "project_id": project.project_id,
-            "name": project.name,
-            "state": project.state,
-            "created_at": project.created_at,
-            "updated_at": project.updated_at,
-            "failure_reason": project.failure_reason,
-        }
-        if project.state != ProjectState.DRAFT:
-            metadata["harness"] = project.harness.value
-        _write_json(project_dir / PROJECT_METADATA_NAME, metadata)
+        ProjectMetadataStore.write(project_dir, project)
 
 
 def _validate_prompt(prompt: str) -> None:
-    if not isinstance(prompt, str) or not prompt.strip():
-        raise PromptValidationError("Prompt must not be empty")
-    if len(prompt) > MAX_PROMPT_CHARS:
-        raise PromptValidationError(
-            f"Prompt exceeds the {MAX_PROMPT_CHARS}-character limit"
-        )
+    ProjectMetadataStore.validate_prompt(prompt)
 
 
 def _merge_diagnostics(
     previous: Mapping[str, Any] | None,
     current: Mapping[str, Any],
 ) -> dict[str, Any]:
-    merged = dict(current)
-    token_usage = _sum_token_usage(
-        previous.get("token_usage") if previous is not None else None,
-        current.get("token_usage"),
-    )
-    if token_usage is not None:
-        merged["token_usage"] = token_usage
-    return merged
+    return DiagnosticsStore().merge(previous, current)
 
 
-def _sum_token_usage(previous: Any, current: Any) -> dict[str, int] | None:
-    previous_usage = _normalized_token_usage(previous)
-    current_usage = _normalized_token_usage(current)
-    if previous_usage is None:
-        return current_usage
-    if current_usage is None:
-        return previous_usage
-    return _token_usage_from_counts(
-        input_tokens=(
-            previous_usage["input_tokens"] + current_usage["input_tokens"]
-        ),
-        cached_input_tokens=(
-            previous_usage["cached_input_tokens"]
-            + current_usage["cached_input_tokens"]
-        ),
-        output_tokens=(
-            previous_usage["output_tokens"] + current_usage["output_tokens"]
-        ),
-    )
-
-
-def _normalized_token_usage(value: Any) -> dict[str, int] | None:
-    if not isinstance(value, Mapping):
-        return None
-    input_tokens = _non_negative_int(value.get("input_tokens"))
-    output_tokens = _non_negative_int(value.get("output_tokens"))
-    if input_tokens is None or output_tokens is None:
-        return None
-    cached_input_tokens = min(
-        _non_negative_int(value.get("cached_input_tokens")) or 0,
-        input_tokens,
-    )
-    return _token_usage_from_counts(
-        input_tokens=input_tokens,
-        cached_input_tokens=cached_input_tokens,
-        output_tokens=output_tokens,
-    )
-
-
-def _token_usage_from_counts(
-    *,
-    input_tokens: int,
-    cached_input_tokens: int,
-    output_tokens: int,
-) -> dict[str, int]:
-    return {
-        "total_tokens": input_tokens + output_tokens,
-        "input_tokens": input_tokens,
-        "cached_input_tokens": cached_input_tokens,
-        "uncached_input_tokens": input_tokens - cached_input_tokens,
-        "output_tokens": output_tokens,
-    }
+_sum_token_usage = sum_token_usage
+_normalized_token_usage = normalized_token_usage
+_token_usage_from_counts = token_usage_from_counts
 
 
 def _non_negative_int(value: Any) -> int | None:
@@ -810,92 +494,18 @@ def _non_negative_int(value: Any) -> int | None:
 
 
 def _replace_project(project: Project, **changes: Any) -> Project:
-    return replace(project, **changes)
+    return ProjectMetadataStore.replace(project, **changes)
 
 
 def _timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    return ProjectMetadataStore.timestamp()
 
 
 def _acceptance_evidence(
     candidate: ProductArtifact,
     diagnostics: Mapping[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    if not isinstance(diagnostics, Mapping):
-        raise ProjectStateError("Accepted product requires final run diagnostics")
-    execution = diagnostics.get("execution_result")
-    if not isinstance(execution, Mapping):
-        raise ProjectStateError("Accepted product requires execution diagnostics")
-    if (
-        execution.get("status") != "succeeded"
-        or execution.get("exit_code") != 0
-        or execution.get("result_kind") != candidate.result_kind
-        or execution.get("product_manifest_path") != "artifacts/product.json"
-        or execution.get("product_status") != ProductArtifactStatus.DRAFT.value
-        or execution.get("product_validation_status") != "Passed"
-        or execution.get("product_validation_failures") != []
-    ):
-        raise ProjectStateError("product execution did not pass deterministic validation")
-    summary = candidate.summary
-    expected_counts = {
-        "component_count": summary.component_count,
-        "leaf_part_count": summary.leaf_part_count,
-        "unique_part_count": summary.unique_part_count,
-        "solid_count": summary.solid_count,
-    }
-    if any(execution.get(name) != value for name, value in expected_counts.items()):
-        raise ProjectStateError("execution diagnostics do not match product structure")
-    reported_volume = execution.get("solid_volume")
-    if (
-        not isinstance(reported_volume, (int, float))
-        or isinstance(reported_volume, bool)
-        or not math.isclose(
-            float(reported_volume),
-            summary.volume_mm3,
-            rel_tol=1e-12,
-            abs_tol=1e-12,
-        )
-    ):
-        raise ProjectStateError("execution diagnostics do not match product volume")
-
-    scene_report = validate_scene_artifact(candidate.file_path("scene"))
-    reported_scene = execution.get("scene_parse_result")
-    if (
-        not scene_report.valid
-        or not isinstance(reported_scene, Mapping)
-        or reported_scene.get("valid") is not True
-    ):
-        raise ProjectStateError("Accepted product requires a valid parsed Scene")
-
-    review = diagnostics.get("review_result")
-    if not isinstance(review, Mapping) or review.get("status") != "pass":
-        raise ProjectStateError("Accepted product requires a passing CAD review")
-    execution_source_hash = execution.get("review_model_sha256")
-    if (
-        not isinstance(execution_source_hash, str)
-        or not execution_source_hash
-        or review.get("model_sha256") != execution_source_hash
-    ):
-        raise ProjectStateError("CAD review is not bound to the executed source revision")
-    findings = review.get("findings", [])
-    if not isinstance(findings, list) or any(
-        isinstance(item, Mapping)
-        and item.get("severity") in {"blocking", "major"}
-        for item in findings
-    ):
-        raise ProjectStateError("passing CAD review contains blocking findings")
-    review_evidence = {
-        key: review.get(key)
-        for key in (
-            "status",
-            "summary",
-            "model_sha256",
-            "reviewer_version",
-            "checked_requirements",
-            "evidence_hashes",
-        )
-    }
-    return scene_report.to_dict(), review_evidence
+    return acceptance_evidence(candidate, diagnostics)
 
 
 def _artifact_version_limit() -> int:
@@ -908,22 +518,6 @@ def _artifact_version_limit() -> int:
     except ValueError:
         return DEFAULT_ARTIFACT_VERSION_LIMIT
     return value if value > 0 else DEFAULT_ARTIFACT_VERSION_LIMIT
-
-
-def _required_text(data: Mapping[str, Any], key: str) -> str:
-    value = data.get(key)
-    if not isinstance(value, str):
-        raise ProjectError(f"project metadata field is missing or invalid: {key}")
-    return value
-
-
-def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
 
 
 __all__ = [
