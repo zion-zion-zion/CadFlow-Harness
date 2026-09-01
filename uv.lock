@@ -312,6 +312,7 @@ dev = [
     { name = "pytest", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "trimesh", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "twine", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "zensical", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 
 [package.metadata]
@@ -337,6 +338,7 @@ dev = [
     { name = "pytest" },
     { name = "trimesh", specifier = ">=4.11.3" },
     { name = "twine", specifier = ">=6.1.0" },
+    { name = "zensical", specifier = "==0.0.57" },
 ]
 
 [[package]]
@@ -532,6 +534,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/83/2f/7b010aaf7f39e9da9ce8dc574902126220cac6c41205bf122e3a27b7fcec/deepagents-0.7.5.tar.gz", hash = "sha256:ed44e956ed8e4ccd57203b9925c530707cdb815ffb56fe8ceb9b5b63d45a20c1", size = 273937, upload-time = "2026-08-06T14:05:36.317Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/df/c9/d4778dd09aaeb03b9653bb2be8591f3b7179ec5757a467f46e97627bccca/deepagents-0.7.5-py3-none-any.whl", hash = "sha256:a1be73d150929c5e826d67a05af6277748f25e4b53ae530b3fb1454df9e3ca95", size = 300778, upload-time = "2026-08-06T14:05:35.121Z" },
+]
+
+[[package]]
+name = "deepmerge"
+version = "3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b7/6c/9f4577a36d5f463a3a3f8322bd65d33e1a1a6b6ba1d692a5ebc3cba19015/deepmerge-3.0.tar.gz", hash = "sha256:14ed69f063de64b7743985c732ccff5d6c34ff4560946e7fbfd99086b853b9ce", size = 22279, upload-time = "2026-08-17T05:50:53.161Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a8/d7/7f19bedd30b90b72865aeec3a29127bed6dee6c9ef0324bb5b4d424bb0e3/deepmerge-3.0-py3-none-any.whl", hash = "sha256:c8541c3e186dc88d19a5513ad3a0b2d0b22beaa780969fc0c13b995a64265365", size = 14855, upload-time = "2026-08-17T05:50:52.218Z" },
 ]
 
 [[package]]
@@ -1351,6 +1362,15 @@ wheels = [
 ]
 
 [[package]]
+name = "markdown"
+version = "3.10.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/29/6f/da4c6aea59b3001f2e8c0ec7497475aadaf3b021c10cab5b2858f0f32b26/markdown-3.10.3.tar.gz", hash = "sha256:3589362618f743188b4d955b874402bc814f4f83f544dc207719f4baa7d9c45f", size = 372596, upload-time = "2026-07-30T19:05:29.005Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/69/4a5af2bc115a9a33fefe51709749de8262be3f9ba063d1753a837cdbc49c/markdown-3.10.3-py3-none-any.whl", hash = "sha256:fa6c92a00a4a3c98b22728c64a935ae1928250ae65058a6ded814d2cc29a4cea", size = 110757, upload-time = "2026-07-30T19:05:27.883Z" },
+]
+
+[[package]]
 name = "markdown-it-py"
 version = "3.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1864,11 +1884,24 @@ wheels = [
 
 [[package]]
 name = "pygments"
-version = "2.19.2"
+version = "2.21.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887", size = 4968631, upload-time = "2025-06-21T13:39:12.283Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/49/2e/ced460408999b33da6b31b0021b0f37d329e202d4169aeb164493778f25b/pygments-2.21.0.tar.gz", hash = "sha256:610ca751c9bc2492b38eb9a38a7fbc93edbbb2d7182edaf34e66ae493dee5c8c", size = 5005329, upload-time = "2026-08-17T08:02:48.824Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b", size = 1225217, upload-time = "2025-06-21T13:39:07.939Z" },
+    { url = "https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl", hash = "sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9", size = 1250147, upload-time = "2026-08-17T08:02:44.912Z" },
+]
+
+[[package]]
+name = "pymdown-extensions"
+version = "11.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "pyyaml", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ad/17/2db4b414de89659144488e0d9c6c0bf0c8395841dc12d81d0532cc6ef310/pymdown_extensions-11.0.2.tar.gz", hash = "sha256:9506fcbe66fa355a775b768084334238dd6805020ac4b92bea0c0dda6f8f223d", size = 855419, upload-time = "2026-08-22T19:28:47.236Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a6/43/9f45ec4d14e596efc32c925a78104934790438b0c0628b70d741016734ad/pymdown_extensions-11.0.2-py3-none-any.whl", hash = "sha256:259910762019732caa1dfd76f3faa62c59f191d46573e80bcb1d13c0f675bbe5", size = 269929, upload-time = "2026-08-22T19:28:45.389Z" },
 ]
 
 [[package]]
@@ -2284,6 +2317,21 @@ wheels = [
 ]
 
 [[package]]
+name = "tomli"
+version = "2.4.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/22/de/48c59722572767841493b26183a0d1cc411d54fd759c5607c4590b6563a6/tomli-2.4.1.tar.gz", hash = "sha256:7c7e1a961a0b2f2472c1ac5b69affa0ae1132c39adcb67aba98568702b9cc23f", size = 17543, upload-time = "2026-03-25T20:22:03.828Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dc/c7/62d7a17c26487ade21c5422b646110f2162f1fcc95980ef7f63e73c68f14/tomli-2.4.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:7f86fd587c4ed9dd76f318225e7d9b29cfc5a9d43de44e5754db8d1128487085", size = 150018, upload-time = "2026-03-25T20:21:23.002Z" },
+    { url = "https://files.pythonhosted.org/packages/10/90/d62ce007a1c80d0b2c93e02cab211224756240884751b94ca72df8a875ca/tomli-2.4.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:136443dbd7e1dee43c68ac2694fde36b2849865fa258d39bf822c10e8068eac5", size = 253341, upload-time = "2026-03-25T20:21:25.177Z" },
+    { url = "https://files.pythonhosted.org/packages/99/e7/c6f69c3120de34bbd882c6fba7975f3d7a746e9218e56ab46a1bc4b42552/tomli-2.4.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:5cb41aa38891e073ee49d55fbc7839cfdb2bc0e600add13874d048c94aadddd1", size = 253290, upload-time = "2026-03-25T20:21:27.46Z" },
+    { url = "https://files.pythonhosted.org/packages/14/6f/12645cf7f08e1a20c7eb8c297c6f11d31c1b50f316a7e7e1e1de6e2e7b7e/tomli-2.4.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:eb0dc4e38e6a1fd579e5d50369aa2e10acfc9cace504579b2faabb478e76941a", size = 149887, upload-time = "2026-03-25T20:21:33.028Z" },
+    { url = "https://files.pythonhosted.org/packages/10/8f/d3ddb16c5a4befdf31a23307f72828686ab2096f068eaf56631e136c1fdd/tomli-2.4.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f3c6818a1a86dd6dca7ddcaaf76947d5ba31aecc28cb1b67009a5877c9a64f3f", size = 251628, upload-time = "2026-03-25T20:21:36.012Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/74/16336ffd19ed4da28a70959f92f506233bd7cfc2332b20bdb01591e8b1d1/tomli-2.4.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:51529d40e3ca50046d7606fa99ce3956a617f9b36380da3b7f0dd3dd28e68cb5", size = 251674, upload-time = "2026-03-25T20:21:38.298Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/61/cceae43728b7de99d9b847560c262873a1f6c98202171fd5ed62640b494b/tomli-2.4.1-py3-none-any.whl", hash = "sha256:0d85819802132122da43cb86656f8d1f8c6587d54ae7dcaf30e90533028b49fe", size = 14583, upload-time = "2026-03-25T20:22:03.012Z" },
+]
+
+[[package]]
 name = "tornado"
 version = "6.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2529,6 +2577,27 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/05/67/67ae2a3ccdeb8b8ef025d35aee9edd1d26c3abe5051d47da9286232afbf8/xxhash-3.8.1-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:08ea2081f5e88615fec8622a9f87fbe21b8ea58d88cfc02163ca11026ee62a92", size = 32697, upload-time = "2026-07-06T10:45:57.288Z" },
     { url = "https://files.pythonhosted.org/packages/e6/0d/642d923336ea61a15f8ce64fc7e078729e6e06c3a026e517fa79b2c23b7a/xxhash-3.8.1-cp313-cp313t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:51f71a6e2ad071e70c937e41fcb6c19f82c3f9f49831eba850ed4a106ffbb647", size = 226739, upload-time = "2026-07-06T10:46:08.598Z" },
     { url = "https://files.pythonhosted.org/packages/04/a4/22ec0e07db57d901c9298ae98aa3cf2be45bafded6f07c13131e85b89032/xxhash-3.8.1-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:d59e71153fe9ff85648d00e18649b07e9b22c797291abb7e27274fa06df8b838", size = 223657, upload-time = "2026-07-06T10:46:24.831Z" },
+]
+
+[[package]]
+name = "zensical"
+version = "0.0.57"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "deepmerge", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "jinja2", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "markdown", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "pygments", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "pymdown-extensions", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "pyyaml", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "tomli", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/83/f4/fa40086c46a2e59e3d9239031f76623622e60e0d79f3df1282df2797a5c4/zensical-0.0.57.tar.gz", hash = "sha256:25fcbdf89a57153cc3ad1108a89d17c7226da5d3c551a8839c69cbd9c472a9d8", size = 4000458, upload-time = "2026-08-21T20:43:49.5Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/05/f7/54539984418de11387bbace39a744195555d32c98c95bf4d112b432548f5/zensical-0.0.57-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:0d7935d77d73a279545052e05d89d31960f30c1f33f53933f4c101fa271aee74", size = 12778169, upload-time = "2026-08-21T20:43:22.879Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/4e/436e6fc76674244c084ef7f6f17dc5ff85c76b15aef77c48b703fd0a2dda/zensical-0.0.57-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:021dd8fb70d1816cd012684fcf45d32b8f88a0cd28b7cbe71e5f8564f6d5764d", size = 13210086, upload-time = "2026-08-21T20:43:32.098Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/89/6358a4df272328bed5bea90b04d43e73758bc45ff058c5cb2665e1147314/zensical-0.0.57-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:66a9ca6b5f625b2a2b215eec2f3c72843a92d5d512042045ac6351d5dee9b339", size = 13557609, upload-time = "2026-08-21T20:43:40.866Z" },
 ]
 
 [[package]]

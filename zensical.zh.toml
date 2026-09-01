@@ -1,0 +1,101 @@
+[project]
+site_name = "CadFlowAgent 文档"
+site_description = "CadFlowAgent 文本到 CAD 运行时的公开文档。"
+site_url = "https://zion-zion-zion.github.io/CadFlowAgent/zh/"
+docs_dir = "docs/zh"
+site_dir = "site/zh"
+repo_url = "https://github.com/zion-zion-zion/CadFlowAgent"
+repo_name = "zion-zion-zion/CadFlowAgent"
+edit_uri = "edit/master/docs/zh/"
+nav = [
+  { "首页" = "index.md" },
+  { "开始使用" = [
+    { "快速开始" = "quickstart.md" },
+    { "第一个 Project" = "first-project.md" },
+  ] },
+  { "用户指南" = [
+    { "Project 与 Run" = "projects-runs.md" },
+    { "一次建模运行" = "modeling-run.md" },
+    { "产物与结果" = "artifacts.md" },
+    { "继续修改或重试" = "continue-work.md" },
+  ] },
+  { "核心概念" = [
+    { "系统架构" = "architecture.md" },
+    { "Agent Harness" = "agent-harness.md" },
+    { "几何验证" = "geometry-validation.md" },
+    { "Skills 与可观察性" = "skills-and-observability.md" },
+  ] },
+  { "示例" = [
+    { "示例目录" = "examples/index.md" },
+    { "零件与柔性几何" = "examples/parts.md" },
+    { "装配与重建" = "examples/assemblies.md" },
+  ] },
+  { "参考" = [
+    { "配置" = "reference/configuration.md" },
+    { "API 面" = "reference/api.md" },
+    { "命令" = "reference/commands.md" },
+  ] },
+  { "项目状态" = "status.md" },
+  { "参与贡献" = "contributing.md" },
+]
+
+[project.theme]
+language = "zh"
+logo = "assets/cadflowagent-logo.png"
+favicon = "assets/cadflowagent-logo.png"
+features = [
+  "content.action.edit",
+  "content.action.view",
+  "content.code.copy",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.tabs",
+  "navigation.tabs.sticky",
+  "navigation.top",
+  "search.highlight",
+  "toc.follow",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "切换到浅色模式"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "切换到深色模式"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "使用系统主题"
+
+[project.extra]
+alternate = [
+  { name = "简体中文", link = "https://zion-zion-zion.github.io/CadFlowAgent/zh/", lang = "zh" },
+  { name = "English", link = "https://zion-zion-zion.github.io/CadFlowAgent/en/", lang = "en" },
+]
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+md_in_html = {}
+toc.permalink = true
+pymdownx.details = {}
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.line_spans = "__span"
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+pymdownx.tabbed.alternate_style = true
+pymdownx.tasklist.custom_checkbox = true
+
+[project.validation]
+invalid_links = true
+invalid_link_anchors = true

@@ -45,4 +45,5 @@ dev = [
     "packaging",
     "trimesh>=4.11.3",
     "datamodel-code-generator==0.32.0",
+    "zensical==0.0.57",
 ]

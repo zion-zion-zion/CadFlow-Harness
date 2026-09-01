@@ -1,0 +1,101 @@
+[project]
+site_name = "CadFlowAgent Documentation"
+site_description = "Public documentation for the CadFlowAgent text-to-CAD runtime."
+site_url = "https://zion-zion-zion.github.io/CadFlowAgent/en/"
+docs_dir = "docs/en"
+site_dir = "site/en"
+repo_url = "https://github.com/zion-zion-zion/CadFlowAgent"
+repo_name = "zion-zion-zion/CadFlowAgent"
+edit_uri = "edit/master/docs/en/"
+nav = [
+  { "Home" = "index.md" },
+  { "Get started" = [
+    { "Quick start" = "quickstart.md" },
+    { "First Project" = "first-project.md" },
+  ] },
+  { "User guide" = [
+    { "Projects and Runs" = "projects-runs.md" },
+    { "A modeling run" = "modeling-run.md" },
+    { "Artifacts and results" = "artifacts.md" },
+    { "Continue or retry" = "continue-work.md" },
+  ] },
+  { "Core concepts" = [
+    { "Architecture" = "architecture.md" },
+    { "Agent Harness" = "agent-harness.md" },
+    { "Geometry validation" = "geometry-validation.md" },
+    { "Skills and observability" = "skills-and-observability.md" },
+  ] },
+  { "Examples" = [
+    { "Example catalog" = "examples/index.md" },
+    { "Parts and flexible geometry" = "examples/parts.md" },
+    { "Assemblies and reconstruction" = "examples/assemblies.md" },
+  ] },
+  { "Reference" = [
+    { "Configuration" = "reference/configuration.md" },
+    { "API surface" = "reference/api.md" },
+    { "Commands" = "reference/commands.md" },
+  ] },
+  { "Project status" = "status.md" },
+  { "Contributing" = "contributing.md" },
+]
+
+[project.theme]
+language = "en"
+logo = "assets/cadflowagent-logo.png"
+favicon = "assets/cadflowagent-logo.png"
+features = [
+  "content.action.edit",
+  "content.action.view",
+  "content.code.copy",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.tabs",
+  "navigation.tabs.sticky",
+  "navigation.top",
+  "search.highlight",
+  "toc.follow",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[project.extra]
+alternate = [
+  { name = "English", link = "https://zion-zion-zion.github.io/CadFlowAgent/en/", lang = "en" },
+  { name = "简体中文", link = "https://zion-zion-zion.github.io/CadFlowAgent/zh/", lang = "zh" },
+]
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+md_in_html = {}
+toc.permalink = true
+pymdownx.details = {}
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.line_spans = "__span"
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+pymdownx.tabbed.alternate_style = true
+pymdownx.tasklist.custom_checkbox = true
+
+[project.validation]
+invalid_links = true
+invalid_link_anchors = true

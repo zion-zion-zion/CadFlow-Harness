@@ -31,13 +31,9 @@ examples.py
 viewer/node_modules/
 viewer/dist/
 viewer/pnpm-lock.yaml
+
+# Generated bilingual documentation site
+site/
 design-docs/
-
-# Local documentation
-/docs/research/
-/docs/usage-guide.zh-CN.md
-
-# Local framework discussion snapshot
-/docs/research/cadflowagent-framework-summary.md
 
 **/.vite/

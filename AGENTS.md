@@ -35,12 +35,12 @@ Copy `.env.example` to `.env` for local API configuration. Never commit `.env`, 
 
 ### Issue tracker
 
-Issues and specs are tracked in GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues and specs are tracked in GitHub Issues via the `gh` CLI. See `.agents/issue-tracker.md`.
 
 ### Triage labels
 
-Use the default five-role triage label vocabulary. See `docs/agents/triage-labels.md`.
+Use the default five-role triage label vocabulary. See `.agents/triage-labels.md`.
 
 ### Domain docs
 
-This is a single-context repository with a root glossary and system-wide ADRs. See `docs/agents/domain.md`.
+This is a single-context repository with a root glossary and system-wide ADRs. See `.agents/domain.md`.
