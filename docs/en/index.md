@@ -4,51 +4,51 @@ icon: lucide/box
 
 # CadFlow Harness
 
-CadFlow Harness is a local, auditable runtime for agents that write and verify
-parametric CAD programs. A model writes executable Python, CadFlow executes it
-with a deterministic geometry kernel, and the application keeps the source,
-measurements, progress events, and validated product artifacts together.
+CadFlow Harness is a local tool for running CAD agents. The agent writes an
+executable Python program, CadFlow runs it with a deterministic geometry kernel,
+and the application keeps the source, measurements, progress events, and
+validated product artifacts together.
 
-It is a programming and verification loop, not a 3D model that emits a mesh or
-an image in one opaque step. The generated Python remains readable and
-editable, while geometric checks provide evidence beyond visual similarity.
+The generated result stays as Python source. You can inspect its dimensions and
+features, edit the file, and run it again. Use the Viewer for previews and
+accepted geometry.
 
-!!! warning "Alpha, trusted-local software"
+!!! warning "Alpha, trusted local use"
 
-    The current release is intended for a trusted local demonstration. It runs
-    generated code in bounded local processes and is not a hosted multi-tenant
-    service or a security boundary for untrusted users.
+    This release is not a hosted multi-tenant service or a security boundary for
+    untrusted code. Generated code runs in bounded local processes. Run the app
+    only on a machine you trust.
 
-## What is available now
+## Available now
 
-- A FastAPI Project and Run API with a same-origin Three.js Viewer.
+- FastAPI Project and Run APIs with a same-origin Three.js Viewer.
 - A Deep Agents harness that can create or revise `/code/model.py` and helper
-  modules in one Project workspace.
-- CadFlow `Shape` and semantic `Assembly` execution, product validation, Scene
-  generation, and independent CAD review before acceptance.
-- Live source previews, progress events, redacted trace downloads, and
-  versioned artifacts for accepted results.
-- Five public CAD Skills covering parts, flexible geometry, STEP/BREP
-  inspection, assemblies, and rotary transmission design.
+  modules inside one Project.
+- `Shape` single-part and semantic `Assembly` execution, product validation,
+  Scene generation, and an independent CAD review.
+- Live source previews, progress events, redacted trace downloads, and versioned
+  artifacts for accepted results.
+- Five public CAD Skills for parts, flexible geometry, STEP/BREP, assemblies,
+  and rotary transmission.
 
-## Choose a path
+## Start here
 
 - [Quick start](quickstart.md) installs the locked environment and starts the
   local app.
-- [First Project](first-project.md) walks through creating a Project and
-  submitting a first task.
-- [Example catalog](examples/index.md) points to runnable repository examples.
-- [Architecture](architecture.md) explains the Agent, executor, kernel, and
+- [Create your first Project](first-project.md) creates a Project and submits a
+  first task.
+- [Example catalog](examples/index.md) links to runnable repository examples.
+- [Architecture](architecture.md) describes the Agent, executor, kernel, and
   Viewer boundaries.
-- [Configuration reference](reference/configuration.md) lists effective
-  environment variables and paths.
+- [Configuration](reference/configuration.md) lists environment variables and
+  storage paths.
 
 The [GitHub repository](https://github.com/zion-zion-zion/CadFlowAgent) contains
-the source, tests, Skills, examples, and issue tracker.
+the source, tests, Skills, examples, and issue list.
 
-## Project direction
+## Project status
 
-The runtime and its observable trajectories are implemented today. A small
-reconstruction-data example is included in the repository, but large-scale
-dataset curation, evaluation infrastructure, and CAD-specific post-training
-remain future work. They should not be read as shipped model capabilities.
+The runtime and its run records are implemented in this repository. A small
+reconstruction-data example is included. Large-scale dataset collection,
+evaluation infrastructure, and CAD-specific post-training are not implemented
+and are not capabilities of the released model.

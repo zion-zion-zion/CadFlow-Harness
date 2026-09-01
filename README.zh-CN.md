@@ -5,12 +5,11 @@
 <h1 align="center">CadFlow Harness</h1>
 
 <p align="center">
-  <strong>让 CAD Agent 能够构建、验证，并从几何结果中持续进化的运行基础设施。</strong>
+  <strong>在本机运行 CAD Agent，直接检查它生成的几何结果。</strong>
 </p>
 
 <p align="center">
-  把通用大模型变成可审计的 CAD 程序员，并让每次运行<br>
-  都能沉淀为评测数据、训练轨迹和更专业的 CAD Agent。
+  Agent 编写 Python CAD 程序，CadFlow 负责执行和检查。每个 Project 都会保留源码、测量值和运行记录。
 </p>
 
 <p align="center">
@@ -27,25 +26,25 @@
 </p>
 
 <p align="center">
-  <a href="#核心设计">🧭 核心设计</a> ·
-  <a href="#项目方向">🗺️ 项目方向</a> ·
-  <a href="#系统架构">🏗️ 系统架构</a> ·
-  <a href="#快速开始">🚀 快速开始</a> ·
-  <a href="#cad-skill-层">🧠 CAD Skills</a>
+  <a href="#核心设计">核心设计</a> ·
+  <a href="#项目方向">项目方向</a> ·
+  <a href="#系统架构">系统架构</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#cad-skill-层">CAD Skills</a>
 </p>
 
 ---
 
-CadFlow Harness 是面向**参数化 CAD Agent 运行、验证与持续改进**的基础设施。它让通用大模型编写可执行的 CAD 程序，用确定性的几何内核检验结果，并将可观察的运行过程沉淀为评测和未来后训练所需的证据。
+CadFlow Harness 是一个在本机运行参数化 CAD Agent 的工具。模型编写可执行的 Python 程序，CadFlow 用确定性的几何内核运行它，后端保存运行中的测量值、事件和产品文件。
 
-它不是一个直接输出网格或图片的 3D 基础模型。大模型在系统中扮演 CAD 程序员：读取领域工作流、编写并修改 Python 源码、调用 CadFlow，再根据可量化的几何反馈继续迭代。这个项目的核心资产是可复用的 Agent–CAD 运行底座，而不是一组固定的模型权重。
+模型输出的是程序。你可以查看源码，修改尺寸或特征，再次运行并比较几何结果。仓库提供运行时、示例、Skills 和测试，不包含训练好的专用模型。
 
 > [!IMPORTANT]
-> 当前版本是面向可信本机的 Alpha 运行时。单零件结果必须包含一个有效且体积为正的 solid；语义化 Assembly 结果则保留零件边界、定位、连接器和约束。规模化数据集与 CAD 专用后训练是项目的发展方向，并不代表仓库已经包含训练完成的专用模型。
+> 当前版本是 Alpha，只适合在可信本机上使用。单零件结果必须是一个有效且体积为正的 solid。Assembly 要保留独立 Part 的边界、定位、连接器和约束。大规模数据集与 CAD 专用后训练仍在规划中，不属于当前功能。
 
 ## 文档
 
-- [在线文档（默认中文，可切换英文）](http://119.28.82.252/cadflow-harness/)
+- [在线文档（默认中文）](http://119.28.82.252/cadflow-harness/)
 - [简体中文文档站](https://zion-zion-zion.github.io/CadFlowAgent/zh/)
 - [English documentation site](https://zion-zion-zion.github.io/CadFlowAgent/en/)
 - [中文文档源](docs/zh/index.md)
@@ -53,54 +52,54 @@ CadFlow Harness 是面向**参数化 CAD Agent 运行、验证与持续改进**�
 
 <a id="核心设计"></a>
 
-## 🧭 核心设计
+## 核心设计
 
-### 🧩 以程序作为生成介质
+### Python 是模型的输出
 
-CadFlow Harness 生成的是可读、可修改、可重放的 Python CAD 源码，而不是难以继续编辑的不透明三角网格。尺寸参数、特征顺序和建模意图在生成后仍然可以检查与迭代。
+Agent 生成可读的 Python CAD 源码。尺寸和特征顺序都留在文件中，运行后仍可以检查或编辑。
 
-### 📐 以几何内核作为验证器
+### 用几何检查结果
 
-构建零件的确定性 CAD 内核同时负责判断结果是否正确。Solid 数量、体积、包围盒、拓扑、截面以及 BREP/材料差异等指标，能够提供比“看起来相似”更客观的反馈。
+CadFlow 负责构建几何，运行时负责检查结果。检查项目包括 solid 数量、体积、包围盒、拓扑、截面以及 BREP 或材料差异。这些测量值比单看截图更可靠。
 
-### 🧾 让运行过程成为数据
+### 每次运行都留下记录
 
-Prompt、可观察的工具活动、源码版本、执行结果、几何测量和最终产物共同构成可审计轨迹。[Agentic Reconstruction Dataset 示例](examples/agentic_reconstruction_dataset/README.zh-CN.md)展示了如何在不保存隐藏思维链的前提下组织 CAD 工具调用与结果记录。
+每个 turn 会保存 Prompt、工具调用、源码版本、执行结果、几何测量和生成文件。[重建数据示例](examples/agentic_reconstruction_dataset/README.zh-CN.md)演示了如何在不保存隐藏思维链的情况下整理这些记录。
 
-### 🔌 让智能模型可以替换
+### 模型层可以替换
 
-Deep Agents Harness 与其余运行时共享稳定的 Project 工作区和 Artifact 契约。模型、Agent Harness 与 CAD Skills 可以持续演进，而执行、验证、运行记录和可视化能力保持复用——这正是 CadFlow Harness 与单一 Agent Demo 的本质区别。
+Deep Agents Harness 与其他运行组件共用 Project 工作区和 Artifact 契约。更换模型或 Harness 时，执行器、检查逻辑、运行记录和 Viewer 不需要重写。
 
 <a id="项目方向"></a>
 
-## 🗺️ 项目方向
+## 项目方向
 
-| 阶段 | 目标 | 当前状态 |
+| 范围 | 当前已有 | 后续工作 |
 | --- | --- | --- |
-| Agent 运行时 | 驱动通用大模型在交互式工作区中编写、执行、检查并修复 CadFlow 程序。 | ✅ 当前可用 |
-| 数据集与评测 | 规模化整理经过验证的建模/重建轨迹、失败与修复、几何指标和最终产物。 | 🌱 已有种子示例，计划规模化 |
-| CAD 后训练 | 使用验证轨迹开展监督微调、偏好学习和基于几何结果的奖励训练。 | 🧭 路线规划 |
+| Agent 运行时 | 在本地工作区编写、运行、检查和修复 CadFlow 程序。 | 当前可用 |
+| 数据集与评测 | 一个小型重建记录示例。 | 扩大收集范围并补充评测 |
+| CAD 后训练 | 仓库中没有训练流水线。 | 研究和原型验证 |
 
-项目希望形成一条清晰的飞轮：**更可靠的运行时 → 更高质量的轨迹 → 更强的评测与训练数据 → 更专业的 CAD Agent**。
+表格中的第一项是现在可以使用的功能，后两项属于计划工作。
 
 <a id="系统架构"></a>
 
-## 🏗️ 系统架构
+## 系统架构
 
 <p align="center">
   <img src="docs/assets/cadflow-harness-architecture.svg" alt="CadFlow Harness 系统架构图">
 </p>
 
-### 🔄 一次建模运行
+### 一次建模运行
 
-1. 用户创建 Project，并提交一份完整的 CAD 任务。
-2. 所选 Agent Harness 只读取相关 Skills，并编写入口稳定的 `model.py`。
-3. CadFlow 执行程序；结果无效或不符合要求时，几何检查会返回可量化证据。
-4. 通过验证的结果被转换为 Viewer 使用的 `model.scene.zip`；可观察的运行记录和产物则可继续用于分析与未来的数据整理。
+1. 创建 Project，提交完整的 CAD 任务。
+2. 选定的 Harness 读取相关 Skills，并写入 `code/model.py`。
+3. CadFlow 执行程序。结果失败或不满足要求时，几何检查会返回测量值。
+4. 运行通过后生成 Viewer 使用的 `model.scene.zip`。源码、事件、诊断和其他产物仍保存在 Project 中，方便查看。
 
 <a id="快速开始"></a>
 
-## 🚀 快速开始
+## 快速开始
 
 ### 环境要求
 
@@ -108,7 +107,7 @@ Deep Agents Harness 与其余运行时共享稳定的 Project 工作区和 Artif
 - 用于安装缺失工具的 `curl` 或 `wget`
 - OpenAI 兼容的模型端点和 API Key
 
-仓库为两个受支持的平台分别内置了 CadFlow wheel。`uv` 会通过同一份 `pyproject.toml` 和 `uv.lock` 自动选择匹配的文件。
+仓库为每个受支持的平台提供一个 CadFlow wheel。`uv` 会根据 `pyproject.toml` 和 `uv.lock` 选择匹配的文件。
 
 ### 安装
 
@@ -116,9 +115,9 @@ Deep Agents Harness 与其余运行时共享稳定的 Project 工作区和 Artif
 ./setup.sh
 ~~~
 
-安装脚本会检测当前平台，在缺失时安装 `uv` 和兼容的 Node.js，按锁文件同步 Python 与 Viewer 依赖，并在不覆盖已有文件的前提下从示例创建 `.env`。使用 `./setup.sh --check` 可以只检查现有环境，不进行任何修改。
+脚本会检测平台，必要时安装 `uv` 或 Node.js，同步锁定的 Python 和 Viewer 依赖，并从示例创建 `.env`，不会覆盖已有文件。只检查现有环境时运行 `./setup.sh --check`。
 
-在 `.env` 中配置模型服务：
+在 `.env` 中填写模型服务：
 
 ~~~dotenv
 OPENAI_BASE_URL=https://api.openai.com/v1
@@ -132,27 +131,25 @@ OPENAI_API_KEY=<api-key>
 ./run.sh
 ~~~
 
-`run.sh` 会自动检测操作系统和架构，并选择对应的 Python 解释器。
-
-浏览器打开 [http://localhost:5678](http://localhost:5678)，即可创建 Project、选择可用的 Agent Harness、提交建模任务、查看实时进度并检查最终 3D 结果。后端 API 位于 `http://localhost:8765`。
+`run.sh` 会根据操作系统和架构选择 Python 解释器。打开 [http://localhost:5678](http://localhost:5678)，创建 Project、提交任务、查看进度和最终结果。后端 API 位于 `http://localhost:8765`。
 
 ### 运行时配置
 
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `OPENAI_BASE_URL` | — | OpenAI 兼容模型服务的 Base URL。 |
-| `OPENAI_MODEL_ID` | — | Agent Harness 使用的模型标识符。 |
-| `OPENAI_API_KEY` | — | 模型服务凭证，严禁提交到仓库。 |
+| `OPENAI_BASE_URL` | 未设置 | OpenAI 兼容模型服务的 Base URL。 |
+| `OPENAI_MODEL_ID` | 未设置 | Agent Harness 使用的模型。 |
+| `OPENAI_API_KEY` | 未设置 | 模型服务凭证，严禁提交到仓库。 |
 | `TEXT_TO_CAD_HOST` | `0.0.0.0` | 后端监听地址。 |
 | `TEXT_TO_CAD_PORT` | `8765` | 后端端口。 |
 | `TEXT_TO_CAD_FRONTEND_HOST` | `0.0.0.0` | Viewer 监听地址。 |
 | `TEXT_TO_CAD_FRONTEND_PORT` | `5678` | Viewer 监听端口。 |
-| `TEXT_TO_CAD_PROJECTS_ROOT` | `output/projects` | Project 工作区的持久化根目录。 |
+| `TEXT_TO_CAD_PROJECTS_ROOT` | `output/projects` | Project 工作区根目录。 |
 | `CADFLOW_PREVIEW_TIMEOUT_SECONDS` | `15` | 实时预览 worker 的超时秒数。 |
 
-## 📐 当前建模契约
+## 当前建模契约
 
-每个 Project 先创建一个不会通过验证的 `code/model.py` 初始骨架，并保留以下稳定入口：
+每个 Project 会在 `code/model.py` 中创建以下入口：
 
 ~~~python
 import cadflow as cad
@@ -163,37 +160,37 @@ def build_model(model: cad.Model) -> cad.Shape | cad.Assembly:
     raise NotImplementedError
 ~~~
 
-Agent 可以在 Project 的 `code/` 工作区中读写 Python 文件。单零件结果必须是一个有效的 `cad.Shape`，包含一个 solid 且体积为正；Assembly 结果则保留语义化的零件边界、定位、连接器和约束。后端会验证结果并生成 Viewer 使用的 `artifacts/model.scene.zip`；生成代码在受限的本机进程中执行，当前版本仅适合可信本机演示。
+Agent 可以读写 Project 的 `code/` 工作区。单零件结果必须是一个有效的 `cad.Shape`，只包含一个 solid 且体积为正。Assembly 要保留语义化 Part 边界、定位、连接器和约束。后端验证结果并生成 Viewer 使用的 `artifacts/model.scene.zip`。生成代码在受限本机进程中执行，请只在可信机器上运行应用。
 
 <a id="cad-skill-层"></a>
 
-## 🧠 CAD Skill 层
+## CAD Skill 层
 
-Skills 提供任务专用的建模知识和精确 API 参考，避免每次 Agent 运行都加载整本 CAD 手册。
+Skills 是按任务加载的 Markdown 参考，以只读方式提供给 Agent。
 
-| Skill | 关注范围 |
+| Skill | 用途 |
 | --- | --- |
-| [`cadflow-model-part`](skills/cadflow-model-part/SKILL.md) | 参数化刚性零件、Sketch、特征、布尔操作、圆角和单零件交付。 |
-| [`cadflow-flexible-model`](skills/cadflow-flexible-model/SKILL.md) | 静态布料、皮革、薄膜、服装及其他柔性几何体。 |
-| [`cadflow-step-brep`](skills/cadflow-step-brep/SKILL.md) | STEP/BREP 检查、特征推断、重建和基于证据的对比。 |
-| [`cadflow-model-assembly`](skills/cadflow-model-assembly/SKILL.md) | 多部件产品与装配结构、定位和验收。 |
-| [`cadflow-rotary-transmission`](skills/cadflow-rotary-transmission/SKILL.md) | 旋转关节、齿轮、轴和传动机构。 |
+| [`cadflow-model-part`](skills/cadflow-model-part/SKILL.md) | 参数化刚性零件、Sketch、特征、布尔、圆角和单 Part 交付。 |
+| [`cadflow-flexible-model`](skills/cadflow-flexible-model/SKILL.md) | 静态布料、皮革、薄膜、服装和其他柔性几何。 |
+| [`cadflow-step-brep`](skills/cadflow-step-brep/SKILL.md) | STEP/BREP 检查、特征推断、重建和基于测量值的比较。 |
+| [`cadflow-model-assembly`](skills/cadflow-model-assembly/SKILL.md) | 多部件产品、定位、连接器、约束和验收。 |
+| [`cadflow-rotary-transmission`](skills/cadflow-rotary-transmission/SKILL.md) | 旋转关节、齿轮、轴、壳体和传动机构。 |
 
-## 🗂️ 仓库结构
+## 仓库结构
 
 ~~~text
 CadFlow Harness/
 ├── backend/          Agent 运行时、Project API、执行、事件与验证
 ├── viewer/           浏览器工作区与 Three.js Scene Viewer
-├── skills/           渐进式 CadFlow 工作流与 API 参考
+├── skills/           CadFlow 工作流与 API 参考
 ├── examples/         零件、柔性模型、装配体与重建数据
 ├── tests/            运行时、边界、修复循环与集成测试
 └── vendor/           平台特定的 CadFlow Wheel
 ~~~
 
-可以从[示例目录](examples/README.md)探索机械零件、复杂装配体、柔性几何和重建轨迹种子。
+[示例目录](examples/README.md)列出了可运行的机械零件、装配体、柔性几何和重建记录示例。
 
-## ✅ 检查
+## 检查
 
 ~~~bash
 # Linux
@@ -206,8 +203,8 @@ cd viewer && npm run build
 cd .. && ./scripts/docs.sh build
 ~~~
 
-真实模型服务测试通过 `-m live_agent` 显式启用。
+真实模型服务测试需要显式使用 `-m live_agent`。
 
-## 📄 许可证
+## 许可证
 
 CadFlow Harness 使用 [GNU Affero General Public License v3.0](LICENSE) 开源许可证。

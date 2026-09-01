@@ -11,7 +11,7 @@ Run commands from the repository root unless noted.
 ```
 
 `setup.sh` installs or checks platform dependencies. `run.sh` starts the
-backend and Viewer together and cleans up both child processes on exit.
+backend and Viewer together and removes both child processes on exit.
 
 ## Documentation
 
@@ -29,7 +29,7 @@ Build both languages in strict mode and recreate `site/`:
 ```
 
 The output is a deployable static tree with `/index.html`, `/en/`, and `/zh/`.
-The explicit clean command is:
+The root path redirects to the Chinese site. To remove the generated files:
 
 ```bash
 ./scripts/docs.sh clean
@@ -42,8 +42,8 @@ Build first, then serve the combined site locally:
 ```
 
 The preview listens on `http://127.0.0.1:8000` by default. Set `DOCS_HOST` or
-`DOCS_PORT` to change it. `zensical serve` can also preview one language, but
-the repository script is the supported combined-site workflow.
+`DOCS_PORT` to change it. `zensical serve` previews one language; use the
+repository script for the combined site.
 
 ## Verification
 

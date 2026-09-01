@@ -4,37 +4,32 @@ icon: lucide/box
 
 # CadFlow Harness
 
-CadFlow Harness 是一个面向本机运行、可审计的 CAD Agent 运行时。模型编写可执行的
-Python 程序，CadFlow 使用确定性的几何内核执行它，应用则把源码、测量结果、进度
-事件和通过验证的产品产物保存在同一个 Project 中。
+CadFlow Harness 是一个在本机运行 CAD Agent 的工具。Agent 编写可执行的 Python 程序，CadFlow 用确定性的几何内核运行程序，应用会保存源码、测量值、进度事件和通过检查的产品产物。
 
-它不是一步生成网格或图片的黑盒 3D 模型，而是一条可编程、可验证的建模循环。生成
-后的 Python 仍然可读、可修改，几何检查也能提供超越视觉相似度的证据。
+生成结果保留为 Python 源码。你可以查看尺寸和特征，修改文件后再次运行。Viewer 用于查看预览和已接受的几何结果。
 
-!!! warning "Alpha 与可信本机软件"
+!!! warning "Alpha，仅适合可信本机"
 
-    当前版本面向可信的本机演示。生成的代码会在本机受限进程中执行；它不是托管的
-    多租户服务，也不是面向不受信用户的安全边界。
+    当前版本不是托管的多租户服务，也不是隔离不可信代码的安全边界。生成的代码会在本机受限进程中执行，请只在你信任的机器上运行。
 
-## 当前可用能力
+## 当前可用
 
-- FastAPI Project/Run API，以及同源的 Three.js Viewer。
-- Deep Agents Harness，可在一个 Project 工作区中创建或修改 `/code/model.py` 与辅助模块。
-- 支持 CadFlow `Shape` 和语义化 `Assembly`，包含产品验证、Scene 生成以及通过验收前的独立 CAD review。
+- FastAPI Project 和 Run API，以及同源的 Three.js Viewer。
+- Deep Agents Harness，可在一个 Project 中创建或修改 `/code/model.py` 和辅助模块。
+- `Shape` 单零件与语义化 `Assembly` 执行、产品验证、Scene 生成和独立 CAD review。
 - 实时源码预览、进度事件、脱敏 Trace 下载，以及已接受结果的版本化产物。
-- 五个公开 CAD Skill，覆盖零件、柔性几何、STEP/BREP 检查、装配和旋转传动。
+- 五个公开 CAD Skill，覆盖零件、柔性几何、STEP/BREP、装配和旋转传动。
 
-## 从哪里开始
+## 从这里开始
 
-- [快速开始](quickstart.md)：安装锁定环境并启动本机应用。
-- [创建第一个 Project](first-project.md)：完成 Project 创建和首次任务提交。
-- [示例目录](examples/index.md)：查找可运行的仓库示例。
-- [系统架构](architecture.md)：了解 Agent、执行器、内核和 Viewer 的边界。
-- [配置参考](reference/configuration.md)：查看有效环境变量与路径。
+- [快速开始](quickstart.md)：安装锁定的环境并启动本地应用。
+- [创建第一个 Project](first-project.md)：创建 Project，提交第一个任务。
+- [示例目录](examples/index.md)：查找仓库中的可运行示例。
+- [系统架构](architecture.md)：了解 Agent、执行器、几何内核和 Viewer 的分工。
+- [配置](reference/configuration.md)：查看环境变量和目录。
 
-[GitHub 仓库](https://github.com/zion-zion-zion/CadFlowAgent)包含源码、测试、Skills、示例和 Issue 跟踪器。
+[GitHub 仓库](https://github.com/zion-zion-zion/CadFlowAgent)包含源码、测试、Skills、示例和 Issue 列表。
 
-## 项目方向
+## 项目状态
 
-运行时和可观察轨迹已经实现。仓库提供一个小型重建数据示例，但规模化数据集整理、
-评测基础设施和 CAD 专用后训练仍属于未来工作，不应理解为已经发布的模型能力。
+运行时和运行记录已经在仓库中实现。仓库里有一个小型重建数据示例；大规模数据集整理、评测基础设施和 CAD 专用后训练尚未实现，也不属于当前发布的模型能力。

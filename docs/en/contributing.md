@@ -1,7 +1,7 @@
 # Contributing
 
-Contributions should keep the runtime contract, public API, and generated
-artifacts honest. Start by reading the repository [AGENTS.md](https://github.com/zion-zion-zion/CadFlowAgent/blob/master/AGENTS.md)
+Keep the runtime contract, public API, and generated artifacts consistent with
+the code when you submit a change. Read the repository [AGENTS.md](https://github.com/zion-zion-zion/CadFlowAgent/blob/master/AGENTS.md)
 for engineering conventions; its internal issue and triage notes are not part
 of this public site.
 
@@ -25,21 +25,21 @@ cd viewer && npm run build
 cd .. && ./scripts/docs.sh build
 ```
 
-Add focused regression tests for backend behavior changes. Viewer changes need
-at least a production build and a manual note when visual behavior changes.
+Add regression tests for backend behavior changes. Viewer changes need a
+production build; include the manual result when the change affects the UI.
 Documentation changes must build both languages in strict mode.
 
 ## Documentation changes
 
 Keep corresponding pages in `docs/en/` and `docs/zh/` aligned in scope and
-facts. Link to source files or API routes that exist today, label experimental
+facts. Link to source files and API routes that exist today, label experimental
 examples, and update the matching navigation entry. The public `docs/` tree is
-reserved for users and external contributors; internal Agent operating rules
-live under `.agents/`.
+for users and external contributors; internal Agent operating rules live under
+`.agents/`.
 
 ## Pull requests
 
-Explain the user problem, the change, and verification commands. Include a
+Explain the user problem, the change, and the verification commands. Include a
 short screenshot note for Viewer changes and call out dependency or
-configuration changes. The documentation workflow builds strict English and
-Chinese sites on pull requests and publishes Pages after `master` updates.
+configuration changes. The documentation workflow builds both sites on pull
+requests and publishes Pages after `master` updates.

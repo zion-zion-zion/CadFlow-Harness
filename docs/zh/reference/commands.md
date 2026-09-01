@@ -10,7 +10,7 @@
 ./run.sh
 ```
 
-`setup.sh` 安装或检查平台依赖，`run.sh` 同时启动后端和 Viewer，并在退出时清理两个子进程。
+`setup.sh` 安装或检查平台依赖。`run.sh` 同时启动后端和 Viewer，退出时清理两个子进程。
 
 ## 文档
 
@@ -27,7 +27,7 @@ uv sync --locked --group dev --python 3.13  # macOS
 ./scripts/docs.sh build
 ```
 
-输出是可部署的静态目录，包含 `/index.html`、`/en/` 和 `/zh/`。显式清理命令为：
+输出是可部署的静态目录，包含 `/index.html`、`/en/` 和 `/zh/`。根路径会跳转到中文站点。清理命令为：
 
 ```bash
 ./scripts/docs.sh clean
@@ -39,8 +39,7 @@ uv sync --locked --group dev --python 3.13  # macOS
 ./scripts/docs.sh serve
 ```
 
-预览默认监听 `http://127.0.0.1:8000`，可通过 `DOCS_HOST` 或 `DOCS_PORT` 修改。也可以用
-`zensical serve` 预览单种语言，但仓库脚本才是受支持的合并站点流程。
+预览默认监听 `http://127.0.0.1:8000`，可通过 `DOCS_HOST` 或 `DOCS_PORT` 修改。`zensical serve` 只能预览单种语言；合并站点使用仓库脚本。
 
 ## 验证
 

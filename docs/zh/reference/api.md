@@ -1,7 +1,6 @@
-# API 面
+# API
 
-`run.sh` 运行时，FastAPI 交互式 OpenAPI 文档位于 `http://localhost:8765/docs`。机器可读
-schema 位于 `/openapi.json`，ReDoc 位于 `/redoc`。
+运行 `run.sh` 时，FastAPI 交互式 OpenAPI 文档位于 `http://localhost:8765/docs`。机器可读 schema 位于 `/openapi.json`，ReDoc 位于 `/redoc`。
 
 ## Project 与消息
 
@@ -16,8 +15,7 @@ schema 位于 `/openapi.json`，ReDoc 位于 `/redoc`。
 | `DELETE` | `/api/projects/{project_id}/conversation` | 确认后清空对话。 |
 | `POST` | `/api/projects/{project_id}/stop` | 停止活动 Run。 |
 
-旧的一次性路由 `/api/projects/{project_id}/run` 仍为 API 兼容而保留，接受 `prompt` 和可选
-`harness`。
+旧的一次性路由 `/api/projects/{project_id}/run` 仍保留用于兼容，接受 `prompt` 和可选 `harness`。
 
 ## 预览和产物
 
@@ -33,7 +31,7 @@ schema 位于 `/openapi.json`，ReDoc 位于 `/redoc`。
 | `GET` | `/api/projects/{project_id}/product/files/{role}` | 按 role 下载产品文件。 |
 | `GET` | `/api/projects/{project_id}/product/part-step?part_id=...` | 下载某个独立 Part 的 STEP。 |
 
-## 可观察性
+## 运行记录
 
 | 方法 | 路由 | 用途 |
 | --- | --- | --- |

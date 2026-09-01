@@ -2,37 +2,37 @@
 
 ## Implemented
 
-- Trusted-local FastAPI backend and Vite/Three.js browser workspace.
-- Durable multi-Project catalog with one active Run per Project.
-- Deep Agents harness with read-only Skills and a bounded Python source
+- A local FastAPI backend and Vite/Three.js browser workspace.
+- A persistent catalog for multiple Projects, with one active Run per Project.
+- A Deep Agents harness with read-only Skills and a restricted Python source
   workspace.
 - `cad.Shape` single-part and semantic `cad.Assembly` product execution.
-- Deterministic geometry, product, Scene, STEP replay, and independent review
-  gates, followed by versioned Accepted artifacts.
-- Live GLB previews, SSE progress, bounded traces, redaction, and product
-  downloads.
+- Geometry, product, Scene, STEP replay, and independent review checks, followed
+  by versioned Accepted artifacts when the checks pass.
+- Live GLB previews, SSE progress, trace inspection, redacted downloads, and
+  product downloads.
 
-## Experimental or bounded
+## Bounded behavior
 
-- The flexible SDK and Assembly APIs are available in examples and Skills, but
-  not every example is compatible with the Agent's current return contract.
-- Live previews are best effort and may lag, fail, or be unavailable while the
-  accepted result remains valid.
-- Provider reasoning modes and optional review models depend on the configured
+- The flexible SDK and Assembly API are available in examples and Skills, but
+  some examples do not match the Agent's current return contract.
+- Live previews are for inspection. They may lag, fail, or be unavailable; the
+  final validation decides whether a result is Accepted.
+- Reasoning modes and the optional review model depend on the configured
   OpenAI-compatible endpoint.
-- The application is designed for a trusted local machine; generated code is
-  executed in local bounded processes.
+- The application targets a trusted local machine and runs generated code in
+  bounded local processes.
 
-## Future direction
+## Planned work
 
-Large-scale reconstruction datasets, benchmark/evaluation pipelines, and
-CAD-specific post-training are project directions. The repository's seed
-trajectory example does not represent a shipped dataset or trained model.
+Large-scale reconstruction datasets, benchmark and evaluation pipelines, and
+CAD-specific post-training are not implemented. The trajectory example is not a
+released dataset or a trained model.
 
-## Explicit contract limits
+## Contract limits
 
 - A Part result must be one valid positive-volume solid.
-- An Assembly must preserve semantic Part boundaries; fusing separate parts into
+- An Assembly must preserve semantic Part boundaries. Fusing separate parts into
   one Shape is not an Assembly substitute.
 - One Project cannot run two Agent turns concurrently.
 - Prompts are limited to 32,000 characters.

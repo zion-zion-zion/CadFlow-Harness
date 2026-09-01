@@ -1,7 +1,7 @@
 # Architecture
 
-CadFlow Harness keeps interaction, agent behavior, deterministic execution, and
-visualization as separate boundaries.
+The browser, Agent, geometry executor, and result viewer are separate parts of
+the application. Project, Run, and Artifact contracts connect them.
 
 ```mermaid
 flowchart TB
@@ -16,24 +16,25 @@ flowchart TB
     S --> V
     C --> T[Events, trace, diagnostics]
     H -. read-only .-> R[CAD Skills]
-    K -. evidence .-> H
+    K -. measurements .-> H
 ```
 
-## Boundaries
+## Responsibilities
 
-- **Viewer** manages Project selection, conversation, progress, previews, and
-  Scene/product inspection in the browser.
-- **FastAPI** exposes Project, message, preview, artifact, and observability
-  routes. It owns no CAD modeling policy itself.
-- **Run Coordinator** serializes one active turn per Project, starts the Agent
-  service, records events, and publishes terminal state.
-- **Agent Harness** connects a configured model to bounded file tools and the
-  current Project workspace. It is replaceable behind the run contract.
-- **Project Workspace** contains only `/code/**/*.py` source visible to the
-  Agent. Metadata, logs, previews, review evidence, and artifacts remain
-  outside that mount.
-- **CadFlow** builds deterministic geometry and exports a canonical Scene.
-  Validation and independent review provide measurable acceptance evidence.
+- **Viewer** manages Projects, conversation, progress, previews, and Scene or
+  product inspection in the browser.
+- **FastAPI** serves Project, message, preview, artifact, and trace routes. It
+  does not choose a CAD modeling method.
+- **Run Coordinator** allows one active turn per Project, starts the Agent,
+  records events, and writes the terminal state.
+- **Agent Harness** connects the configured model to bounded file tools and the
+  current Project workspace. Any harness that follows the Run contract can
+  replace it.
+- **Project Workspace** exposes only `/code/**/*.py` to the Agent. Metadata,
+  logs, previews, review evidence, and artifacts stay outside that mount.
+- **CadFlow** builds deterministic geometry and exports the Scene. The
+  validator and independent review use measurements to decide whether to accept
+  the version.
 
-The repository also includes modular assembly examples, but examples are not
-mounted into an Agent Run. They are references for developers and users.
+The assembly examples in the repository are not mounted into Agent Runs. They
+are reference programs and test material.

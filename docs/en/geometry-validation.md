@@ -1,29 +1,28 @@
 # Geometry validation
 
-The runtime treats geometry as executable evidence. A passing render is useful
-for inspection, but it is not enough to accept a product.
+The runtime checks the generated geometry directly. A render helps a person
+inspect the result, but a screenshot alone cannot accept a product.
 
-## Part gates
+## Part checks
 
-For a `cad.Shape` result, the executor checks that the process completed, the
-returned result is one shape with one valid solid, and its volume is finite and
-positive. Bounds and other measured properties are retained as diagnostics.
+For a `cad.Shape`, the executor confirms that the process completed, the result
+is one Shape with one valid solid, and its volume is finite and positive. Bounds
+and other measurements are saved in diagnostics.
 
-## Assembly gates
+## Assembly checks
 
-For a `cad.Assembly`, the executor checks semantic structure, leaf Part
-identity, connected one-solid bodies, component and unique-Part counts,
-connectors and placements, strict constraint solving and every residual, and
-the declared `PRODUCT_SPEC.envelope.max_size_mm`. It then replays STEP output
-and parses the Scene Artifact.
+For a `cad.Assembly`, the executor checks semantic structure, leaf Part identity,
+connected one-solid bodies, component and unique-Part counts, connectors and
+placements, strict constraint solving and residuals, and the declared
+`PRODUCT_SPEC.envelope.max_size_mm`. It then replays the STEP output and parses
+the Scene Artifact.
 
 ## Review and acceptance
 
-The deterministic executor writes a complete Draft product bundle only after
-the early gates pass. The host invokes independent `cad_review`, which inspects
-the exported STEP and evidence. A Draft becomes Accepted only when review also
-passes. Accepted files are copied into a versioned directory and exposed to the
-Viewer.
+After the early checks pass, the executor writes a Draft product bundle. The
+host calls the independent `cad_review` to inspect the exported STEP and
+measurements. The Draft becomes Accepted only when review passes too. Accepted
+files go into a versioned directory and appear in the Viewer.
 
 ```mermaid
 flowchart LR
@@ -36,7 +35,7 @@ flowchart LR
 
 ## What validation does not prove
 
-The current checks do not establish strength, tolerance stack, manufacturability,
-thermal performance, bearing life, backlash, contact stress, or other
-engineering analyses unless a future implementation adds those analyses.
-Geometric and semantic validity are the scope of this runtime.
+The current checks do not establish strength, tolerance stack,
+manufacturability, thermal performance, bearing life, backlash, contact stress,
+or other engineering analyses. This runtime checks geometric and semantic
+validity only.

@@ -1,8 +1,8 @@
-# API surface
+# API
 
-The FastAPI application publishes interactive OpenAPI documentation at
-`http://localhost:8765/docs` while `run.sh` is running. The machine-readable
-schema is at `/openapi.json`, and ReDoc is at `/redoc`.
+While `run.sh` is running, FastAPI serves interactive OpenAPI documentation at
+`http://localhost:8765/docs`. The machine-readable schema is at `/openapi.json`
+and ReDoc is at `/redoc`.
 
 ## Projects and messages
 
@@ -17,8 +17,8 @@ schema is at `/openapi.json`, and ReDoc is at `/redoc`.
 | `DELETE` | `/api/projects/{project_id}/conversation` | Clear conversation after confirmation. |
 | `POST` | `/api/projects/{project_id}/stop` | Stop the active Run. |
 
-The legacy one-shot route `/api/projects/{project_id}/run` remains available
-for API compatibility and accepts `prompt` plus optional `harness`.
+The older one-shot route `/api/projects/{project_id}/run` remains for API
+compatibility. It accepts `prompt` and an optional `harness`.
 
 ## Previews and artifacts
 
@@ -34,12 +34,12 @@ for API compatibility and accepts `prompt` plus optional `harness`.
 | `GET` | `/api/projects/{project_id}/product/files/{role}` | Download a product file by role. |
 | `GET` | `/api/projects/{project_id}/product/part-step?part_id=...` | Download one unique Part STEP. |
 
-## Observability
+## Run records
 
 | Method | Route | Use |
 | --- | --- | --- |
-| `GET` | `/api/traces` | List bounded trace summaries. |
+| `GET` | `/api/traces` | List limited trace summaries. |
 | `GET` | `/api/projects/{project_id}/events` | Stream progress as Server-Sent Events. |
-| `GET` | `/api/projects/{project_id}/trace` | Read a paginated/filterable trace. |
+| `GET` | `/api/projects/{project_id}/trace` | Read a paginated, filterable trace. |
 | `GET` | `/api/projects/{project_id}/trace/download` | Download redacted NDJSON. |
 | `GET` | `/api/projects/{project_id}/trace/events?cursor=...` | Read one trace event. |
