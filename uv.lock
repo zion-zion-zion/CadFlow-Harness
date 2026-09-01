@@ -288,7 +288,7 @@ requires-dist = [
 provides-extras = ["test", "collision", "inspect"]
 
 [[package]]
-name = "cadflowagent"
+name = "cadflow-harness"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

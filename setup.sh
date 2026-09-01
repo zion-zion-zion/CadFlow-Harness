@@ -201,4 +201,4 @@ else
   printf 'Keeping existing .env unchanged.\n'
 fi
 
-printf 'Setup complete. Run ./run.sh to start CadFlowAgent.\n'
+printf 'Setup complete. Run ./run.sh to start CadFlow Harness.\n'

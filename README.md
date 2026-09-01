@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/assets/cadflowagent-logo.png" width="168" alt="CadFlowAgent logo">
+  <img src="docs/assets/cadflow-harness-logo.png" width="168" alt="CadFlow Harness logo">
 </p>
 
-<h1 align="center">CadFlowAgent</h1>
+<h1 align="center">CadFlow Harness</h1>
 
 <p align="center">
   <strong>Infrastructure for CAD agents that can build, verify, and learn from geometry.</strong>
@@ -36,7 +36,7 @@
 
 ---
 
-CadFlowAgent is infrastructure for **running, verifying, and improving parametric CAD agents**. It lets a general-purpose language model write executable CAD programs, grounds the result in a deterministic geometry kernel, and preserves the observable run as evidence that can support evaluation and future post-training.
+CadFlow Harness is infrastructure for **running, verifying, and improving parametric CAD agents**. It lets a general-purpose language model write executable CAD programs, grounds the result in a deterministic geometry kernel, and preserves the observable run as evidence that can support evaluation and future post-training.
 
 It is not a 3D foundation model that directly emits meshes or images. The model acts as a CAD programmer: it reads domain workflows, writes and revises Python source, calls CadFlow, and receives measurable geometric feedback. The primary asset is the reusable agent–CAD runtime around that process—not a fixed set of model weights.
 
@@ -45,7 +45,7 @@ It is not a 3D foundation model that directly emits meshes or images. The model 
 
 ## Documentation
 
-- [Live documentation (Chinese default)](http://119.28.82.252/cadflowagent/)
+- [Live documentation (Chinese default)](http://119.28.82.252/cadflow-harness/)
 - [English documentation site](https://zion-zion-zion.github.io/CadFlowAgent/en/)
 - [简体中文文档站](https://zion-zion-zion.github.io/CadFlowAgent/zh/)
 - [English documentation source](docs/en/index.md)
@@ -57,7 +57,7 @@ It is not a 3D foundation model that directly emits meshes or images. The model 
 
 ### 🧩 Code is the generative medium
 
-CadFlowAgent produces readable, editable, and replayable Python CAD source instead of an opaque polygon soup. Dimensions, feature order, and modeling intent remain available for inspection and iteration after generation.
+CadFlow Harness produces readable, editable, and replayable Python CAD source instead of an opaque polygon soup. Dimensions, feature order, and modeling intent remain available for inspection and iteration after generation.
 
 ### 📐 Geometry is the verifier
 
@@ -69,7 +69,7 @@ Prompts, observable tool activity, source revisions, execution outcomes, measure
 
 ### 🔌 The intelligence layer is replaceable
 
-The Deep Agents harness shares a stable Project workspace and artifact contract with the rest of the runtime. Models, harnesses, and CAD Skills can evolve while execution, verification, run records, and visualization stay reusable—this is what makes CadFlowAgent infrastructure rather than a single-agent demo.
+The Deep Agents harness shares a stable Project workspace and artifact contract with the rest of the runtime. Models, harnesses, and CAD Skills can evolve while execution, verification, run records, and visualization stay reusable—this is what makes CadFlow Harness infrastructure rather than a single-agent demo.
 
 <a id="project-direction"></a>
 
@@ -88,7 +88,7 @@ The intended flywheel is simple: **better runtime → higher-quality trajectorie
 ## 🏗️ Architecture
 
 <p align="center">
-  <img src="docs/assets/cadflowagent-architecture.svg" alt="CadFlowAgent system architecture diagram">
+  <img src="docs/assets/cadflow-harness-architecture.svg" alt="CadFlow Harness system architecture diagram">
 </p>
 
 ### 🔄 One modeling run
@@ -182,7 +182,7 @@ Skills provide task-specific modeling knowledge and exact API references without
 ## 🗂️ Repository map
 
 ~~~text
-CadFlowAgent/
+CadFlow Harness/
 ├── backend/          Agent runtime, Project API, execution, events, and validation
 ├── viewer/           Browser workspace and Three.js Scene viewer
 ├── skills/           Progressive CadFlow workflows and API references
@@ -210,4 +210,4 @@ Live provider tests are opt-in with `-m live_agent`.
 
 ## 📄 License
 
-CadFlowAgent is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+CadFlow Harness is licensed under the [GNU Affero General Public License v3.0](LICENSE).

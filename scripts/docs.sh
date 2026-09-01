@@ -30,7 +30,7 @@ build_sites() {
   uv run --locked zensical build --clean --strict --config-file "$REPO_ROOT/zensical.zh.toml"
   mkdir -p "$SITE_DIR/assets"
   cp "$REPO_ROOT/docs/root/index.html" "$SITE_DIR/index.html"
-  cp "$REPO_ROOT/docs/assets/cadflowagent-logo.png" "$SITE_DIR/assets/cadflowagent-logo.png"
+  cp "$REPO_ROOT/docs/assets/cadflow-harness-logo.png" "$SITE_DIR/assets/cadflow-harness-logo.png"
 }
 
 command_name="${1:-}"

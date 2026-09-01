@@ -1,7 +1,7 @@
 [project]
-name = "CadFlowAgent"
+name = "cadflow-harness"
 version = "0.1.0"
-description = "CadFlowAgent, a text-to-CAD agent built on CadFlow"
+description = "CadFlow Harness, a text-to-CAD agent built on CadFlow"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.14"

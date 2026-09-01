@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980" role="img" aria-labelledby="title desc">
-  <title id="title">CadFlowAgent system architecture</title>
+  <title id="title">CadFlow Harness system architecture</title>
   <desc id="desc">A natural-language CAD task moves through the web workspace, Agent harness, deterministic CadFlow validation, and observable artifacts. Measured evidence feeds repairs and future dataset curation.</desc>
   <defs>
     <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="userSpaceOnUse">
@@ -11,7 +11,7 @@
   </defs>
 
   <rect width="1600" height="980" fill="#f8fafc"/>
-  <text x="80" y="64" font-family="Inter, ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="34" font-weight="700" fill="#0f172a">CadFlowAgent architecture</text>
+  <text x="80" y="64" font-family="Inter, ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="34" font-weight="700" fill="#0f172a">CadFlow Harness architecture</text>
   <text x="80" y="98" font-family="Inter, ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="20" fill="#526170">A measured loop from natural-language task to validated CAD artifacts</text>
 
   <rect x="550" y="142" width="500" height="78" rx="18" fill="#ffffff" stroke="#2f80ed" stroke-width="3"/>
@@ -108,5 +108,5 @@
   <text x="450" y="891" font-family="Inter, ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="17" fill="#526170">measured feedback and repair</text>
   <line x1="785" y1="884" x2="830" y2="884" stroke="#64748b" stroke-width="2.5" stroke-dasharray="8 8" marker-end="url(#arrow)"/>
   <text x="845" y="891" font-family="Inter, ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="17" fill="#526170">observable records / future curation</text>
-  <text x="80" y="932" font-family="Inter, ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="16" fill="#64748b">CadFlowAgent keeps source, geometry evidence, progress, and accepted artifacts together in one Project.</text>
+  <text x="80" y="932" font-family="Inter, ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="16" fill="#64748b">CadFlow Harness keeps source, geometry evidence, progress, and accepted artifacts together in one Project.</text>
 </svg>

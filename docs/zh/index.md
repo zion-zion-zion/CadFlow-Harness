@@ -2,9 +2,9 @@
 icon: lucide/box
 ---
 
-# CadFlowAgent
+# CadFlow Harness
 
-CadFlowAgent 是一个面向本机运行、可审计的 CAD Agent 运行时。模型编写可执行的
+CadFlow Harness 是一个面向本机运行、可审计的 CAD Agent 运行时。模型编写可执行的
 Python 程序，CadFlow 使用确定性的几何内核执行它，应用则把源码、测量结果、进度
 事件和通过验证的产品产物保存在同一个 Project 中。
 

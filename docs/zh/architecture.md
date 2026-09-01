@@ -1,6 +1,6 @@
 # 系统架构
 
-CadFlowAgent 将交互、Agent 行为、确定性执行和可视化拆分为独立边界。
+CadFlow Harness 将交互、Agent 行为、确定性执行和可视化拆分为独立边界。
 
 ```mermaid
 flowchart TB

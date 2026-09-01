@@ -1,11 +1,11 @@
 [project]
-site_name = "CadFlowAgent Documentation"
-site_description = "Public documentation for the CadFlowAgent text-to-CAD runtime."
+site_name = "CadFlow Harness Documentation"
+site_description = "Public documentation for the CadFlow Harness text-to-CAD runtime."
 site_url = "https://zion-zion-zion.github.io/CadFlowAgent/en/"
 docs_dir = "docs/en"
 site_dir = "site/en"
 repo_url = "https://github.com/zion-zion-zion/CadFlowAgent"
-repo_name = "zion-zion-zion/CadFlowAgent"
+repo_name = "CadFlow Harness"
 edit_uri = "edit/master/docs/en/"
 nav = [
   { "Home" = "index.md" },
@@ -41,8 +41,8 @@ nav = [
 
 [project.theme]
 language = "en"
-logo = "assets/cadflowagent-logo.png"
-favicon = "assets/cadflowagent-logo.png"
+logo = "assets/cadflow-harness-logo.png"
+favicon = "assets/cadflow-harness-logo.png"
 features = [
   "content.action.edit",
   "content.action.view",

@@ -62,7 +62,7 @@ export function createShell(): ShellElements {
   app.innerHTML = `
   <main class="shell">
     <header class="topbar">
-      <div class="topbar-leading"><div class="brand"><span class="brand-mark">CF</span><div><strong>CadFlowAgent</strong><span>local text-to-cad workspace</span></div></div></div>
+      <div class="topbar-leading"><div class="brand"><span class="brand-mark">CF</span><div><strong>CadFlow Harness</strong><span>local text-to-cad workspace</span></div></div></div>
       <div class="topbar-actions"><span class="local-badge">LOCAL DEMO</span><a id="trace-link" class="quiet-button topbar-link" href="/trace">Trace</a><button id="refresh-projects" class="quiet-button" type="button">Refresh</button></div>
     </header>
     <section class="workspace">

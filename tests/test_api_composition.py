@@ -13,7 +13,7 @@ from backend.app import create_app
 from backend.projects import ProjectStore
 
 
-_OPENAPI_SHA256 = "27885d921173081f7cd9d7173b0401a0e48d308510926cd81e2bc2fd6e473244"
+_OPENAPI_SHA256 = "68a3ca618f5b2242965c10f28ac4b719e62faa4bbe2afe9c446a820cfcc6bbe4"
 _API_ROUTES = {
     ("GET", "/api/projects"),
     ("POST", "/api/projects"),

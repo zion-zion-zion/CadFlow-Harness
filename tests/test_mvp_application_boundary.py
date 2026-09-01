@@ -244,13 +244,13 @@ class _DeterministicBlockingCadHarness:
         )
 
 
-def test_application_uses_cadflow_agent_product_name(tmp_path: Path) -> None:
+def test_application_uses_cadflow_harness_product_name(tmp_path: Path) -> None:
     app = create_app(
         projects_root=tmp_path,
         run_service=_DeterministicFailureHarness(),
     )
 
-    assert app.title == "CadFlowAgent"
+    assert app.title == "CadFlow Harness"
 
 
 def test_project_api_exposes_only_curated_terminal_run_metrics(

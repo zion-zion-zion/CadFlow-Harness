@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/assets/cadflowagent-logo.png" width="168" alt="CadFlowAgent 图标">
+  <img src="docs/assets/cadflow-harness-logo.png" width="168" alt="CadFlow Harness 图标">
 </p>
 
-<h1 align="center">CadFlowAgent</h1>
+<h1 align="center">CadFlow Harness</h1>
 
 <p align="center">
   <strong>让 CAD Agent 能够构建、验证，并从几何结果中持续进化的运行基础设施。</strong>
@@ -36,7 +36,7 @@
 
 ---
 
-CadFlowAgent 是面向**参数化 CAD Agent 运行、验证与持续改进**的基础设施。它让通用大模型编写可执行的 CAD 程序，用确定性的几何内核检验结果，并将可观察的运行过程沉淀为评测和未来后训练所需的证据。
+CadFlow Harness 是面向**参数化 CAD Agent 运行、验证与持续改进**的基础设施。它让通用大模型编写可执行的 CAD 程序，用确定性的几何内核检验结果，并将可观察的运行过程沉淀为评测和未来后训练所需的证据。
 
 它不是一个直接输出网格或图片的 3D 基础模型。大模型在系统中扮演 CAD 程序员：读取领域工作流、编写并修改 Python 源码、调用 CadFlow，再根据可量化的几何反馈继续迭代。这个项目的核心资产是可复用的 Agent–CAD 运行底座，而不是一组固定的模型权重。
 
@@ -45,7 +45,7 @@ CadFlowAgent 是面向**参数化 CAD Agent 运行、验证与持续改进**的�
 
 ## 文档
 
-- [在线文档（默认中文，可切换英文）](http://119.28.82.252/cadflowagent/)
+- [在线文档（默认中文，可切换英文）](http://119.28.82.252/cadflow-harness/)
 - [简体中文文档站](https://zion-zion-zion.github.io/CadFlowAgent/zh/)
 - [English documentation site](https://zion-zion-zion.github.io/CadFlowAgent/en/)
 - [中文文档源](docs/zh/index.md)
@@ -57,7 +57,7 @@ CadFlowAgent 是面向**参数化 CAD Agent 运行、验证与持续改进**的�
 
 ### 🧩 以程序作为生成介质
 
-CadFlowAgent 生成的是可读、可修改、可重放的 Python CAD 源码，而不是难以继续编辑的不透明三角网格。尺寸参数、特征顺序和建模意图在生成后仍然可以检查与迭代。
+CadFlow Harness 生成的是可读、可修改、可重放的 Python CAD 源码，而不是难以继续编辑的不透明三角网格。尺寸参数、特征顺序和建模意图在生成后仍然可以检查与迭代。
 
 ### 📐 以几何内核作为验证器
 
@@ -69,7 +69,7 @@ Prompt、可观察的工具活动、源码版本、执行结果、几何测量�
 
 ### 🔌 让智能模型可以替换
 
-Deep Agents Harness 与其余运行时共享稳定的 Project 工作区和 Artifact 契约。模型、Agent Harness 与 CAD Skills 可以持续演进，而执行、验证、运行记录和可视化能力保持复用——这正是 CadFlowAgent 与单一 Agent Demo 的本质区别。
+Deep Agents Harness 与其余运行时共享稳定的 Project 工作区和 Artifact 契约。模型、Agent Harness 与 CAD Skills 可以持续演进，而执行、验证、运行记录和可视化能力保持复用——这正是 CadFlow Harness 与单一 Agent Demo 的本质区别。
 
 <a id="项目方向"></a>
 
@@ -88,7 +88,7 @@ Deep Agents Harness 与其余运行时共享稳定的 Project 工作区和 Artif
 ## 🏗️ 系统架构
 
 <p align="center">
-  <img src="docs/assets/cadflowagent-architecture.svg" alt="CadFlowAgent 系统架构图">
+  <img src="docs/assets/cadflow-harness-architecture.svg" alt="CadFlow Harness 系统架构图">
 </p>
 
 ### 🔄 一次建模运行
@@ -182,7 +182,7 @@ Skills 提供任务专用的建模知识和精确 API 参考，避免每次 Agen
 ## 🗂️ 仓库结构
 
 ~~~text
-CadFlowAgent/
+CadFlow Harness/
 ├── backend/          Agent 运行时、Project API、执行、事件与验证
 ├── viewer/           浏览器工作区与 Three.js Scene Viewer
 ├── skills/           渐进式 CadFlow 工作流与 API 参考
@@ -210,4 +210,4 @@ cd .. && ./scripts/docs.sh build
 
 ## 📄 许可证
 
-CadFlowAgent 使用 [GNU Affero General Public License v3.0](LICENSE) 开源许可证。
+CadFlow Harness 使用 [GNU Affero General Public License v3.0](LICENSE) 开源许可证。

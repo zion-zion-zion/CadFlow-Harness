@@ -53,7 +53,7 @@ root.innerHTML = `
   <a class="skip-link" href="#main-content">Skip to trace</a>
   <div class="trace-shell">
     <header class="trace-topbar">
-      <div class="trace-brand"><span class="trace-brand-mark">CF</span><div><strong>CadFlow Trace</strong><span>CONVERSATION OBSERVABILITY</span></div></div>
+      <div class="trace-brand"><span class="trace-brand-mark">CF</span><div><strong>CadFlow Harness Trace</strong><span>CONVERSATION OBSERVABILITY</span></div></div>
       <div class="trace-run-heading"><strong id="active-project-name">No Project selected</strong><code id="active-project-id"></code></div>
       <div class="trace-top-actions">
         <span id="poll-status" class="poll-status" role="status"><span></span>Idle</span>

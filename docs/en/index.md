@@ -2,9 +2,9 @@
 icon: lucide/box
 ---
 
-# CadFlowAgent
+# CadFlow Harness
 
-CadFlowAgent is a local, auditable runtime for agents that write and verify
+CadFlow Harness is a local, auditable runtime for agents that write and verify
 parametric CAD programs. A model writes executable Python, CadFlow executes it
 with a deterministic geometry kernel, and the application keeps the source,
 measurements, progress events, and validated product artifacts together.

@@ -1,6 +1,6 @@
 # Architecture
 
-CadFlowAgent keeps interaction, agent behavior, deterministic execution, and
+CadFlow Harness keeps interaction, agent behavior, deterministic execution, and
 visualization as separate boundaries.
 
 ```mermaid

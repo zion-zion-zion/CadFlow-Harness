@@ -1,4 +1,4 @@
-"""FastAPI application composition for the local CadFlowAgent workspace."""
+"""FastAPI application composition for the local CadFlow Harness workspace."""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ def create_app(
         finally:
             scheduler.close()
 
-    app = FastAPI(title="CadFlowAgent", lifespan=lifespan)
+    app = FastAPI(title="CadFlow Harness", lifespan=lifespan)
     app.state.project_store = project_store
     app.state.event_store = event_store
     app.state.run_coordinator = coordinator

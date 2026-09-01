@@ -1,11 +1,11 @@
 [project]
-site_name = "CadFlowAgent 文档"
-site_description = "CadFlowAgent 文本到 CAD 运行时的公开文档。"
+site_name = "CadFlow Harness 文档"
+site_description = "CadFlow Harness 文本到 CAD 运行时的公开文档。"
 site_url = "https://zion-zion-zion.github.io/CadFlowAgent/zh/"
 docs_dir = "docs/zh"
 site_dir = "site/zh"
 repo_url = "https://github.com/zion-zion-zion/CadFlowAgent"
-repo_name = "zion-zion-zion/CadFlowAgent"
+repo_name = "CadFlow Harness"
 edit_uri = "edit/master/docs/zh/"
 nav = [
   { "首页" = "index.md" },
@@ -41,8 +41,8 @@ nav = [
 
 [project.theme]
 language = "zh"
-logo = "assets/cadflowagent-logo.png"
-favicon = "assets/cadflowagent-logo.png"
+logo = "assets/cadflow-harness-logo.png"
+favicon = "assets/cadflow-harness-logo.png"
 features = [
   "content.action.edit",
   "content.action.view",
