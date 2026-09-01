@@ -17,7 +17,8 @@ from ..agent_logging import (
     ConversationLog,
 )
 from ..agent_backend import create_agent_backend
-from ..cad_executor import CAD_EXECUTION_TIMEOUT_SECONDS, CancellationToken, ExecutionResult
+from ..cad_execution_contract import ExecutionResult
+from ..cad_process import CAD_EXECUTION_TIMEOUT_SECONDS, CancellationToken
 from ..cad_review import ReviewResult
 from ..contracts import ToolUseRecord
 from ..events import ProgressUpdate

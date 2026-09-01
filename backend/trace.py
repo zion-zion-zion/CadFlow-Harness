@@ -19,7 +19,7 @@ from .agent_logging import (
     REVIEWER_AGENT_ROLE,
     REVIEWER_EVENT_TYPES as _REVIEWER_EVENT_TYPES,
 )
-from .cad_executor import redact_credentials
+from .cad_security import redact_credentials
 
 
 SUMMARY_LIMIT = 240

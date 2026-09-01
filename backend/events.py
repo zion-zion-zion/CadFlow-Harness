@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .cad_executor import redact_credentials
+from .cad_security import redact_credentials
 
 
 EVENTS_NAME = "events.jsonl"

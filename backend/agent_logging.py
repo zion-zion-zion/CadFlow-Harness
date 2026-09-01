@@ -13,7 +13,7 @@ from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
 
-from .cad_executor import redact_credentials
+from .cad_security import redact_credentials
 
 CONVERSATION_LOG_NAME = "conversation.jsonl"
 LEGACY_AGENT_RUN_LOG_NAME = "agent-run.jsonl"

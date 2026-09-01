@@ -19,6 +19,10 @@ from typing import Any, Mapping
 import cadflow as cad
 
 
+# Keep these three literals local because this file is also launched directly
+# as ``python -u backend/cad_runner.py`` with the repository package path
+# intentionally absent. ``backend.cad_protocol`` uses the same wire values for
+# host-side decoding and tests lock the two definitions together.
 PREFLIGHT_PREFIX = "__CADFLOW_PREFLIGHT__"
 RESULT_PREFIX = "__CADFLOW_EXECUTION_RESULT__"
 PHASE_PREFIX = "__CADFLOW_EXECUTION_PHASE__"

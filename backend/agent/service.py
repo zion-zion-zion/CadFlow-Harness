@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..agent_logging import ConversationLog
-from ..cad_executor import CancellationToken
+from ..cad_process import CancellationToken
 from ..events import ProgressUpdate
 from ..projects import ProjectStore
 from .outcome import AgentRunError, AgentRunOutcome

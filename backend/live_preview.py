@@ -21,7 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, Callable, Protocol
 
-from .cad_executor import CancellationToken, build_cad_environment, redact_credentials
+from .cad_process import CancellationToken
+from .cad_security import build_cad_environment, redact_credentials
 from .model_source import CODE_DIRECTORY_NAME, MODEL_SOURCE_NAME, migrate_legacy_sources
 from .previews import PreviewError, validate_preview_glb
 from .projects import ProjectState, ProjectStore

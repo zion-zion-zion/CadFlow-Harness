@@ -8,7 +8,8 @@ from pathlib import Path
 
 import cadflow as cad
 
-from backend import cad_executor, cad_runner
+from backend import cad_runner
+from backend.cad_execution_contract import bounded_validation_checks
 from backend.cad_executor import (
     CADExecutor,
     CancellationToken,
@@ -565,7 +566,7 @@ def test_product_validation_feedback_is_bounded_and_prioritizes_failures() -> No
         ]
     }
 
-    checks = cad_executor._bounded_validation_checks(report)
+    checks = bounded_validation_checks(report)
 
     assert len(checks) == 16
     assert checks[0]["check_id"] == "constraint_residuals"

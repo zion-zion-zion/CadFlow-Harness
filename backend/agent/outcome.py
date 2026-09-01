@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..cad_executor import ExecutionResult
+from ..cad_execution_contract import ExecutionResult
 from ..cad_review import ReviewResult
 from ..contracts import ToolUseRecord
 from ..harnesses import AgentHarness
