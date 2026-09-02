@@ -55,10 +55,6 @@ and tests; it does not ship a specialized model.
 ## Documentation
 
 - [Live documentation (Chinese default)](http://119.28.82.252/cadflow-harness/)
-- [English documentation site](https://zion-zion-zion.github.io/CadFlowAgent/en/)
-- [简体中文文档站](https://zion-zion-zion.github.io/CadFlowAgent/zh/)
-- [English documentation source](docs/en/index.md)
-- [中文文档源](docs/zh/index.md)
 
 <a id="core-design"></a>
 
