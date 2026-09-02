@@ -11,12 +11,18 @@
 <p align="center">
   Agent 编写 Python CAD 程序，CadFlow 负责执行和检查。每个 Project 都会保留源码、测量值和运行记录。
 </p>
+<p align="center">
+  <sub>由</sub><br>
+  <img src="docs/assets/coserve-ai-logo.png" width="220" alt="Coserve AI">
+</p>
 
 <p align="center">
   <a href="https://www.python.org/downloads/release/python-3120/"><img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white"></a>
   <a href="https://nodejs.org/"><img alt="Node.js 22.19+" src="https://img.shields.io/badge/Node.js-22.19+-5FA04E?logo=nodedotjs&logoColor=white"></a>
   <a href="LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/License-MIT-22C55E"></a>
   <img alt="Platform Linux x86-64" src="https://img.shields.io/badge/Platform-Linux%20x86--64-FCC624?logo=linux&logoColor=black">
+  <a href="http://119.28.82.252/cadflow-harness/"><img alt="在线文档" src="https://img.shields.io/badge/Docs-Online-2563EB?logo=readthedocs&logoColor=white"></a>
+  <a href="https://github.com/yhz5613813/CadFlow"><img alt="CadFlow 仓库" src="https://img.shields.io/badge/CadFlow-GitHub-181717?logo=github&logoColor=white"></a>
   <img alt="Status Alpha" src="https://img.shields.io/badge/Status-Alpha-F59E0B">
 </p>
 
