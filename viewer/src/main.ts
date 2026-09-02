@@ -3,6 +3,7 @@ import './style.css';
 import { createShell } from './shell';
 import { WorkspaceController } from './workspace-controller';
 import type { ProductTab } from './product-inspector';
+import type { ViewerDisplayMode } from './components/scene-viewer';
 
 const shell = createShell();
 const workspace = new WorkspaceController(shell);
@@ -39,6 +40,37 @@ shell.viewerRotate.addEventListener('click', () => {
   shell.viewerRotate.setAttribute('aria-pressed', String(enabled));
 });
 shell.viewerReset.addEventListener('click', () => workspace.sceneViewer.resetView());
+shell.viewerControlRailToggle.addEventListener('click', () => {
+  const expanded = shell.viewerControlRail.classList.toggle('is-collapsed') === false;
+  shell.viewerControlRailToggle.setAttribute('aria-expanded', String(expanded));
+  shell.viewerControlRailToggle.setAttribute('aria-label', expanded ? 'Collapse scene controls' : 'Expand scene controls');
+  shell.viewerControlRailToggle.title = expanded ? 'Collapse scene controls' : 'Expand scene controls';
+  shell.viewerControlRailToggle.textContent = expanded ? '−' : '+';
+});
+shell.productInspectorToggle.addEventListener('click', () => workspace.productInspector.toggleExpanded());
+shell.productInspectorClose.addEventListener('click', () => workspace.productInspector.close());
+const displayModeButtons = [shell.viewerModeCinematic, shell.viewerModeTechnical];
+const setDisplayMode = (mode: ViewerDisplayMode): void => {
+  workspace.sceneViewer.setDisplayMode(mode);
+  for (const button of displayModeButtons) {
+    const selected = button.id === `viewer-mode-${mode}`;
+    button.classList.toggle('is-active', selected);
+    button.setAttribute('aria-selected', String(selected));
+  }
+};
+for (const [index, button] of displayModeButtons.entries()) {
+  button.addEventListener('click', () => setDisplayMode(index === 0 ? 'cinematic' : 'technical'));
+  button.addEventListener('keydown', (event) => {
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % displayModeButtons.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + displayModeButtons.length) % displayModeButtons.length;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const next = displayModeButtons[nextIndex];
+    setDisplayMode(nextIndex === 0 ? 'cinematic' : 'technical');
+    next.focus();
+  });
+}
 shell.promptInput.addEventListener('input', () => {
   shell.promptCounter.textContent = `${shell.promptInput.value.length.toLocaleString()} / 32000`;
   const project = workspace.currentProject();

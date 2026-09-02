@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -6,6 +7,11 @@ import { createServer } from 'vite';
 
 const viewerRoot = fileURLToPath(new URL('.', import.meta.url));
 const projectId = '00000000000000000000000000000000';
+
+test('workspace shell includes the HUD copy target consumed during startup', async () => {
+  const shellSource = await readFile(new URL('./src/shell.ts', import.meta.url), 'utf8');
+  assert.match(shellSource, /id="viewer-hud-copy"/);
+});
 
 test('trace routes use the trace entry in the development server', async () => {
   const server = await createServer({

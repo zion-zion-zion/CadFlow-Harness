@@ -76,3 +76,26 @@ test('generic CadFlow appearance gets the studio steel finish', async () => {
   assert.equal(material.roughness, 0.34);
   assert.equal(material.transparent, false);
 });
+
+test('render quality drops one tier when the frame budget is missed', async () => {
+  const { nextRenderQuality } = await loadSceneViewer();
+
+  assert.deepEqual(nextRenderQuality('high', 24, 0), { quality: 'medium', goodWindows: 0 });
+  assert.deepEqual(nextRenderQuality('medium', 24, 0), { quality: 'low', goodWindows: 0 });
+  assert.deepEqual(nextRenderQuality('low', 24, 0), { quality: 'low', goodWindows: 0 });
+});
+
+test('render quality only upgrades after three stable windows', async () => {
+  const { nextRenderQuality } = await loadSceneViewer();
+
+  assert.deepEqual(nextRenderQuality('low', 10, 0), { quality: 'low', goodWindows: 1 });
+  assert.deepEqual(nextRenderQuality('low', 10, 1), { quality: 'low', goodWindows: 2 });
+  assert.deepEqual(nextRenderQuality('low', 10, 2), { quality: 'medium', goodWindows: 0 });
+  assert.deepEqual(nextRenderQuality('high', 10, 2), { quality: 'high', goodWindows: 0 });
+});
+
+test('render quality resets its recovery counter when performance is marginal', async () => {
+  const { nextRenderQuality } = await loadSceneViewer();
+
+  assert.deepEqual(nextRenderQuality('medium', 17, 2), { quality: 'medium', goodWindows: 0 });
+});

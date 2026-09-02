@@ -6,7 +6,7 @@ import type { ProjectSession } from './project-session';
 import type { ShellElements } from './shell';
 import type { SceneViewer } from './components/scene-viewer';
 
-type ProductElements = Pick<ShellElements, 'productInspector' | 'productTitle' | 'productSummary' | 'productStatus' | 'productDownloads' | 'productDownloadList' | 'productPane' | 'productTabButtons'>;
+type ProductElements = Pick<ShellElements, 'productInspector' | 'productInspectorToggle' | 'viewerHudCopy' | 'productTitle' | 'productSummary' | 'productStatus' | 'productDownloads' | 'productDownloadList' | 'productPane' | 'productTabButtons'>;
 export type ProductTab = 'structure' | 'bom' | 'validation' | 'motion';
 
 export class ProductInspector {
@@ -16,6 +16,7 @@ export class ProductInspector {
   private productLoadError = '';
   private activeProductTab: ProductTab = 'structure';
   private selectedProductNodeKey: string | null = null;
+  private inspectorExpanded = false;
 
   constructor(
     private readonly elements: ProductElements,
@@ -36,6 +37,7 @@ export class ProductInspector {
     this.session.loadedProductArtifactVersion = null;
     this.acceptedProduct = null; this.acceptedProductTree = null;
     this.productLoading = false; this.productLoadError = ''; this.selectedProductNodeKey = null;
+    this.setExpanded(false);
     this.sceneViewer.setMotionModel(null);
     this.elements.productDownloads.open = false;
     if (resetTab) this.activeProductTab = 'structure';
@@ -73,10 +75,15 @@ export class ProductInspector {
     const project = this.currentProject();
     const visible = project !== null && project.product_available && project.state !== 'Running';
     this.elements.productInspector.hidden = !visible;
+    this.elements.productInspectorToggle.disabled = !visible;
+    if (!visible) this.setExpanded(false);
     if (!visible || !project) return;
     this.elements.productTitle.textContent = project.result_kind === 'assembly' ? 'Assembly' : 'Part';
     this.elements.productStatus.textContent = project.product_status ?? 'Accepted';
     this.elements.productSummary.textContent = this.acceptedProduct ? `${this.acceptedProduct.summary.unique_part_count} unique · ${this.acceptedProduct.summary.leaf_part_count} instance${this.acceptedProduct.summary.leaf_part_count === 1 ? '' : 's'}` : 'Loading product record';
+    this.elements.viewerHudCopy.textContent = this.acceptedProduct
+      ? `${this.acceptedProduct.summary.component_count} components · ${this.acceptedProduct.summary.unique_part_count} unique parts · ${this.acceptedProduct.summary.leaf_part_count} instances`
+      : 'Loading accepted product data.';
     this.renderDownloads();
     for (const button of this.elements.productTabButtons) {
       const selected = button.dataset.productTab === this.activeProductTab;
@@ -94,9 +101,18 @@ export class ProductInspector {
   }
 
   setTab(tab: ProductTab): void { this.activeProductTab = tab; this.render(); }
+  toggleExpanded(): void { this.setExpanded(!this.inspectorExpanded); }
+  close(): void { this.setExpanded(false); }
   selectNodeBySceneId(nodeId: string): void {
     const node = this.acceptedProductTree ? flattenProductTree(this.acceptedProductTree).find((item) => item.sceneNodeId === nodeId) : undefined;
-    if (node) { this.selectedProductNodeKey = node.key; this.render(); }
+    if (node) { this.selectedProductNodeKey = node.key; this.setExpanded(true); this.render(); }
+  }
+
+  private setExpanded(expanded: boolean): void {
+    this.inspectorExpanded = expanded;
+    this.elements.productInspector.classList.toggle('is-collapsed', !expanded);
+    this.elements.productInspectorToggle.setAttribute('aria-expanded', String(expanded));
+    this.elements.productInspectorToggle.textContent = expanded ? 'Hide details' : 'Details';
   }
 
   private renderDownloads(): void {

@@ -8,6 +8,14 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { OutlinePass } from 'three/addons/postprocessing/OutlinePass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
 
 import {
   buildMotionModel,
@@ -29,6 +37,8 @@ export type Appearance = {
   alpha_mode: 'opaque' | 'mask' | 'blend';
   double_sided: boolean;
 };
+export type ViewerDisplayMode = 'cinematic' | 'technical';
+export type RenderQuality = 'high' | 'medium' | 'low';
 type Definition = {
   definition_id: string;
   kind: string;
@@ -111,6 +121,34 @@ const DEFAULT_CAD_COLOR: [number, number, number, number] = [0.72, 0.75, 0.78, 1
 const STUDIO_DEFAULT_COLOR: [number, number, number, number] = [0.38, 0.45, 0.54, 1];
 const STUDIO_DEFAULT_METALLIC = 0.45;
 const STUDIO_DEFAULT_ROUGHNESS = 0.34;
+const QUALITY_SETTINGS: Record<RenderQuality, {
+  pixelRatio: number;
+  shadowMapSize: number;
+  ssao: boolean;
+  bloom: boolean;
+}> = {
+  high: { pixelRatio: 2, shadowMapSize: 2048, ssao: true, bloom: true },
+  medium: { pixelRatio: 1.5, shadowMapSize: 1024, ssao: true, bloom: false },
+  low: { pixelRatio: 1, shadowMapSize: 512, ssao: false, bloom: false },
+};
+
+export function nextRenderQuality(
+  current: RenderQuality,
+  averageFrameTime: number,
+  goodWindows: number,
+): { quality: RenderQuality; goodWindows: number } {
+  const levels: RenderQuality[] = ['high', 'medium', 'low'];
+  const currentIndex = levels.indexOf(current);
+  if (averageFrameTime > 22 && currentIndex < levels.length - 1) {
+    return { quality: levels[currentIndex + 1], goodWindows: 0 };
+  }
+  if (averageFrameTime < 13 && currentIndex > 0) {
+    const nextGoodWindows = goodWindows + 1;
+    if (nextGoodWindows >= 3) return { quality: levels[currentIndex - 1], goodWindows: 0 };
+    return { quality: current, goodWindows: nextGoodWindows };
+  }
+  return { quality: current, goodWindows: 0 };
+}
 
 export type SceneViewerStatus = (message: string, ready: boolean) => void;
 export type SceneNodeSelection = (nodeId: string) => void;
@@ -169,6 +207,14 @@ export class SceneViewer {
   private readonly controls: OrbitControls;
   private readonly loader = new GLTFLoader();
   private readonly keyLight: THREE.DirectionalLight;
+  private readonly composer: EffectComposer;
+  private readonly renderPass: RenderPass;
+  private readonly ssaoPass: SSAOPass;
+  private readonly outlinePass: OutlinePass;
+  private readonly bloomPass: UnrealBloomPass;
+  private readonly vignettePass: ShaderPass;
+  private readonly stageGround: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial>;
+  private readonly stageGrid: THREE.GridHelper;
   private readonly shadowCatcher: THREE.Mesh<THREE.PlaneGeometry, THREE.ShadowMaterial>;
   private readonly modelRoot = new THREE.Group();
   private readonly previewRoot = new THREE.Group();
@@ -194,6 +240,13 @@ export class SceneViewer {
   private motionLastTime = 0;
   private motionChangeHandler: () => void = () => undefined;
   private environmentTarget: THREE.WebGLRenderTarget | null = null;
+  private displayMode: ViewerDisplayMode = 'cinematic';
+  private renderQuality: RenderQuality = 'high';
+  private qualityWindowStart = 0;
+  private qualityElapsed = 0;
+  private qualityFrameCount = 0;
+  private qualityGoodWindows = 0;
+  private resumeAutoRotateAfterInteraction = false;
 
   constructor(
     container: HTMLElement,
@@ -202,13 +255,13 @@ export class SceneViewer {
   ) {
     this.onStatus = onStatus;
     this.onNodeSelected = onNodeSelected;
-    // Match the reference's neutral white studio behind the stage overlays.
-    this.scene.background = new THREE.Color('#f7f8fa');
+    this.scene.background = new THREE.Color('#090d13');
+    this.scene.fog = new THREE.FogExp2('#090d13', 0.018);
     this.camera.up.set(0, 0, 1);
     this.camera.position.set(2.4, 2.1, 3.0);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setClearColor(0xf7f8fa, 1);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY_SETTINGS.high.pixelRatio));
+    this.renderer.setClearColor(0x090d13, 1);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.18;
@@ -224,14 +277,22 @@ export class SceneViewer {
     this.controls.screenSpacePanning = true;
     this.controls.minDistance = 0.01;
     this.controls.maxDistance = 1000;
+    this.controls.addEventListener('start', () => {
+      this.resumeAutoRotateAfterInteraction = this.controls.autoRotate;
+      this.controls.autoRotate = false;
+    });
+    this.controls.addEventListener('end', () => {
+      if (this.resumeAutoRotateAfterInteraction) this.controls.autoRotate = true;
+      this.resumeAutoRotateAfterInteraction = false;
+    });
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.environmentTarget = pmrem.fromScene(new RoomEnvironment(), 0.04);
     this.scene.environment = this.environmentTarget.texture;
     pmrem.dispose();
 
-    this.scene.add(new THREE.HemisphereLight('#ffffff', '#e6eaef', 0.9));
-    this.keyLight = new THREE.DirectionalLight('#ffffff', 1.25);
+    this.scene.add(new THREE.HemisphereLight('#dbe9ff', '#101a27', 0.72));
+    this.keyLight = new THREE.DirectionalLight('#f5f8ff', 1.65);
     this.keyLight.position.set(2.6, 7.5, 2.2);
     this.keyLight.castShadow = true;
     this.keyLight.shadow.mapSize.set(2048, 2048);
@@ -244,15 +305,34 @@ export class SceneViewer {
     this.keyLight.shadow.bias = -0.0004;
     this.keyLight.shadow.normalBias = 0.02;
     this.scene.add(this.keyLight, this.keyLight.target);
-    const rimLight = new THREE.DirectionalLight('#dfe9ff', 0.95);
+    const rimLight = new THREE.DirectionalLight('#5e9dff', 1.2);
     rimLight.position.set(-4.5, 2.5, -3.5);
     this.scene.add(rimLight, rimLight.target);
-    const fillLight = new THREE.DirectionalLight('#ffffff', 0.5);
+    const fillLight = new THREE.DirectionalLight('#f4b56d', 0.65);
     fillLight.position.set(-1, -3, 4);
     this.scene.add(fillLight, fillLight.target);
-    const sideLight = new THREE.DirectionalLight('#ffffff', 0.3);
+    const sideLight = new THREE.DirectionalLight('#75c7ff', 0.42);
     sideLight.position.set(5.5, -1.2, -2.5);
     this.scene.add(sideLight, sideLight.target);
+
+    this.stageGround = new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.MeshStandardMaterial({ color: '#111821', roughness: 0.9, metalness: 0.08 }),
+    );
+    this.stageGround.name = 'industrial-stage-ground';
+    this.stageGround.receiveShadow = true;
+    this.stageGround.visible = false;
+    this.scene.add(this.stageGround);
+
+    this.stageGrid = new THREE.GridHelper(2, 24, '#49627e', '#273746');
+    this.stageGrid.name = 'industrial-stage-grid';
+    this.stageGrid.rotation.x = Math.PI / 2;
+    this.stageGrid.visible = false;
+    const gridMaterial = this.stageGrid.material as THREE.LineBasicMaterial;
+    gridMaterial.transparent = true;
+    gridMaterial.opacity = 0.42;
+    gridMaterial.depthWrite = false;
+    this.scene.add(this.stageGrid);
 
     this.shadowCatcher = new THREE.Mesh(
       new THREE.PlaneGeometry(2, 2),
@@ -262,6 +342,29 @@ export class SceneViewer {
     this.shadowCatcher.receiveShadow = true;
     this.shadowCatcher.visible = false;
     this.scene.add(this.shadowCatcher);
+
+    this.composer = new EffectComposer(this.renderer);
+    this.renderPass = new RenderPass(this.scene, this.camera);
+    this.ssaoPass = new SSAOPass(this.scene, this.camera, 1, 1, 16);
+    this.ssaoPass.kernelRadius = 18;
+    this.ssaoPass.minDistance = 0.001;
+    this.ssaoPass.maxDistance = 0.16;
+    this.outlinePass = new OutlinePass(new THREE.Vector2(1, 1), this.scene, this.camera);
+    this.outlinePass.visibleEdgeColor.set('#f5c76d');
+    this.outlinePass.hiddenEdgeColor.set('#664c29');
+    this.outlinePass.edgeStrength = 2.1;
+    this.outlinePass.edgeThickness = 1.15;
+    this.outlinePass.edgeGlow = 0.12;
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.4, 0.86);
+    this.vignettePass = new ShaderPass(VignetteShader);
+    this.vignettePass.uniforms.offset.value = 1.08;
+    this.vignettePass.uniforms.darkness.value = 0.46;
+    this.composer.addPass(this.renderPass);
+    this.composer.addPass(this.ssaoPass);
+    this.composer.addPass(this.outlinePass);
+    this.composer.addPass(this.bloomPass);
+    this.composer.addPass(this.vignettePass);
+    this.composer.addPass(new OutputPass());
 
     this.modelRoot.name = 'validated-scene';
     this.previewRoot.name = 'live-preview';
@@ -274,10 +377,13 @@ export class SceneViewer {
     this.resizeObserver = new ResizeObserver(() => this.resize(container));
     this.resizeObserver.observe(container);
     this.resize(container);
+    this.applyRenderQuality();
     this.renderer.setAnimationLoop((time) => {
       this.controls.update();
       this.advanceMotion(time);
-      this.renderer.render(this.scene, this.camera);
+      this.updateAdaptiveQuality(time);
+      if (this.displayMode === 'cinematic') this.composer.render();
+      else this.renderer.render(this.scene, this.camera);
     });
   }
 
@@ -303,6 +409,7 @@ export class SceneViewer {
       for (const definition of manifest.definitions) this.definitions.set(definition.definition_id, definition);
       for (const appearance of manifest.appearances) this.appearances.set(appearance.appearance_id, appearance);
       await this.buildScene();
+      this.updateLineVisuals();
       this.frame();
       this.onStatus(
         `${manifest.geometry_assets.length} geometry asset${manifest.geometry_assets.length === 1 ? '' : 's'} · ${manifest.coordinate_system.length_unit}`,
@@ -371,6 +478,25 @@ export class SceneViewer {
 
   isAutoRotate(): boolean {
     return this.controls.autoRotate;
+  }
+
+  setDisplayMode(mode: ViewerDisplayMode): void {
+    this.displayMode = mode;
+    this.scene.fog = mode === 'cinematic' ? new THREE.FogExp2('#090d13', 0.018) : null;
+    const gridMaterial = this.stageGrid.material as THREE.LineBasicMaterial;
+    gridMaterial.opacity = mode === 'cinematic' ? 0.42 : 0.62;
+    this.outlinePass.edgeStrength = mode === 'cinematic' ? 2.1 : 3.2;
+    this.outlinePass.edgeThickness = mode === 'cinematic' ? 1.15 : 1.55;
+    this.updatePostProcessingState();
+    this.updateLineVisuals();
+  }
+
+  getDisplayMode(): ViewerDisplayMode {
+    return this.displayMode;
+  }
+
+  getRenderQuality(): RenderQuality {
+    return this.renderQuality;
   }
 
   setMotionModel(model: ProductSemanticModel | null): void {
@@ -480,6 +606,8 @@ export class SceneViewer {
     this.selectionHelper = helper;
     this.selectedNodeId = nodeId;
     this.scene.add(helper);
+    this.outlinePass.selectedObjects = [object];
+    this.updatePostProcessingState();
     return true;
   }
 
@@ -519,6 +647,11 @@ export class SceneViewer {
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
     this.renderer.domElement.removeEventListener('pointerup', this.handlePointerUp);
     this.clearModel();
+    this.composer.dispose();
+    this.stageGround.geometry.dispose();
+    this.stageGround.material.dispose();
+    this.stageGrid.geometry.dispose();
+    (this.stageGrid.material as THREE.Material).dispose();
     this.renderer.dispose();
     this.environmentTarget?.dispose();
     this.environmentTarget = null;
@@ -643,6 +776,62 @@ export class SceneViewer {
     source.material = pickingMaterial;
   }
 
+  private applyRenderQuality(): void {
+    const settings = QUALITY_SETTINGS[this.renderQuality];
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, settings.pixelRatio);
+    this.renderer.setPixelRatio(pixelRatio);
+    this.composer.setPixelRatio(pixelRatio);
+    this.renderer.shadowMap.enabled = settings.shadowMapSize > 0;
+    this.keyLight.castShadow = settings.shadowMapSize > 0;
+    this.keyLight.shadow.mapSize.set(settings.shadowMapSize, settings.shadowMapSize);
+    this.renderer.shadowMap.needsUpdate = true;
+    this.ssaoPass.kernelRadius = this.renderQuality === 'high' ? 18 : 12;
+    this.ssaoPass.maxDistance = this.renderQuality === 'high' ? 0.16 : 0.1;
+    this.bloomPass.strength = this.renderQuality === 'high' ? 0.22 : 0.12;
+    this.updatePostProcessingState();
+    const container = this.renderer.domElement.parentElement;
+    if (container) this.resize(container);
+  }
+
+  private updatePostProcessingState(): void {
+    const cinematic = this.displayMode === 'cinematic';
+    const settings = QUALITY_SETTINGS[this.renderQuality];
+    this.ssaoPass.enabled = cinematic && settings.ssao;
+    this.bloomPass.enabled = cinematic && settings.bloom;
+    this.vignettePass.enabled = cinematic;
+    this.outlinePass.enabled = this.outlinePass.selectedObjects.length > 0;
+  }
+
+  private updateLineVisuals(): void {
+    const linewidth = this.displayMode === 'cinematic' ? CAD_EDGE_LINE_WIDTH : 2.15;
+    for (const root of [this.modelRoot, this.previewRoot]) {
+      root.traverse((object) => {
+        if (object instanceof LineSegments2) object.material.linewidth = linewidth;
+      });
+    }
+  }
+
+  private updateAdaptiveQuality(time: number): void {
+    if (this.qualityWindowStart === 0) {
+      this.qualityWindowStart = time;
+      return;
+    }
+    const delta = Math.min(Math.max(time - (this.qualityWindowStart + this.qualityElapsed), 0), 100);
+    this.qualityElapsed += delta;
+    this.qualityFrameCount += 1;
+    if (this.qualityElapsed < 1500 || this.qualityFrameCount < 30) return;
+    const averageFrameTime = this.qualityElapsed / this.qualityFrameCount;
+    const next = nextRenderQuality(this.renderQuality, averageFrameTime, this.qualityGoodWindows);
+    if (next.quality !== this.renderQuality) {
+      this.renderQuality = next.quality;
+      this.applyRenderQuality();
+    }
+    this.qualityGoodWindows = next.goodWindows;
+    this.qualityWindowStart = time;
+    this.qualityElapsed = 0;
+    this.qualityFrameCount = 0;
+  }
+
   private frame(root: THREE.Object3D = this.modelRoot): void {
     const box = new THREE.Box3().setFromObject(root);
     if (box.isEmpty()) return;
@@ -674,12 +863,21 @@ export class SceneViewer {
     this.shadowCatcher.position.set(center.x, center.y, box.min.z - Math.max(radius * 0.008, 0.02));
     this.shadowCatcher.scale.setScalar(Math.max(radius * 3.2, 1));
     this.shadowCatcher.visible = true;
+    const groundSize = Math.max(radius * 7.5, 4);
+    const groundHeight = box.min.z - Math.max(radius * 0.012, 0.025);
+    this.stageGround.position.set(center.x, center.y, groundHeight);
+    this.stageGround.scale.setScalar(groundSize / 2);
+    this.stageGround.visible = true;
+    this.stageGrid.position.set(center.x, center.y, groundHeight + 0.002);
+    this.stageGrid.scale.set(groundSize / 2, 1, groundSize / 2);
+    this.stageGrid.visible = true;
   }
 
   private resize(container: HTMLElement): void {
     const width = container.clientWidth;
     const height = Math.max(container.clientHeight, 1);
     this.renderer.setSize(width, height, false);
+    this.composer.setSize(width, height);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.modelRoot.traverse((object) => {
@@ -688,6 +886,7 @@ export class SceneViewer {
     this.previewRoot.traverse((object) => {
       if (object instanceof LineSegments2) object.material.resolution.set(width, height);
     });
+    this.outlinePass.resolution.set(width, height);
   }
 
   private clearModel(): void {
@@ -736,6 +935,8 @@ export class SceneViewer {
     this.motionPlaying = false;
     this.motionDriverId = null;
     this.motionLastTime = 0;
+    this.stageGround.visible = false;
+    this.stageGrid.visible = false;
   }
 
   private clearSelection(): void {
@@ -746,6 +947,8 @@ export class SceneViewer {
       this.selectionHelper = null;
     }
     this.selectedNodeId = null;
+    this.outlinePass.selectedObjects = [];
+    this.updatePostProcessingState();
   }
 
   private readonly handlePointerDown = (event: PointerEvent): void => {

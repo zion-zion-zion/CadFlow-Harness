@@ -23,7 +23,7 @@ export function isPreviewCurrent(params: {
 
 export class ViewerCoordinator {
   constructor(
-    private readonly elements: Pick<ShellElements, 'viewerLoading' | 'viewerEmpty' | 'viewerEmptyTitle' | 'viewerEmptyCopy' | 'viewerStatusText' | 'viewerStatusDot' | 'viewerTitle' | 'previewToggleControl' | 'previewToggle' | 'previewRetry' | 'previewDetails' | 'previewLog'>,
+    private readonly elements: Pick<ShellElements, 'viewerLoading' | 'viewerEmpty' | 'viewerEmptyTitle' | 'viewerEmptyCopy' | 'viewerStatusText' | 'viewerStatusDot' | 'viewerTitle' | 'viewerHudTitle' | 'viewerHudCopy' | 'previewToggleControl' | 'previewToggle' | 'previewRetry' | 'previewDetails' | 'previewLog'>,
     private readonly sceneViewer: SceneViewer,
     private readonly session: ProjectSession,
     private readonly productInspector: ProductInspector,
@@ -46,6 +46,8 @@ export class ViewerCoordinator {
     } else if (project.state === 'Failed') { this.elements.viewerEmptyTitle.textContent = project.scene_available ? 'Loading last validated result' : 'No Validated Result'; this.elements.viewerEmptyCopy.textContent = project.scene_available ? 'The latest turn failed; the previous validated CAD version is still available.' : 'This Project has not produced a validated result yet.'; }
     else if (project.state === 'Stopped') { this.elements.viewerEmptyTitle.textContent = project.scene_available ? 'Loading last validated result' : 'Run stopped'; this.elements.viewerEmptyCopy.textContent = project.scene_available ? 'The stopped turn did not replace the previous validated CAD version.' : 'This Project has no validated Scene Artifact.'; }
     else { this.elements.viewerEmptyTitle.textContent = 'Loading Validated Result'; this.elements.viewerEmptyCopy.textContent = 'Fetching this Project’s canonical Scene Artifact.'; }
+    this.elements.viewerHudTitle.textContent = this.elements.viewerEmptyTitle.textContent;
+    this.elements.viewerHudCopy.textContent = this.elements.viewerEmptyCopy.textContent;
   }
 
   renderChrome(): void {
@@ -53,13 +55,18 @@ export class ViewerCoordinator {
     this.elements.viewerTitle.textContent = running ? 'Live Preview' : project && ['Failed', 'Stopped'].includes(project.state) && project.scene_available ? 'Last Validated Result' : 'Validated Result';
     this.elements.previewToggleControl.hidden = !running; this.elements.previewRetry.hidden = !running || project.preview.state !== 'failed'; this.elements.previewToggle.checked = project?.preview.state !== 'paused'; this.elements.previewToggle.disabled = !running;
     const diagnostics = project ? [project.preview.error, project.preview.stderr, project.preview.stdout].filter(Boolean).join('\n\n') : ''; this.elements.previewDetails.hidden = diagnostics.length === 0; this.elements.previewLog.textContent = diagnostics;
-    if (!project) { this.elements.viewerStatusDot.className = 'status-dot'; this.elements.viewerStatusText.textContent = 'Waiting for a Project'; return; }
-    if (project.scene_available && project.state !== 'Running') { this.elements.viewerStatusDot.className = `status-dot${this.session.loadedSceneProjectId === project.project_id ? ' ready' : ''}`; this.elements.viewerStatusText.textContent = this.session.loadedSceneProjectId === project.project_id ? `Validated Artifact${project.artifact_version ? ` · v${String(project.artifact_version).padStart(4, '0')}` : ''}` : 'Loading Validated Result'; return; }
+    if (!project) { this.elements.viewerStatusDot.className = 'status-dot'; this.elements.viewerStatusText.textContent = 'Waiting for a Project'; this.syncHud('Awaiting a project selection', 'Select a project to inspect its accepted CAD scene.'); return; }
+    if (project.scene_available && project.state !== 'Running') { this.elements.viewerStatusDot.className = `status-dot${this.session.loadedSceneProjectId === project.project_id ? ' ready' : ''}`; this.elements.viewerStatusText.textContent = this.session.loadedSceneProjectId === project.project_id ? `Validated Artifact${project.artifact_version ? ` · v${String(project.artifact_version).padStart(4, '0')}` : ''}` : 'Loading Validated Result'; this.syncHud(this.elements.viewerTitle.textContent, this.elements.viewerStatusText.textContent); return; }
     this.elements.viewerStatusDot.className = 'status-dot';
-    if (project.state === 'Failed' || project.state === 'Stopped') { this.elements.viewerStatusText.textContent = project.preview.artifact_available ? 'Last preview · unvalidated' : 'No live preview available'; this.elements.viewerStatusDot.classList.toggle('error', project.state === 'Failed'); return; }
-    if (project.state === 'Draft') { this.elements.viewerStatusText.textContent = 'Live preview starts with the Agent Run'; return; }
+    if (project.state === 'Failed' || project.state === 'Stopped') { this.elements.viewerStatusText.textContent = project.preview.artifact_available ? 'Last preview · unvalidated' : 'No live preview available'; this.elements.viewerStatusDot.classList.toggle('error', project.state === 'Failed'); this.syncHud(this.elements.viewerTitle.textContent, this.elements.viewerStatusText.textContent); return; }
+    if (project.state === 'Draft') { this.elements.viewerStatusText.textContent = 'Live preview starts with the Agent Run'; this.syncHud(this.elements.viewerTitle.textContent, this.elements.viewerStatusText.textContent); return; }
     const labels: Record<LivePreviewState, string> = { waiting: 'Waiting for model.py', stale: 'Source changed · preview stale', building: 'Building live preview', current: 'Live preview current · unvalidated', failed: project.preview.artifact_available ? 'Preview failed · last result retained' : 'Preview failed', paused: 'Live preview paused' };
-    this.elements.viewerStatusText.textContent = labels[project.preview.state]; this.elements.viewerStatusDot.classList.toggle('ready', project.preview.state === 'current'); this.elements.viewerStatusDot.classList.toggle('building', project.preview.state === 'building'); this.elements.viewerStatusDot.classList.toggle('error', project.preview.state === 'failed');
+    this.elements.viewerStatusText.textContent = labels[project.preview.state]; this.elements.viewerStatusDot.classList.toggle('ready', project.preview.state === 'current'); this.elements.viewerStatusDot.classList.toggle('building', project.preview.state === 'building'); this.elements.viewerStatusDot.classList.toggle('error', project.preview.state === 'failed'); this.syncHud(this.elements.viewerTitle.textContent, this.elements.viewerStatusText.textContent);
+  }
+
+  private syncHud(title: string, copy: string): void {
+    this.elements.viewerHudTitle.textContent = title;
+    this.elements.viewerHudCopy.textContent = copy;
   }
 
   async loadScene(project: Project, version: number): Promise<void> {

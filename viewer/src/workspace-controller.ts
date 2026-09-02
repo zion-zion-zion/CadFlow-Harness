@@ -27,6 +27,8 @@ export class WorkspaceController {
     this.sceneViewer = new SceneViewer(shell.viewerElement, (message, ready) => {
       shell.viewerStatusText.textContent = message;
       shell.viewerStatusDot.classList.toggle('ready', ready);
+      shell.viewerHudTitle.textContent = message;
+      shell.viewerHudCopy.textContent = ready ? 'Canonical scene is ready for inspection.' : 'Preparing the scene workspace.';
     }, (nodeId) => this.productInspector?.selectNodeBySceneId(nodeId));
     this.productInspector = new ProductInspector(shell, this.sceneViewer, this.session, currentProject, () => this.session.projectId);
     this.sceneViewer.setMotionChangeHandler(() => this.productInspector.updateMotionControls());
