@@ -16,7 +16,7 @@
 <p align="center">
   <a href="https://www.python.org/downloads/release/python-3120/"><img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white"></a>
   <a href="https://nodejs.org/"><img alt="Node.js 22.19+" src="https://img.shields.io/badge/Node.js-22.19+-5FA04E?logo=nodedotjs&logoColor=white"></a>
-  <a href="LICENSE"><img alt="License AGPL-3.0" src="https://img.shields.io/badge/License-AGPL--3.0-7C3AED"></a>
+  <a href="LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/License-MIT-22C55E"></a>
   <img alt="Platform Linux x86-64" src="https://img.shields.io/badge/Platform-Linux%20x86--64-FCC624?logo=linux&logoColor=black">
   <img alt="Status Alpha" src="https://img.shields.io/badge/Status-Alpha-F59E0B">
 </p>
@@ -55,10 +55,6 @@ and tests; it does not ship a specialized model.
 ## Documentation
 
 - [Live documentation (Chinese default)](http://119.28.82.252/cadflow-harness/)
-- [English documentation site](https://zion-zion-zion.github.io/CadFlowAgent/en/)
-- [简体中文文档站](https://zion-zion-zion.github.io/CadFlowAgent/zh/)
-- [English documentation source](docs/en/index.md)
-- [中文文档源](docs/zh/index.md)
 
 <a id="core-design"></a>
 
@@ -240,4 +236,4 @@ Live provider tests are opt-in with `-m live_agent`.
 
 ## License
 
-CadFlow Harness is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+CadFlow Harness is licensed under the [MIT License](LICENSE).
