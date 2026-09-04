@@ -4,7 +4,7 @@
 
 ## 环境要求
 
-- Linux x86_64（glibc 2.31 或更高版本）+ Python 3.12，或 macOS 26 arm64 + Python 3.13。
+- Linux x86_64（glibc 2.31 或更高版本）+ Python 3.12，或 macOS 12 arm64 + Python 3.13。
 - `setup.sh` 需要安装 `uv` 或 Node.js 时，系统应有 `curl` 或 `wget`。
 - Node.js 20.19+、22.12+ 或更高主版本，以及 `npm`。
 - OpenAI 兼容模型端点、模型标识符和 API Key。
@@ -55,7 +55,7 @@ API 流程见[创建第一个 Project](first-project.md)，不启动模型服务
 | 现象 | 检查 |
 | --- | --- |
 | 找不到 `uv` 或 Node.js | 运行 `./setup.sh`，或安装工具后运行 `./setup.sh --check`。 |
-| 平台或 Python 不受支持 | 使用 Linux x86_64 + Python 3.12，或 macOS 26 arm64 + Python 3.13。 |
+| 平台或 Python 不受支持 | 使用 Linux x86_64 + Python 3.12，或 macOS 12 arm64 + Python 3.13。 |
 | 端口已被占用 | 修改对应的 `TEXT_TO_CAD_*_PORT` 后重试。 |
 | 模型启动前 Run 失败 | 确认 `.env` 中有 `OPENAI_API_KEY` 和 `OPENAI_MODEL_ID`，查看 Viewer 错误与后端日志。 |
 | 没有预览 | 预览可能失败或延迟。等待最终验证，或直接查看已接受 Scene，并检查预览诊断面板。 |

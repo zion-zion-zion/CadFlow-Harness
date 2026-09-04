@@ -110,7 +110,7 @@ Deep Agents Harness 与其他运行组件共用 Project 工作区和 Artifact �
 
 ### 环境要求
 
-- Linux x86_64（glibc 2.31 或更高版本）+ Python 3.12，或 macOS 26 arm64 + Python 3.13
+- Linux x86_64（glibc 2.31 或更高版本）+ Python 3.12，或 macOS 12 arm64 + Python 3.13
 - 用于安装缺失工具的 `curl` 或 `wget`
 - OpenAI 兼容的模型端点和 API Key
 

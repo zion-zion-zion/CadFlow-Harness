@@ -126,7 +126,7 @@ table describe planned work.
 
 ### Requirements
 
-- Linux x86_64 with glibc 2.31 or newer and Python 3.12, or macOS 26 arm64 with Python 3.13
+- Linux x86_64 with glibc 2.31 or newer and Python 3.12, or macOS 12 arm64 with Python 3.13
 - `curl` or `wget` for installing missing tools
 - An OpenAI-compatible model endpoint and API key
 

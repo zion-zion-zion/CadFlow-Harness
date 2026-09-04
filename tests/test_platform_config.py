@@ -96,7 +96,7 @@ def _run_setup_check(
     architecture: str,
     node_version: str = "22.12.0",
     glibc_version: str = "2.31",
-    macos_version: str = "26.0",
+    macos_version: str = "12.0",
 ) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(parents=True)
@@ -173,13 +173,13 @@ def test_setup_script_rejects_unsupported_system_versions(tmp_path: Path) -> Non
         tmp_path / "macos",
         platform="Darwin",
         architecture="arm64",
-        macos_version="25.9",
+        macos_version="11.9",
     )
 
     assert linux.returncode == 1
     assert "glibc 2.30 is unsupported" in linux.stderr
     assert macos.returncode == 1
-    assert "macOS 25.9 is unsupported" in macos.stderr
+    assert "macOS 11.9 is unsupported" in macos.stderr
 
 
 def test_setup_script_rejects_incompatible_node_version(tmp_path: Path) -> None:

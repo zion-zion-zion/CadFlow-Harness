@@ -4,7 +4,7 @@ This page starts the local application from a clean checkout.
 
 ## Requirements
 
-- Linux x86_64 with glibc 2.31 or newer and Python 3.12, or macOS 26 arm64 with Python 3.13.
+- Linux x86_64 with glibc 2.31 or newer and Python 3.12, or macOS 12 arm64 with Python 3.13.
 - `curl` or `wget` if `setup.sh` needs to install `uv` or Node.js.
 - Node.js 20.19+, 22.12+, or a newer major version, plus `npm`.
 - An OpenAI-compatible model endpoint, model identifier, and API key.
@@ -55,7 +55,7 @@ For the API flow, see [Create your first Project](first-project.md). For a build
 | Symptom | Check |
 | --- | --- |
 | `uv` or Node.js is missing | Run `./setup.sh`, or install the tools and then run `./setup.sh --check`. |
-| Unsupported platform or Python | Use Linux x86_64 + Python 3.12 or macOS 26 arm64 + Python 3.13. |
+| Unsupported platform or Python | Use Linux x86_64 + Python 3.12 or macOS 12 arm64 + Python 3.13. |
 | Port already in use | Change the corresponding `TEXT_TO_CAD_*_PORT` variable and retry. |
 | Run fails before the model starts | Confirm `OPENAI_API_KEY` and `OPENAI_MODEL_ID` in `.env`; inspect the Viewer error and backend log. |
 | Preview is unavailable | The preview may fail or arrive late. Wait for validation or use the accepted Scene, then inspect the preview diagnostics panel. |

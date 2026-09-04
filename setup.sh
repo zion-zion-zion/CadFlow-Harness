@@ -5,7 +5,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MIN_GLIBC_MAJOR=2
 MIN_GLIBC_MINOR=31
-MIN_MACOS_MAJOR=26
+MIN_MACOS_MAJOR=12
 PROJECT_NODE_VERSION=22
 
 usage() {
