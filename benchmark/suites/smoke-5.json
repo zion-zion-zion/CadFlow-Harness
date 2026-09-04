@@ -1,0 +1,68 @@
+{
+  "schema_version": "cadflow-benchmark-suite/v1",
+  "suite_id": "smoke-5",
+  "description": "Five fixed single-part detailed CADTestBench samples.",
+  "dataset": {
+    "name": "dimitrismallis/CADTestBench",
+    "revision": "2b9a4a972d142d2bc634d072e9d4485f171ced06",
+    "partition": "detailed",
+    "license": "MIT",
+    "samples_url": "https://huggingface.co/datasets/dimitrismallis/CADTestBench/resolve/2b9a4a972d142d2bc634d072e9d4485f171ced06/samples/detailed.parquet?download=true",
+    "cadtests_url": "https://huggingface.co/datasets/dimitrismallis/CADTestBench/resolve/2b9a4a972d142d2bc634d072e9d4485f171ced06/cadtests/detailed.parquet?download=true",
+    "upstream_reference_repo": "Kamel773/CAD_Code_Generation",
+    "upstream_reference_revision": "33dcecd6087ff7b8a4454b1ba4d56504a6364399"
+  },
+  "normalization": {
+    "version": "cadflow-product-prompt/v1",
+    "unit": "mm",
+    "scale_factor": 1000.0,
+    "rule": "Translate implementation-oriented source wording into a fixed final-product description; multiply every numeric dimension by the suite scale factor."
+  },
+  "samples": [
+    {
+      "sample_id": "00000633",
+      "product_prompt_sha256": "76c407ba80a1d0cb073e5e07f3549242aa981c1b63701da1d9e247de3874fabe",
+      "source_prompt_sha256": "aed2ad067048b5f1bc9cd5eaf87714f7af37e5f7533a006d33b42767a370db32",
+      "source_prompt": "Write Python code using CADQuery to create a rectangular block with dimensions 0.75 units in length, 0.1875 units in width, and 0.00391 units in height. Additionally, include a circular hole in the center of the rectangle with a diameter of 0.12512 units.",
+      "product_prompt": "Create one continuous rectangular block measuring 750 mm in length, 187.5 mm in width, and 3.91 mm in height. It has one circular through-hole with a diameter of 125.12 mm centered in the block. The final result must be one valid solid.",
+      "cadtest_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+      "reference_path": "CADPrompt/00000633/Python_Code.py"
+    },
+    {
+      "sample_id": "00001490",
+      "product_prompt_sha256": "ebf04dbbc61d0de0eff94f10b428671900955c5a5324abd46471577a3e83a6fa",
+      "source_prompt_sha256": "1bb17a4d176617c0c7863cc08c01146d99d634f9ea9be3dd2c36b56d246c84d5",
+      "source_prompt": "Write Python code using CADQuery to create a cylinder with a height of 0.48649 units and a radius of 0.75 units. Include a central circular cutout with a diameter of 0.243243243243244 units that extends through the entire height of the cylinder.",
+      "product_prompt": "Create one continuous annular cylindrical part with an outer diameter of 1500 mm and a height of 486.49 mm. A centered circular hole of diameter 243.243243243244 mm passes completely through the part along its axis. The final result must be one valid solid.",
+      "cadtest_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+      "reference_path": "CADPrompt/00001490/Python_Code.py"
+    },
+    {
+      "sample_id": "00004154",
+      "product_prompt_sha256": "71000ff98005bd0600e2859994c3b25f8d79714a839b690265b6c68a81ab18e9",
+      "source_prompt_sha256": "764ce795d3d84543bf9421825a1154274cb38e9e7da6d5de44c4356cb9f6c7f2",
+      "source_prompt": "Write Python code using CADQuery to create a 3D box with a length of 0.70588 units, a width of 0.40809 units, and a height of 0.22059 units. The box should have its vertical edges rounded with a fillet radius of 0.08 units. After creating the box, translate it so that its base is centered at the origin.",
+      "product_prompt": "Create one continuous box measuring 705.88 mm in length, 408.09 mm in width, and 220.59 mm in height. Round each of the four vertical outer edges with a radius of 80 mm. Center the base on the origin. The final result must be one valid solid.",
+      "cadtest_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+      "reference_path": "CADPrompt/00004154/Python_Code.py"
+    },
+    {
+      "sample_id": "00006578",
+      "product_prompt_sha256": "3ec07f7e6bc39646e6125dc8272e38fca6181054f43005d8e489fcee3a752056",
+      "source_prompt_sha256": "4b96801c77f365523819591d8757534c04ddb98b33bb02581d6fe64f6c3de295",
+      "source_prompt": "Write Python code using CADQuery to create a rectangular prism with dimensions 1.5 units in length, 1.02857 units in width, and 0.17143 units in height. Then, create four small holes within the top face of the rectangle, each one positioned close to a different corner. The holes should have a diameter of 0.095635 units. Ensure that the holes are inset from the edges by 0.263507 units along the length and 0.219429 units along the width.",
+      "product_prompt": "Create one continuous rectangular prism measuring 1500 mm in length, 1028.57 mm in width, and 171.43 mm in height. Cut four circular through-holes, each 95.635 mm in diameter, arranged near the four corners. Hole centers are inset 263.507 mm from the lengthwise edges and 219.429 mm from the widthwise edges. The final result must be one valid solid.",
+      "cadtest_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+      "reference_path": "CADPrompt/00006578/Python_Code.py"
+    },
+    {
+      "sample_id": "00520150",
+      "product_prompt_sha256": "451cb514fc05f17148edc47db9f72bee1c321f3cc0c26a84b731da190fff9eb4",
+      "source_prompt_sha256": "c9aac9f1904c5c58220b23c254587a21b2a39b6fcde03477020b19ee49ca6ac1",
+      "source_prompt": "Write Python code using CADQuery to create an \"L\" shaped object with a length of 0.75 units, a width of 0.75 units, and a height of 0.1875 units, and then extrude it.",
+      "product_prompt": "Create one continuous rectilinear L-shaped prism with an overall length of 750 mm, an overall width of 750 mm, and a height of 187.5 mm. The final result must be one valid solid with only planar faces and straight edges.",
+      "cadtest_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+      "reference_path": "CADPrompt/00520150/Python_Code.py"
+    }
+  ]
+}

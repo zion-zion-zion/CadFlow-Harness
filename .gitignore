@@ -37,3 +37,7 @@ site/
 design-docs/
 
 **/.vite/
+
+# Benchmark caches and immutable run records
+benchmark/.cache/
+benchmark/runs/

@@ -61,6 +61,7 @@ and tests; it does not ship a specialized model.
 ## Documentation
 
 - [Live documentation (Chinese default)](http://119.28.82.252/cadflow-harness/)
+- [CADTestBench smoke benchmark](benchmark/README.md)
 
 <a id="core-design"></a>
 
@@ -96,7 +97,7 @@ rewriting the executor, checks, run history, or Viewer.
 | Area | What exists | Next work |
 | --- | --- | --- |
 | Agent runtime | Write, run, inspect, and repair CadFlow programs in the local workspace. | Available now |
-| Dataset and evaluation | A small reconstruction-record example. | Scale collection and evaluation |
+| Dataset and evaluation | Reproducible five-sample CADTestBench smoke benchmark. | Scale collection and evaluation |
 | CAD post-training | No training pipeline in this repository. | Research and prototype |
 
 The runtime is the part you can use today. The dataset and training items in the
@@ -161,6 +162,19 @@ OPENAI_API_KEY=<api-key>
 architecture. Open [http://localhost:5678](http://localhost:5678) to create a
 Project, submit a task, watch its progress, and inspect the final result. The
 backend API listens on `http://localhost:8765`.
+
+### Run the benchmark
+
+With a real OpenAI-compatible model configured in `.env`, run the fixed
+CADTestBench smoke suite:
+
+~~~bash
+cd benchmark
+./run.sh --suite smoke-5
+~~~
+
+See [benchmark/README.md](benchmark/README.md) for the dataset revision,
+evaluation contract, reproducibility details, and result metrics.
 
 ### Runtime configuration
 

@@ -51,6 +51,7 @@ CadFlow Harness 是一个在本机运行参数化 CAD Agent 的工具。模型�
 ## 文档
 
 - [在线文档（默认中文）](http://119.28.82.252/cadflow-harness/)
+- [CADTestBench smoke benchmark](benchmark/README.md)
 - [简体中文文档站](https://zion-zion-zion.github.io/CadFlowAgent/zh/)
 - [English documentation site](https://zion-zion-zion.github.io/CadFlowAgent/en/)
 - [中文文档源](docs/zh/index.md)
@@ -83,7 +84,7 @@ Deep Agents Harness 与其他运行组件共用 Project 工作区和 Artifact �
 | 范围 | 当前已有 | 后续工作 |
 | --- | --- | --- |
 | Agent 运行时 | 在本地工作区编写、运行、检查和修复 CadFlow 程序。 | 当前可用 |
-| 数据集与评测 | 一个小型重建记录示例。 | 扩大收集范围并补充评测 |
+| 数据集与评测 | 可复现的五样本 CADTestBench smoke benchmark。 | 扩大收集范围并补充评测 |
 | CAD 后训练 | 仓库中没有训练流水线。 | 研究和原型验证 |
 
 表格中的第一项是现在可以使用的功能，后两项属于计划工作。
@@ -138,6 +139,18 @@ OPENAI_API_KEY=<api-key>
 ~~~
 
 `run.sh` 会根据操作系统和架构选择 Python 解释器。打开 [http://localhost:5678](http://localhost:5678)，创建 Project、提交任务、查看进度和最终结果。后端 API 位于 `http://localhost:8765`。
+
+### 运行 benchmark
+
+在 `.env` 中配置真实的 OpenAI 兼容模型后，运行固定的 CADTestBench smoke 套件：
+
+~~~bash
+cd benchmark
+./run.sh --suite smoke-5
+~~~
+
+数据集 revision、评测契约、复现方式和结果指标见
+[benchmark/README.md](benchmark/README.md)。
 
 ### 运行时配置
 
