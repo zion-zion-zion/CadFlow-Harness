@@ -5,6 +5,7 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
+from PIL import Image
 
 from backend.agent_logging import ConversationLog
 from backend.cad_executor import CADExecutor, ExecutionResult
@@ -75,6 +76,73 @@ def test_validate_model_generates_hash_bound_review_evidence(tmp_path: Path) -> 
     assert (manifest_path.parent / manifest["single_render"]["path"]).is_file()
     assert (manifest_path.parent / manifest["contact_sheet"]["path"]).is_file()
     assert len(manifest["views"]) == 8
+
+
+def test_assembly_review_evidence_preserves_part_material_colors(
+    tmp_path: Path,
+) -> None:
+    scaffold = create_model_source(tmp_path)
+    scaffold.model_path.write_text(
+        """import cadflow as cad
+
+PRODUCT_SPEC = {
+    "assumptions": [],
+    "envelope": {"max_size_mm": [25.0, 12.0, 12.0]},
+}
+
+def colored_part(part_id, color):
+    part = cad.make_part_rpart(
+        part_id=part_id,
+        body=cad.make_box_rsolid(width=10.0, height=10.0, depth=10.0),
+    )
+    material = cad.make_material_rmaterial(
+        material_id=f"{part_id}_material",
+        color=color,
+    )
+    return cad.assign_material_rpart(part=part, material=material)
+
+def build_model(model: cad.Model):
+    assembly = cad.make_assembly_rassembly(assembly_id="colored_boxes")
+    assembly = cad.add_component_rassembly(
+        assembly=assembly,
+        item=colored_part("red_box", (1.0, 0.0, 0.0)),
+        component_id="red_box",
+        placement=cad.identity_placement_rplacement(),
+    )
+    return cad.add_component_rassembly(
+        assembly=assembly,
+        item=colored_part("blue_box", (0.0, 0.0, 1.0)),
+        component_id="blue_box",
+        placement=cad.make_placement_rplacement(origin=(12.0, 0.0, 0.0)),
+    )
+""",
+        encoding="utf-8",
+    )
+
+    result = CADExecutor().execute(tmp_path, timeout_seconds=30.0)
+
+    assert result.status == "succeeded"
+    assert result.review_evidence_error is None
+    manifest_path = tmp_path / result.review_manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["appearance"]["render_mode"] == "assembly_materials"
+    assert manifest["appearance"]["colored_component_count"] == 2
+    assert [
+        component["base_color"]
+        for component in manifest["appearance"]["components"]
+    ] == [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+
+    image_path = manifest_path.parent / manifest["single_render"]["path"]
+    with Image.open(image_path) as source_image:
+        pixels = tuple(source_image.convert("RGB").get_flattened_data())
+    assert any(
+        red > 100 and red > green * 1.5 and red > blue * 1.5
+        for red, green, blue in pixels
+    )
+    assert any(
+        blue > 100 and blue > red * 1.5 and blue > green * 1.5
+        for red, green, blue in pixels
+    )
 
 
 def test_review_passes_with_independent_structured_reviewer(tmp_path: Path) -> None:

@@ -42,7 +42,7 @@ def test_cadflow_wheel_matches_each_supported_platform() -> None:
                 "platform_machine": "x86_64",
                 "python_version": "3.12",
             },
-            "cadflow-0.1.0-cp312-cp312-linux_x86_64.whl",
+            "cadflow-0.2.0-cp312-cp312-linux_x86_64.whl",
         ),
         (
             {

@@ -6,7 +6,7 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "cadflow==0.1.0",
+    "cadflow>=0.1.0,<0.3",
     "deepagents==0.7.5",
     "fastapi>=0.115,<1",
     "langchain-openai>=1.0,<2",
@@ -23,7 +23,7 @@ environments = [
 
 [tool.uv.sources]
 cadflow = [
-    { path = "vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64' and python_version == '3.12'" },
+    { path = "vendor/cadflow-0.2.0-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64' and python_version == '3.12'" },
     { path = "vendor/cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl", marker = "sys_platform == 'darwin' and platform_machine == 'arm64' and python_version == '3.13'" },
 ]
 

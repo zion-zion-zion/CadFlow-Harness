@@ -6,7 +6,7 @@ import { createServer } from 'vite';
 const viewerRoot = fileURLToPath(new URL('.', import.meta.url));
 const server = await createServer({ root: viewerRoot, server: { middlewareMode: true }, logLevel: 'silent' });
 const { ProjectSession } = await server.ssrLoadModule('/src/project-session.ts');
-const { isPreviewCurrent } = await server.ssrLoadModule('/src/viewer-coordinator.ts');
+const { isPreviewCurrent, shouldRequestLivePreview } = await server.ssrLoadModule('/src/viewer-coordinator.ts');
 
 class FakeEventSource {
   static instances = [];
@@ -56,6 +56,17 @@ test('preview revisions are accepted only for the current project and newest rev
   assert.equal(isPreviewCurrent({ ...base, previewRevision: 8 }), true);
   assert.equal(isPreviewCurrent({ ...base, selectedProjectId: 'other', previewRevision: 8 }), false);
   assert.equal(isPreviewCurrent({ ...base, projectState: 'Succeeded', previewRevision: 8 }), false);
+});
+
+test('terminal accepted scenes do not keep downloading stale live previews', () => {
+  const preview = { artifact_available: true, revision: 3 };
+
+  assert.equal(shouldRequestLivePreview({ state: 'Succeeded', preview }), false);
+  assert.equal(shouldRequestLivePreview({ state: 'Draft', preview }), false);
+  assert.equal(shouldRequestLivePreview({ state: 'Running', preview }), true);
+  assert.equal(shouldRequestLivePreview({ state: 'Failed', preview }), true);
+  assert.equal(shouldRequestLivePreview({ state: 'Stopped', preview }), true);
+  assert.equal(shouldRequestLivePreview({ state: 'Running', preview: { artifact_available: false, revision: 3 } }), false);
 });
 
 test('resetting and disposing a session clears every loaded artifact identity', () => {

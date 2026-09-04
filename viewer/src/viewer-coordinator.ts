@@ -21,6 +21,13 @@ export function isPreviewCurrent(params: {
     && params.previewRevision === params.latestPreviewRevision;
 }
 
+export function shouldRequestLivePreview(project: Pick<Project, 'state' | 'preview'>): boolean {
+  return project.state !== 'Draft'
+    && project.state !== 'Succeeded'
+    && project.preview.artifact_available
+    && project.preview.revision >= 1;
+}
+
 export class ViewerCoordinator {
   constructor(
     private readonly elements: Pick<ShellElements, 'viewerLoading' | 'viewerEmpty' | 'viewerEmptyTitle' | 'viewerEmptyCopy' | 'viewerStatusText' | 'viewerStatusDot' | 'viewerTitle' | 'viewerHudTitle' | 'viewerHudCopy' | 'previewToggleControl' | 'previewToggle' | 'previewRetry' | 'previewDetails' | 'previewLog'>,
@@ -93,7 +100,7 @@ export class ViewerCoordinator {
   }
 
   async loadLivePreview(project: Project, version: number): Promise<void> {
-    if (!project.preview.artifact_available || project.preview.revision < 1 || !this.session.isCurrent(project.project_id, version)) return;
+    if (!shouldRequestLivePreview(project) || !this.session.isCurrent(project.project_id, version)) return;
     const revision = project.preview.revision;
     if (this.session.previewProjectId === project.project_id && this.session.loadedPreviewRevision === revision) return;
     const controller = this.session.beginPreviewRequest(); this.session.latestPreviewRevision = revision;
