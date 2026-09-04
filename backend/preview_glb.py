@@ -6,7 +6,9 @@ import copy
 import json
 import math
 import struct
+import tempfile
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import cadflow as cad
@@ -21,11 +23,52 @@ IDENTITY_MATRIX: Matrix = (
 )
 
 
-def assembly_preview_glb(assembly: cad.Assembly, *, deflection: float) -> bytes:
+def assembly_preview_glb(
+    assembly: cad.Assembly,
+    *,
+    deflection: float,
+    presentation: Mapping[str, Any] | None = None,
+) -> bytes:
     package = cad.compile_scene(
         scene_id="live-preview",
         roots=(cad.SceneRoot(root_id="main", value=assembly),),
         options=cad.SceneCompileOptions(linear_tolerance=deflection),
+    )
+    if presentation is not None:
+        preview_presentation = dict(presentation)
+        preview_presentation["source_scene_id"] = "live-preview"
+        package = cad.apply_presentation(
+            package=package,
+            presentation=preview_presentation,
+            embed_presentation=False,
+        )
+    return _compiled_scene_glb(package)
+
+
+def shape_preview_glb(
+    shape: cad.Shape,
+    *,
+    deflection: float,
+    presentation: Mapping[str, Any] | None = None,
+) -> bytes:
+    if presentation is None:
+        return shape.preview_glb(deflection=deflection)
+
+    with tempfile.TemporaryDirectory(prefix="cadflow-shape-preview-") as directory:
+        step_path = Path(directory) / "model.step"
+        shape.export_step(str(step_path))
+        scene_root = cad.Solid(cad.inspection.brep.load_step_rshape(step_path))
+        package = cad.compile_scene(
+            scene_id="live-preview",
+            roots=(cad.SceneRoot(root_id="main", value=scene_root),),
+            options=cad.SceneCompileOptions(linear_tolerance=deflection),
+        )
+    preview_presentation = dict(presentation)
+    preview_presentation["source_scene_id"] = "live-preview"
+    package = cad.apply_presentation(
+        package=package,
+        presentation=preview_presentation,
+        embed_presentation=False,
     )
     return _compiled_scene_glb(package)
 
@@ -493,4 +536,8 @@ def _write_glb(document: Mapping[str, Any], binary: bytes) -> bytes:
     )
 
 
-__all__ = ["assembly_preview_glb", "validate_assembly_preview_glb"]
+__all__ = [
+    "assembly_preview_glb",
+    "shape_preview_glb",
+    "validate_assembly_preview_glb",
+]

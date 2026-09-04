@@ -15,6 +15,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import quote
 
 import cadflow as cad
 
@@ -30,6 +31,7 @@ PRODUCT_MANIFEST_NAME = "product.json"
 PRODUCT_SCHEMA_VERSION = "cadflow-product/v1"
 SCENE_LINEAR_TOLERANCE_MM = 0.5
 SCENE_ANGULAR_TOLERANCE_RADIANS = 0.2
+DEFAULT_REVIEW_COMPONENT_COLOR = (0.55, 0.64, 0.73)
 _ASSEMBLY_EARLY_GATE_CHECK_IDS = frozenset(
     {
         "strict_constraint_solve",
@@ -153,6 +155,101 @@ def _assembly_inventory(root: Any) -> dict[str, Any]:
     }
 
 
+def _assembly_leaf_appearances(root: Any) -> list[dict[str, Any]]:
+    appearances: list[dict[str, Any]] = []
+
+    def visit(assembly: Any, path: tuple[str, ...]) -> None:
+        for component in assembly.components:
+            component_path = path + (component.component_id,)
+            if isinstance(component.item, cad.Part):
+                material = component.item.material
+                appearances.append(
+                    {
+                        "component_path": "/".join(component_path),
+                        "scene_node_id": "instance/main"
+                        + "".join(
+                            f"/{quote(item, safe='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~')}"
+                            for item in component_path[1:]
+                        ),
+                        "part_id": component.item.part_id,
+                        "material_id": (
+                            material.material_id if material is not None else None
+                        ),
+                        "base_color": (
+                            [float(value) for value in material.color]
+                            if material is not None and material.color is not None
+                            else None
+                        ),
+                    }
+                )
+            else:
+                visit(component.item, component_path)
+
+    visit(root, (root.assembly_id,))
+    return appearances
+
+
+def _review_appearances(
+    *,
+    final_result: Any,
+    result_kind: str,
+    presentation: Mapping[str, Any] | None,
+) -> list[dict[str, Any]] | None:
+    if result_kind == "assembly":
+        appearances = _assembly_leaf_appearances(final_result)
+    elif presentation is not None:
+        appearances = [
+            {
+                "component_path": "model",
+                "scene_node_id": "instance/main",
+                "part_id": "model",
+                "material_id": None,
+                "base_color": None,
+            }
+        ]
+    else:
+        return None
+
+    if presentation is None:
+        return appearances
+
+    named = {
+        item.get("name"): item
+        for item in presentation.get("appearances", ())
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+    }
+    by_node = {
+        item["scene_node_id"]: item
+        for item in appearances
+        if isinstance(item.get("scene_node_id"), str)
+    }
+    for override in presentation.get("node_overrides", ()):
+        if not isinstance(override, Mapping):
+            continue
+        target = by_node.get(override.get("node_id"))
+        authored = named.get(override.get("appearance_name"))
+        if target is None or authored is None:
+            continue
+        target.update(
+            {
+                "base_color": [float(value) for value in authored["base_color"][:3]],
+                "presentation_appearance": {
+                    key: authored[key]
+                    for key in (
+                        "name",
+                        "base_color",
+                        "metallic",
+                        "roughness",
+                        "alpha_mode",
+                        "double_sided",
+                        "edge_color",
+                    )
+                },
+            }
+        )
+    return appearances
+
+
 def _safe_part_filename(part_id: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", part_id).strip("-._") or "part"
     suffix = hashlib.sha256(part_id.encode("utf-8")).hexdigest()[:10]
@@ -222,6 +319,25 @@ def _product_spec(namespace: Mapping[str, Any]) -> tuple[dict[str, Any], list[st
     else:
         normalized["assumptions"] = [item.strip() for item in assumptions]
     return normalized, list(dict.fromkeys(failures))
+
+
+def _scene_presentation(namespace: Mapping[str, Any]) -> dict[str, Any] | None:
+    value = namespace.get("PRESENTATION")
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise TypeError("PRESENTATION must be a mapping when provided")
+    try:
+        encoded = json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as error:
+        raise TypeError("PRESENTATION must contain JSON-compatible values") from error
+    return json.loads(encoded)
 
 
 def _base_validation_report(
@@ -641,6 +757,7 @@ def _export_product_bundle(
     result_kind: str,
     inventory: Mapping[str, Any],
     spec: Mapping[str, Any],
+    presentation: Mapping[str, Any] | None,
     validation_report: Mapping[str, Any],
     sources: list[tuple[str, bytes]],
 ) -> tuple[Path, dict[str, Any]]:
@@ -668,6 +785,12 @@ def _export_product_bundle(
             angular_tolerance=SCENE_ANGULAR_TOLERANCE_RADIANS,
         ),
     )
+    if presentation is not None:
+        package = cad.apply_presentation(
+            package=package,
+            presentation=presentation,
+            embed_presentation=True,
+        )
     cad.export_scene(package=package, path=scene_path)
 
     _report_phase("unique_part_step_export")
@@ -813,6 +936,7 @@ def _render_review_evidence(
     solid_volume: float,
     review_model_sha256: str,
     review_source_files: list[dict[str, str]],
+    assembly_appearances: list[dict[str, Any]] | None = None,
 ) -> tuple[str | None, str | None, str | None]:
     try:
         from cadflow.inspect import brep
@@ -828,13 +952,6 @@ def _render_review_evidence(
             "background_color": (0.965, 0.972, 0.980),
             "show_brep_edges": True,
         }
-        brep.render_step_views_rpath(
-            step_path,
-            single_render_path,
-            views=((35.0, -45.0, "isometric"),),
-            title="CAD Review - Isometric",
-            **common_render_options,
-        )
         canonical_views = (
             (0.0, 0.0, "front"),
             (0.0, 180.0, "back"),
@@ -845,13 +962,82 @@ def _render_review_evidence(
             (35.0, -45.0, "isometric"),
             (35.0, 135.0, "isometric-rear"),
         )
-        brep.render_step_views_rpath(
-            step_path,
-            contact_sheet_path,
-            views=canonical_views,
-            title="CAD Review - Eight Views",
-            **common_render_options,
+        colored_component_count = sum(
+            appearance.get("base_color") is not None
+            for appearance in assembly_appearances or ()
         )
+        if colored_component_count:
+            step_components = [
+                component
+                for component in brep.inspect_step_components_rdescriptorlist(
+                    step_path
+                )
+                if not component["assembly"] and int(component["solid_count"]) > 0
+            ]
+            if len(step_components) != len(assembly_appearances or ()):
+                raise ValueError(
+                    "Assembly material rendering requires one STEP component per "
+                    f"leaf Part; found {len(step_components)} STEP components and "
+                    f"{len(assembly_appearances or ())} leaf Parts"
+                )
+            component_colors = {
+                str(component["node_id"]): tuple(
+                    float(value)
+                    for value in (
+                        appearance["base_color"] or DEFAULT_REVIEW_COMPONENT_COLOR
+                    )
+                )
+                for component, appearance in zip(
+                    step_components,
+                    assembly_appearances or (),
+                    strict=True,
+                )
+            }
+            colored_render_options = {
+                "component_colors": component_colors,
+                "image_size": (8.0, 8.0),
+                "dpi": 64,
+                "with_context": False,
+                "show_legend": False,
+            }
+            brep.render_step_components_colored_rpath(
+                step_path,
+                output_path=single_render_path,
+                views=((35.0, -45.0, "isometric"),),
+                title="CAD Review - Isometric",
+                **colored_render_options,
+            )
+            brep.render_step_components_colored_rpath(
+                step_path,
+                output_path=contact_sheet_path,
+                views=canonical_views,
+                title="CAD Review - Eight Views",
+                **colored_render_options,
+            )
+            render_mode = (
+                "scene_presentation"
+                if any(
+                    appearance.get("presentation_appearance") is not None
+                    for appearance in assembly_appearances or ()
+                )
+                else "assembly_materials"
+            )
+        else:
+            brep.render_step_views_rpath(
+                step_path,
+                single_render_path,
+                views=((35.0, -45.0, "isometric"),),
+                title="CAD Review - Isometric",
+                **common_render_options,
+            )
+            brep.render_step_views_rpath(
+                step_path,
+                contact_sheet_path,
+                views=canonical_views,
+                title="CAD Review - Eight Views",
+                **common_render_options,
+            )
+            render_mode = "step_xcaf"
 
         def image_sha256(path: Path) -> str:
             return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -871,6 +1057,11 @@ def _render_review_evidence(
             "contact_sheet": {
                 "path": contact_sheet_path.name,
                 "image_sha256": image_sha256(contact_sheet_path),
+            },
+            "appearance": {
+                "render_mode": render_mode,
+                "colored_component_count": colored_component_count,
+                "components": assembly_appearances or [],
             },
             "metrics": {
                 "result_kind": result_kind,
@@ -937,6 +1128,7 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError(
             "Model Source must define build_model(model) -> cad.Shape | cad.Assembly"
         )
+    presentation = _scene_presentation(namespace)
 
     print(
         PREFLIGHT_PREFIX
@@ -1036,6 +1228,7 @@ def main(argv: list[str] | None = None) -> int:
                     result_kind=result_kind,
                     inventory=inventory,
                     spec=spec,
+                    presentation=presentation,
                     validation_report=validation_report,
                     sources=sources,
                 )
@@ -1064,6 +1257,13 @@ def main(argv: list[str] | None = None) -> int:
                     solid_volume=solid_volume,
                     review_model_sha256=review_model_sha256,
                     review_source_files=review_source_files,
+                    assembly_appearances=(
+                        _review_appearances(
+                            final_result=final_result,
+                            result_kind=result_kind,
+                            presentation=presentation,
+                        )
+                    ),
                 )
 
     payload = {

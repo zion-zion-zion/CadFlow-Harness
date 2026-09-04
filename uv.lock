@@ -215,8 +215,8 @@ wheels = [
 
 [[package]]
 name = "cadflow"
-version = "0.1.0"
-source = { path = "vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl" }
+version = "0.2.0"
+source = { path = "vendor/cadflow-0.2.0-cp312-cp312-linux_x86_64.whl" }
 resolution-markers = [
     "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
@@ -231,12 +231,13 @@ dependencies = [
     { name = "typing-extensions", marker = "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { filename = "cadflow-0.1.0-cp312-cp312-linux_x86_64.whl", hash = "sha256:753c513fee879258a561efa9d3edf7e73ebe904ed160264caf5851c20b99854f" },
+    { filename = "cadflow-0.2.0-cp312-cp312-linux_x86_64.whl", hash = "sha256:e41a4ca965bf45b13e84b7a90b2d070f5cbd2c4b03e1dadeeaffad01a26e6236" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "cadquery-ocp", specifier = ">=7.9.3.1" },
+    { name = "ezdxf", marker = "extra == 'test'", specifier = ">=1.3,<2" },
     { name = "jsonschema", specifier = ">=4.25.1,<5" },
     { name = "matplotlib", marker = "extra == 'inspect'", specifier = ">=3.7.0" },
     { name = "numpy", specifier = ">=1.21" },
@@ -253,7 +254,7 @@ provides-extras = ["test", "collision", "inspect"]
 [[package]]
 name = "cadflow"
 version = "0.2.0"
-source = { path = "vendor/cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl" }
+source = { path = "vendor/cadflow-0.2.0-cp313-cp313-macosx_12_0_arm64.whl" }
 resolution-markers = [
     "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'",
 ]
@@ -293,8 +294,8 @@ name = "cadflow-harness"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "cadflow", version = "0.1.0", source = { path = "vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl" }, marker = "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "cadflow", version = "0.2.0", source = { path = "vendor/cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl" }, marker = "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "cadflow", version = "0.2.0", source = { path = "vendor/cadflow-0.2.0-cp312-cp312-linux_x86_64.whl" }, marker = "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "cadflow", version = "0.2.0", source = { path = "vendor/cadflow-0.2.0-cp313-cp313-macosx_12_0_arm64.whl" }, marker = "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "deepagents", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "fastapi", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "langchain-openai", marker = "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -318,8 +319,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cadflow", marker = "python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'darwin'", path = "vendor/cadflow-0.1.0-cp313-cp313-macosx_26_0_arm64.whl" },
-    { name = "cadflow", marker = "python_full_version == '3.12.*' and platform_machine == 'x86_64' and sys_platform == 'linux'", path = "vendor/cadflow-0.1.0-cp312-cp312-linux_x86_64.whl" },
+    { name = "cadflow", marker = "python_full_version == '3.13.*' and platform_machine == 'arm64' and sys_platform == 'darwin'", path = "vendor/cadflow-0.2.0-cp313-cp313-macosx_12_0_arm64.whl" },
+    { name = "cadflow", marker = "python_full_version == '3.12.*' and platform_machine == 'x86_64' and sys_platform == 'linux'", path = "vendor/cadflow-0.2.0-cp312-cp312-linux_x86_64.whl" },
     { name = "deepagents", specifier = "==0.7.5" },
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "langchain-openai", specifier = ">=1.0,<2" },

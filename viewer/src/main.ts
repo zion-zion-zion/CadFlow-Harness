@@ -40,12 +40,23 @@ shell.viewerRotate.addEventListener('click', () => {
   shell.viewerRotate.setAttribute('aria-pressed', String(enabled));
 });
 shell.viewerReset.addEventListener('click', () => workspace.sceneViewer.resetView());
-shell.viewerControlRailToggle.addEventListener('click', () => {
-  const expanded = shell.viewerControlRail.classList.toggle('is-collapsed') === false;
+shell.workspaceSidebarToggle.addEventListener('click', () => {
+  const expanded = shell.workspace.classList.toggle('is-sidebar-collapsed') === false;
+  shell.workspaceSidebarToggle.setAttribute('aria-expanded', String(expanded));
+  shell.workspaceSidebarToggle.setAttribute('aria-label', expanded ? 'Collapse workspace sidebar' : 'Expand workspace sidebar');
+  shell.workspaceSidebarToggle.title = expanded ? 'Collapse workspace sidebar' : 'Expand workspace sidebar';
+  shell.workspaceSidebarToggle.textContent = expanded ? '‹' : '›';
+});
+const setControlRailExpanded = (expanded: boolean): void => {
+  shell.viewerControlRail.classList.toggle('is-collapsed', !expanded);
   shell.viewerControlRailToggle.setAttribute('aria-expanded', String(expanded));
   shell.viewerControlRailToggle.setAttribute('aria-label', expanded ? 'Collapse scene controls' : 'Expand scene controls');
   shell.viewerControlRailToggle.title = expanded ? 'Collapse scene controls' : 'Expand scene controls';
   shell.viewerControlRailToggle.textContent = expanded ? '−' : '+';
+};
+if (window.matchMedia('(max-width: 900px)').matches) setControlRailExpanded(false);
+shell.viewerControlRailToggle.addEventListener('click', () => {
+  setControlRailExpanded(shell.viewerControlRail.classList.contains('is-collapsed'));
 });
 shell.productInspectorToggle.addEventListener('click', () => workspace.productInspector.toggleExpanded());
 shell.productInspectorClose.addEventListener('click', () => workspace.productInspector.close());

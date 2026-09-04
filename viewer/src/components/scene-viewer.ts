@@ -30,13 +30,16 @@ type Vec3 = [number, number, number];
 type Transform = { origin: Vec3; x_axis: Vec3; y_axis: Vec3; z_axis: Vec3 };
 export type Appearance = {
   appearance_id: string;
+  name?: string;
   base_color: [number, number, number, number];
   edge_color?: [number, number, number, number];
   metallic: number;
   roughness: number;
   alpha_mode: 'opaque' | 'mask' | 'blend';
   double_sided: boolean;
+  source?: { appearance_name?: string; kind?: string };
 };
+export type AppearanceSurface = 'generic' | 'coated-metal' | 'bare-metal' | 'rubber' | 'glass' | 'standard';
 export type ViewerDisplayMode = 'cinematic' | 'technical';
 export type RenderQuality = 'high' | 'medium' | 'low';
 type Definition = {
@@ -54,6 +57,7 @@ type SceneNode = {
   definition_id: string;
   transform: Transform;
   visible: boolean;
+  appearance_override_id: string | null;
 };
 type Asset = {
   asset_id: string;
@@ -171,26 +175,136 @@ export function preparePreviewScene(scene: THREE.Object3D): THREE.Object3D {
   return scene;
 }
 
-export function materialFromAppearance(appearance?: Appearance): THREE.MeshStandardMaterial {
+export type SceneLayer = 'none' | 'model' | 'preview';
+
+export function activateSceneLayer(
+  modelRoot: THREE.Object3D,
+  previewRoot: THREE.Object3D,
+  layer: SceneLayer,
+): void {
+  modelRoot.visible = layer === 'model';
+  previewRoot.visible = layer === 'preview';
+}
+
+export function preparePreviewRoot(root: THREE.Object3D): THREE.Object3D {
+  root.name = 'live-preview';
+  // The Harness preview GLB already includes CadFlow's asset-to-scene transform.
+  root.position.set(0, 0, 0);
+  root.rotation.set(0, 0, 0);
+  root.scale.set(1, 1, 1);
+  root.updateMatrix();
+  return root;
+}
+
+function workingColor(color: readonly number[]): THREE.Color {
+  return new THREE.Color().setRGB(color[0], color[1], color[2], THREE.SRGBColorSpace);
+}
+
+function appearanceLabel(appearance?: Appearance): string {
+  return `${appearance?.name ?? ''} ${appearance?.source?.appearance_name ?? ''}`.trim().toLowerCase();
+}
+
+export function appearanceSurface(appearance?: Appearance): AppearanceSurface {
+  if (isGenericCadAppearance(appearance)) return 'generic';
+  if (!appearance) return 'generic';
+  const label = appearanceLabel(appearance);
+  if (/(glass|glazing|window|windscreen|windshield|lens)/.test(label)) return 'glass';
+  if (/(rubber|tire|tyre|elastomer)/.test(label)) return 'rubber';
+  if (/(paint|painted|coated|lacquer|enamel)/.test(label)) return 'coated-metal';
+  if (/(brushed|chrome|alloy|aluminium|aluminum|silver|mechanical|bare[-_ ]?metal)/.test(label)) return 'bare-metal';
+  if (appearance.roughness >= 0.76 && appearance.metallic <= 0.18) return 'rubber';
+  if (appearance.metallic >= 0.86) return 'bare-metal';
+  if (appearance.metallic >= 0.52 && appearance.roughness <= 0.42) return 'coated-metal';
+  return 'standard';
+}
+
+export function materialFromAppearance(appearance?: Appearance): THREE.MeshPhysicalMaterial {
   const sourceColor = appearance?.base_color ?? DEFAULT_CAD_COLOR;
-  const genericCadAppearance = isGenericCadAppearance(appearance);
-  const color = genericCadAppearance
+  const surface = appearanceSurface(appearance);
+  const color = surface === 'generic'
     ? [...STUDIO_DEFAULT_COLOR.slice(0, 3), sourceColor[3]] as [number, number, number, number]
     : sourceColor;
-  const metallic = genericCadAppearance ? STUDIO_DEFAULT_METALLIC : appearance?.metallic ?? 0;
-  const roughness = genericCadAppearance ? STUDIO_DEFAULT_ROUGHNESS : appearance?.roughness ?? 0.55;
-  return new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color(color[0], color[1], color[2]),
+  const metallic = surface === 'generic' ? STUDIO_DEFAULT_METALLIC : appearance?.metallic ?? 0;
+  const roughness = surface === 'generic' ? STUDIO_DEFAULT_ROUGHNESS : appearance?.roughness ?? 0.55;
+  const material = new THREE.MeshPhysicalMaterial({
+    color: workingColor(color),
     metalness: metallic,
     roughness,
-    envMapIntensity: 0.8 + metallic * 0.45,
-    // A restrained clear coat gives matte CAD surfaces a readable studio highlight.
-    clearcoat: 0.08 + (1 - metallic) * 0.08,
-    clearcoatRoughness: Math.min(roughness + 0.08, 0.42),
+    envMapIntensity: 0.85 + metallic * 0.65,
+    clearcoat: 0.12,
+    clearcoatRoughness: Math.min(roughness + 0.06, 0.42),
     side: appearance?.double_sided ? THREE.DoubleSide : THREE.FrontSide,
     transparent: appearance?.alpha_mode === 'blend',
     opacity: color[3],
   });
+  material.name = appearance?.name ?? appearance?.appearance_id ?? 'cadflow-default';
+
+  if (surface === 'coated-metal') {
+    // Paint is a dielectric coating over metal, not exposed conductive metal.
+    material.metalness = Math.min(metallic, 0.24);
+    material.roughness = Math.max(roughness, 0.24);
+    material.clearcoat = 0.52;
+    material.clearcoatRoughness = Math.min(Math.max(roughness * 0.62, 0.08), 0.24);
+    material.envMapIntensity = 1.08;
+  } else if (surface === 'bare-metal') {
+    material.metalness = Math.max(metallic, 0.94);
+    material.roughness = Math.min(Math.max(roughness, 0.2), 0.4);
+    material.clearcoat = 0.05;
+    material.envMapIntensity = 1.42;
+  } else if (surface === 'rubber') {
+    material.metalness = 0;
+    material.roughness = Math.max(roughness, 0.82);
+    material.clearcoat = 0;
+    material.envMapIntensity = 0.32;
+    material.sheen = 0.22;
+    material.sheenRoughness = 0.88;
+    material.sheenColor.copy(workingColor(color).multiplyScalar(0.35));
+  } else if (surface === 'glass') {
+    const label = appearanceLabel(appearance);
+    const luminous = /(eye|lamp|light)/.test(label);
+    material.color.copy(workingColor(color).lerp(new THREE.Color(1, 1, 1), 0.08));
+    material.metalness = 0;
+    material.roughness = Math.min(roughness, 0.14);
+    material.transmission = luminous ? 0.08 : 0.14;
+    material.thickness = 0.28;
+    material.ior = 1.48;
+    material.clearcoat = 0.82;
+    material.clearcoatRoughness = 0.1;
+    material.envMapIntensity = 1.35;
+    material.attenuationColor.copy(workingColor(color));
+    material.attenuationDistance = 240;
+    material.transparent = true;
+    material.opacity = luminous ? 0.86 : 0.76;
+    material.depthWrite = false;
+    if (luminous) {
+      material.emissive.copy(workingColor(color));
+      material.emissiveIntensity = 0.32;
+    }
+  }
+  return material;
+}
+
+export function edgeVisualStyle(mode: ViewerDisplayMode): { visible: boolean; linewidth: number } {
+  return mode === 'technical'
+    ? { visible: true, linewidth: 2.15 }
+    : { visible: false, linewidth: CAD_EDGE_LINE_WIDTH };
+}
+
+export function cinematicVignetteUniforms(): { offset: number; darkness: number } {
+  // VignetteShader blends toward (1 - darkness), so values below 1 brighten dark backgrounds.
+  return { offset: 0.82, darkness: 1 };
+}
+
+export function defaultCameraDirection(): THREE.Vector3 {
+  // CadFlow product fronts conventionally face -Y with Z as up.
+  return new THREE.Vector3(1, -1, 0.82).normalize();
+}
+
+export function resolvedAppearanceId(
+  nodeAppearanceId: string | null | undefined,
+  definitionAppearanceId: string | undefined,
+): string | undefined {
+  return nodeAppearanceId ?? definitionAppearanceId;
 }
 
 function isGenericCadAppearance(appearance?: Appearance): boolean {
@@ -213,7 +327,7 @@ export class SceneViewer {
   private readonly outlinePass: OutlinePass;
   private readonly bloomPass: UnrealBloomPass;
   private readonly vignettePass: ShaderPass;
-  private readonly stageGround: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial>;
+  private readonly stageGround: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   private readonly stageGrid: THREE.GridHelper;
   private readonly shadowCatcher: THREE.Mesh<THREE.PlaneGeometry, THREE.ShadowMaterial>;
   private readonly modelRoot = new THREE.Group();
@@ -264,7 +378,7 @@ export class SceneViewer {
     this.renderer.setClearColor(0x090d13, 1);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.18;
+    this.renderer.toneMappingExposure = 1.02;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.append(this.renderer.domElement);
@@ -291,8 +405,8 @@ export class SceneViewer {
     this.scene.environment = this.environmentTarget.texture;
     pmrem.dispose();
 
-    this.scene.add(new THREE.HemisphereLight('#dbe9ff', '#101a27', 0.72));
-    this.keyLight = new THREE.DirectionalLight('#f5f8ff', 1.65);
+    this.scene.add(new THREE.HemisphereLight('#dce7f2', '#090d12', 0.24));
+    this.keyLight = new THREE.DirectionalLight('#fffaf2', 0.95);
     this.keyLight.position.set(2.6, 7.5, 2.2);
     this.keyLight.castShadow = true;
     this.keyLight.shadow.mapSize.set(2048, 2048);
@@ -305,19 +419,19 @@ export class SceneViewer {
     this.keyLight.shadow.bias = -0.0004;
     this.keyLight.shadow.normalBias = 0.02;
     this.scene.add(this.keyLight, this.keyLight.target);
-    const rimLight = new THREE.DirectionalLight('#5e9dff', 1.2);
+    const rimLight = new THREE.DirectionalLight('#b8d6ff', 0.52);
     rimLight.position.set(-4.5, 2.5, -3.5);
     this.scene.add(rimLight, rimLight.target);
-    const fillLight = new THREE.DirectionalLight('#f4b56d', 0.65);
+    const fillLight = new THREE.DirectionalLight('#ffd9b5', 0.16);
     fillLight.position.set(-1, -3, 4);
     this.scene.add(fillLight, fillLight.target);
-    const sideLight = new THREE.DirectionalLight('#75c7ff', 0.42);
+    const sideLight = new THREE.DirectionalLight('#d8efff', 0.14);
     sideLight.position.set(5.5, -1.2, -2.5);
     this.scene.add(sideLight, sideLight.target);
 
     this.stageGround = new THREE.Mesh(
       new THREE.PlaneGeometry(2, 2),
-      new THREE.MeshStandardMaterial({ color: '#111821', roughness: 0.9, metalness: 0.08 }),
+      new THREE.MeshBasicMaterial({ color: '#080c11' }),
     );
     this.stageGround.name = 'industrial-stage-ground';
     this.stageGround.receiveShadow = true;
@@ -357,8 +471,9 @@ export class SceneViewer {
     this.outlinePass.edgeGlow = 0.12;
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.4, 0.86);
     this.vignettePass = new ShaderPass(VignetteShader);
-    this.vignettePass.uniforms.offset.value = 1.08;
-    this.vignettePass.uniforms.darkness.value = 0.46;
+    const vignette = cinematicVignetteUniforms();
+    this.vignettePass.uniforms.offset.value = vignette.offset;
+    this.vignettePass.uniforms.darkness.value = vignette.darkness;
     this.composer.addPass(this.renderPass);
     this.composer.addPass(this.ssaoPass);
     this.composer.addPass(this.outlinePass);
@@ -367,10 +482,8 @@ export class SceneViewer {
     this.composer.addPass(new OutputPass());
 
     this.modelRoot.name = 'validated-scene';
-    this.previewRoot.name = 'live-preview';
-    // Native preview GLBs use glTF's Y-up basis: (x, z, -y) / 1000.
-    // The application scene is Z-up, so rotate the preview into that basis.
-    this.previewRoot.rotation.x = Math.PI / 2;
+    preparePreviewRoot(this.previewRoot);
+    activateSceneLayer(this.modelRoot, this.previewRoot, 'none');
     this.scene.add(this.modelRoot, this.previewRoot);
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
     this.renderer.domElement.addEventListener('pointerup', this.handlePointerUp);
@@ -409,6 +522,7 @@ export class SceneViewer {
       for (const definition of manifest.definitions) this.definitions.set(definition.definition_id, definition);
       for (const appearance of manifest.appearances) this.appearances.set(appearance.appearance_id, appearance);
       await this.buildScene();
+      activateSceneLayer(this.modelRoot, this.previewRoot, 'model');
       this.updateLineVisuals();
       this.frame();
       this.onStatus(
@@ -447,6 +561,7 @@ export class SceneViewer {
     // last usable preview visible and its GPU resources intact.
     this.clearPreview();
     this.previewRoot.add(next);
+    activateSceneLayer(this.modelRoot, this.previewRoot, 'preview');
     if (!this.previewHasFramed) {
       this.frame(this.previewRoot);
       this.previewHasFramed = true;
@@ -465,7 +580,11 @@ export class SceneViewer {
   }
 
   fit(): void {
-    this.frame(this.modelRoot.children.length > 0 ? this.modelRoot : this.previewRoot);
+    this.frame(
+      this.modelRoot.visible && this.modelRoot.children.length > 0
+        ? this.modelRoot
+        : this.previewRoot,
+    );
   }
 
   resetView(): void {
@@ -680,14 +799,17 @@ export class SceneViewer {
         object.userData.sceneNodeId = node.node_id;
         this.sceneNodes.set(node.node_id, object);
         parent.add(object);
-        if (definition.kind !== 'assembly') object.add(await this.instantiateDefinition(definition));
+        if (definition.kind !== 'assembly') object.add(await this.instantiateDefinition(definition, node.appearance_override_id));
         await build(object, node.node_id);
       }
     };
     await build(this.modelRoot, null);
   }
 
-  private async instantiateDefinition(definition: Definition): Promise<THREE.Group> {
+  private async instantiateDefinition(
+    definition: Definition,
+    appearanceOverrideId: string | null,
+  ): Promise<THREE.Group> {
     if (!this.currentManifest || !this.currentFiles) throw new ScenePackageError('Scene package is not loaded');
     const group = new THREE.Group();
     group.name = definition.name || definition.definition_id;
@@ -702,7 +824,7 @@ export class SceneViewer {
       const renderGeometry = geometry.clone(true);
       renderGeometry.traverse((child) => {
         if (child instanceof THREE.Mesh) {
-          child.material = this.materialFor(definition);
+          child.material = this.materialFor(definition, appearanceOverrideId);
           child.castShadow = true;
           child.receiveShadow = true;
         }
@@ -719,7 +841,7 @@ export class SceneViewer {
       }
       const edgeInstance = edge.clone(true);
       edgeInstance.traverse((child) => {
-        if (child instanceof THREE.LineSegments) this.addWideEdgeVisual(child, definition);
+        if (child instanceof THREE.LineSegments) this.addWideEdgeVisual(child, definition, appearanceOverrideId);
       });
       group.add(edgeInstance);
     }
@@ -734,16 +856,24 @@ export class SceneViewer {
     return gltf.scene;
   }
 
-  private materialFor(definition: Definition): THREE.MeshStandardMaterial {
-    const appearance = definition.appearance_id ? this.appearances.get(definition.appearance_id) : undefined;
+  private materialFor(
+    definition: Definition,
+    appearanceOverrideId: string | null,
+  ): THREE.MeshStandardMaterial {
+    const appearanceId = resolvedAppearanceId(appearanceOverrideId, definition.appearance_id);
+    const appearance = appearanceId ? this.appearances.get(appearanceId) : undefined;
     return materialFromAppearance(appearance);
   }
 
-  private edgeMaterialFor(definition: Definition): LineMaterial {
-    const appearance = definition.appearance_id ? this.appearances.get(definition.appearance_id) : undefined;
+  private edgeMaterialFor(
+    definition: Definition,
+    appearanceOverrideId: string | null,
+  ): LineMaterial {
+    const appearanceId = resolvedAppearanceId(appearanceOverrideId, definition.appearance_id);
+    const appearance = appearanceId ? this.appearances.get(appearanceId) : undefined;
     const edgeColor = appearance?.edge_color ?? [0.08, 0.11, 0.15, 1];
     const material = new LineMaterial({
-      color: new THREE.Color(edgeColor[0], edgeColor[1], edgeColor[2]),
+      color: workingColor(edgeColor),
       linewidth: CAD_EDGE_LINE_WIDTH,
       worldUnits: false,
       transparent: edgeColor[3] < 1,
@@ -755,7 +885,11 @@ export class SceneViewer {
     return material;
   }
 
-  private addWideEdgeVisual(source: THREE.LineSegments, definition: Definition): void {
+  private addWideEdgeVisual(
+    source: THREE.LineSegments,
+    definition: Definition,
+    appearanceOverrideId: string | null,
+  ): void {
     const position = source.geometry.getAttribute('position');
     const index = source.geometry.index;
     const indexCount = index?.count ?? position.count;
@@ -767,7 +901,10 @@ export class SceneViewer {
     }
     const geometry = new LineSegmentsGeometry();
     geometry.setPositions(positions);
-    const visual = new LineSegments2(geometry, this.edgeMaterialFor(definition));
+    const visual = new LineSegments2(
+      geometry,
+      this.edgeMaterialFor(definition, appearanceOverrideId),
+    );
     visual.name = 'cad-edge-visual';
     visual.userData.pickable = false;
     source.add(visual);
@@ -803,10 +940,13 @@ export class SceneViewer {
   }
 
   private updateLineVisuals(): void {
-    const linewidth = this.displayMode === 'cinematic' ? CAD_EDGE_LINE_WIDTH : 2.15;
+    const style = edgeVisualStyle(this.displayMode);
     for (const root of [this.modelRoot, this.previewRoot]) {
       root.traverse((object) => {
-        if (object instanceof LineSegments2) object.material.linewidth = linewidth;
+        if (object instanceof LineSegments2) {
+          object.visible = style.visible;
+          object.material.linewidth = style.linewidth;
+        }
       });
     }
   }
@@ -838,7 +978,7 @@ export class SceneViewer {
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(size.length() * 0.5, 0.01);
-    const direction = new THREE.Vector3(1, 0.78, 1).normalize();
+    const direction = defaultCameraDirection();
     this.camera.position.copy(center).add(direction.multiplyScalar(radius * 2.4));
     this.camera.near = Math.max(radius / 100, 0.001);
     this.camera.far = Math.max(radius * 100, 10);
@@ -937,6 +1077,7 @@ export class SceneViewer {
     this.motionLastTime = 0;
     this.stageGround.visible = false;
     this.stageGrid.visible = false;
+    activateSceneLayer(this.modelRoot, this.previewRoot, 'none');
   }
 
   private clearSelection(): void {
@@ -967,6 +1108,7 @@ export class SceneViewer {
     );
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(pointer, this.camera);
+    if (!this.modelRoot.visible) return;
     const hit = raycaster.intersectObject(this.modelRoot, true)[0]?.object;
     let candidate: THREE.Object3D | null = hit ?? null;
     while (candidate && typeof candidate.userData.sceneNodeId !== 'string') candidate = candidate.parent;

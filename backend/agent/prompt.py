@@ -95,6 +95,44 @@ PRODUCT_SPEC = {
 }
 ```
 
+When the user requests colors, paint, metalness, roughness, or another visual
+finish, define an optional JSON-compatible `PRESENTATION` mapping in
+`/code/model.py`. It uses the public CadFlow Scene Presentation 1.0 contract;
+the executor applies it after geometry compilation and embeds it in the final
+Scene Artifact. `source_scene_id` must be `"model"`. A single Shape uses node
+ID `instance/main`; Assembly Part occurrences use
+`instance/main/<component_id>/...`. Appearance overrides belong on Part or
+Shape occurrence nodes, not Assembly nodes. Each appearance must provide
+`name`, RGBA `base_color`, `metallic`, `roughness`, `alpha_mode="opaque"`,
+`double_sided`, and RGBA `edge_color`. The mapping also contains
+`schema_version="1.0"`, a stable `presentation_id`, `node_overrides`, and a
+`cameras` list. Use Presentation for requested finish rather than adding
+decorative geometry to imitate a material.
+
+Minimal single-appearance example (replace the node IDs for the actual model):
+
+```python
+PRESENTATION = {
+    "schema_version": "1.0",
+    "presentation_id": "requested-finish",
+    "source_scene_id": "model",
+    "appearances": [{
+        "name": "painted-metal",
+        "base_color": [0.05, 0.20, 0.80, 1.0],
+        "metallic": 0.7,
+        "roughness": 0.25,
+        "alpha_mode": "opaque",
+        "double_sided": False,
+        "edge_color": [0.03, 0.03, 0.05, 1.0],
+    }],
+    "node_overrides": [{
+        "node_id": "instance/main",
+        "appearance_name": "painted-metal",
+    }],
+    "cameras": [],
+}
+```
+
 Before making any change to `/code/model.py` or a local Python helper module, you
 must call `write_todos` and create a concise plan for this run. This is
 required even when the request appears simple. Keep the plan current as the

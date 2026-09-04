@@ -857,7 +857,7 @@ import traceback
 from pathlib import Path
 
 import cadflow as cad
-from backend.preview_glb import assembly_preview_glb
+from backend.preview_glb import assembly_preview_glb, shape_preview_glb
 
 def clear_snapshot_modules(snapshot):
     for name, module in tuple(sys.modules.items()):
@@ -905,7 +905,11 @@ for line in sys.stdin.buffer:
                 with cad.Model() as model:
                     final_result = build_model(model)
                     if isinstance(final_result, cad.Shape):
-                        preview_shape = final_result
+                        payload = shape_preview_glb(
+                            final_result,
+                            deflection=float(request["deflection"]),
+                            presentation=namespace.get("PRESENTATION"),
+                        )
                     elif isinstance(final_result, cad.Assembly):
                         preview_assembly = final_result
                         try:
@@ -918,14 +922,11 @@ for line in sys.stdin.buffer:
                         payload = assembly_preview_glb(
                             preview_assembly,
                             deflection=float(request["deflection"]),
+                            presentation=namespace.get("PRESENTATION"),
                         )
                     else:
                         raise TypeError(
                             "Model Source must return one CadFlow Shape or cad.Assembly"
-                        )
-                    if isinstance(final_result, cad.Shape):
-                        payload = preview_shape.preview_glb(
-                            deflection=float(request["deflection"])
                         )
                     output_path.write_bytes(payload)
                 response = {"status": "succeeded"}
