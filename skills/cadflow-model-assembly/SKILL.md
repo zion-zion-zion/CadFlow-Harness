@@ -23,11 +23,9 @@ def build_model(model: cad.Model) -> cad.Assembly:
     return make_product_rassembly()
 ```
 
-Use focused helper modules under `/code/` for complex products. After the early
-Assembly gates pass, the executor loads the complete Python source tree and
-generates the semantic model, Scene, product STEP, one STEP per unique Part,
-BOM, assumptions, validation report, and deterministic source snapshot. Source
-code does not write those outputs.
+Use focused helper modules under `/code/` for complex products. Return the
+semantic Assembly; the Harness runtime owns product artifacts and acceptance.
+Source code does not write runtime outputs.
 
 Define JSON-compatible `PRODUCT_SPEC` in `model.py`. Every Assembly declares
 `envelope.max_size_mm`; record inferred values in `assumptions`.
@@ -49,9 +47,8 @@ Define JSON-compatible `PRODUCT_SPEC` in `model.py`. Every Assembly declares
 5. Encode the smallest independent constraint set that represents the physical
    joints. Ground the fixed load-path root and preserve intended revolute or
    prismatic freedom.
-6. Return the semantic Assembly and run `validate_model`. Treat strict solve,
-   every residual's SDK tolerance, STEP replay, Scene parse, envelope, and
-   product structure as blocking gates.
+6. Return the semantic Assembly and run `validate_model`. Treat every reported
+   blocking check as authoritative.
 7. Repair one diagnosed failure at a time. A successful partial Assembly is a
    checkpoint; continue until the complete requested product is represented.
    Run `cad_review` only after deterministic validation reports `Passed`.
@@ -79,9 +76,7 @@ Define JSON-compatible `PRODUCT_SPEC` in `model.py`. Every Assembly declares
 
 - Read the failed entries in `product_validation_checks` before editing. Use
   their solve message, residual IDs, or envelope measurements as the repair
-  scope. A short-circuited diagnostic Draft omits
-  downstream artifacts; the complete report enters the product bundle after
-  the early gates pass.
+  scope.
 - A failed strict solve may include non-strict diagnostic residuals. Use that
   evidence for repair, then return the semantic Assembly normally; remove
   temporary solve calls and debug prints before final validation.
@@ -95,3 +90,6 @@ Define JSON-compatible `PRODUCT_SPEC` in `model.py`. Every Assembly declares
 - For timeout, use `execution_phase` and the phase named in `error`. Repair the
   active phase instead of changing unrelated modules. Simplify nonfunctional
   detail before retrying a slow build, STEP, Scene, or review phase.
+- When `cad_review` reports a substantive geometry or requirement finding,
+  repair the source, validate the new revision, then review it again. Retry a
+  pure review-infrastructure failure without changing valid geometry.

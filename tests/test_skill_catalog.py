@@ -38,6 +38,32 @@ def test_packaged_skill_references_exist() -> None:
             )
 
 
+def test_packaged_skills_own_modeling_api_and_presentation_guidance() -> None:
+    skill_root = Path(__file__).parents[1] / "skills"
+    part_api = (
+        skill_root / "cadflow-model-part" / "references" / "public-api.md"
+    ).read_text(encoding="utf-8")
+    assembly_skill = (
+        skill_root / "cadflow-model-assembly" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assembly_api = (
+        skill_root / "cadflow-model-assembly" / "references" / "assembly-api.md"
+    ).read_text(encoding="utf-8")
+    presentation_api = (
+        skill_root
+        / "cadflow-scene-presentation"
+        / "references"
+        / "presentation-api.md"
+    ).read_text(encoding="utf-8")
+
+    assert "model.box" in part_api
+    assert "validate_model" in assembly_skill
+    assert "product_validation_checks" in assembly_skill
+    assert "cad.make_box_rsolid" in assembly_api
+    assert "PRESENTATION" in presentation_api
+    assert "node_overrides" in presentation_api
+
+
 def test_assembly_skill_has_no_collision_validation_contract() -> None:
     skill_root = Path(__file__).parents[1] / "skills" / "cadflow-model-assembly"
     source = "\n".join(

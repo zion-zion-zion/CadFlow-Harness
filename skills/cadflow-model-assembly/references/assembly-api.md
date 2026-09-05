@@ -223,6 +223,5 @@ def build_model(model: cad.Model) -> cad.Assembly:
 ```
 
 Keep `PRODUCT_SPEC` available in `model.py`'s global namespace. Its values must
-be JSON-compatible. The executor owns strict solving, flattened Scene
-projection, semantic serialization, STEP export and replay, unique-Part STEP
-export, BOM, validation, assumptions, and the complete source snapshot.
+be JSON-compatible. Return the semantic product and let the Harness runtime
+perform validation, review, artifact generation, and acceptance.

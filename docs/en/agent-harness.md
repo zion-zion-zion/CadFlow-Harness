@@ -16,6 +16,20 @@ The Agent cannot use the file tools to edit Skills, browse other Projects, or
 read repository examples. After source validation, the executor creates runtime
 artifacts. Source code must not write those artifacts directly.
 
+## Prompt responsibilities
+
+The system prompt contains only the stable Agent identity, product contract,
+multi-turn behavior, tool principles, and run boundaries. CAD modeling methods,
+public API guidance, product-specific design rules, presentation schemas, and
+repair strategies live in Skills and are loaded only when relevant. Validation,
+artifact generation, acceptance, versioning, and failed-turn rollback remain
+host-runtime responsibilities.
+
+Conversation turns and accepted Project source are durable. Each follow-up Run
+receives prior user and assistant messages and starts from the existing source
+tree, so the Agent can preserve earlier decisions and make an incremental
+change. A failed follow-up restores the last accepted source and artifact.
+
 ## Tool boundary
 
 The harness has restricted file and validation tools. It can inspect source,

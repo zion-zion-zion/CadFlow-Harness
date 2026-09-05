@@ -154,6 +154,46 @@ def test_agent_invocation_is_cancelled_before_stop_returns() -> None:
         worker.join(1.0)
 
 
+def test_agent_invocation_replays_context_before_the_latest_project_request() -> None:
+    class RecordingAgent:
+        invocation: dict[str, object] | None = None
+
+        async def ainvoke(
+            self,
+            invocation: dict[str, object],
+            **_kwargs: object,
+        ) -> None:
+            self.invocation = invocation
+
+    agent = RecordingAgent()
+    context = [
+        {"role": "user", "content": "Create a mounting plate."},
+        {"role": "assistant", "content": "The mounting plate is ready."},
+    ]
+
+    error, timed_out = _invoke_agent_with_deadline(
+        agent,
+        "Add four corner holes.",
+        deadline=time.monotonic() + 1.0,
+        cancellation_token=CancellationToken(),
+        conversation_context=context,
+    )
+
+    assert (error, timed_out) == (None, False)
+    assert agent.invocation == {
+        "messages": [
+            *context,
+            {
+                "role": "user",
+                "content": (
+                    "Latest request for the current persistent CAD Project: "
+                    "Add four corner holes."
+                ),
+            },
+        ]
+    }
+
+
 def test_reference_agent_uses_configured_run_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -450,7 +490,7 @@ def test_agent_prompt_confines_writes_and_exposes_read_only_references(
     assert "directories, or other Projects" in prompt
 
 
-def test_agent_prompt_routes_shape_and_assembly_through_applicable_skills(
+def test_agent_prompt_keeps_only_stable_product_and_project_contracts(
     tmp_path: Path,
 ) -> None:
     prompt = _build_agent_system_prompt(
@@ -458,103 +498,44 @@ def test_agent_prompt_routes_shape_and_assembly_through_applicable_skills(
         skill_root=Path(__file__).parents[1] / "skills",
     )
 
+    assert len(prompt) < 5_000
     assert "`build_model(model: cad.Model) -> cad.Shape | cad.Assembly`" in prompt
     assert "Return a `cad.Shape` only when" in prompt
     assert "Return a semantic `cad.Assembly`" in prompt
-    assert "Never fuse multiple parts" in prompt
-    assert "strict constraint solve and every residual" in prompt
-    assert "collision" not in prompt.lower()
-    assert "Passed Draft to Accepted" in prompt
-    assert "Use `product_validation_checks` for solve diagnosis" in prompt
-    assert "`validation_short_circuited=true`" in prompt
-    assert "absent downstream\nartifacts as another source defect" in prompt
-    assert "do not leave temporary solve, inspection, or debug-print probes" in prompt
-    assert "Read any relevant CadFlow Skills" in prompt
-    assert "You may choose more than one Skill" in prompt
-    assert "If Skills disagree, preserve the" in prompt
-    assert "current run contract" in prompt
-    assert "Use only public CadFlow and Python APIs" in prompt
-    assert "Do not import private CadFlow engine" in prompt
-    assert "It may be empty or may contain an" in prompt
-    assert "non-passing entry-point" not in prompt
-    assert "including compatibility, private, and" not in prompt
-    assert "There is no shell tool in this run" not in prompt
-    assert "do not execute commands" not in prompt
-    assert "Do not use the network or install dependencies" not in prompt
-    assert "trusted local development environment" not in prompt
+    assert "host runtime owns validation, review" in prompt
+    assert "Earlier conversation messages" in prompt
+    assert "existing `/code/**/*.py` source" in prompt
+    assert "Continue the existing design" in prompt
+    assert "focused incremental changes" in prompt
+    assert "rebuild the\nProject from scratch" in prompt
 
-
-def test_agent_prompt_requires_diagnostic_repairs_before_retry(tmp_path: Path) -> None:
-    prompt = _build_agent_system_prompt(
-        workspace_root=tmp_path,
-        skill_root=None,
+    moved_to_skills_or_runtime = (
+        "make_box_rsolid",
+        "node_overrides",
+        "product_validation_checks",
+        "validation_short_circuited",
+        "execution_phase",
+        "strict constraint solve and every residual",
+        "Minimal single-appearance example",
     )
-
-    assert "When validation fails:" in prompt
-    assert "Identify the reported failure and its likely cause." in prompt
-    assert "Make a concrete, material source change" in prompt
-    assert "Inspect `product_validation_checks`" in prompt
-    assert "residual IDs, or envelope measurements" in prompt
-    assert "Call `validate_model` again only after the source has materially changed." in prompt
-    assert "Never retry an unchanged or semantically equivalent Model Source." in prompt
-    assert "unrelated changes merely to continue the run." in prompt
-    assert "complete requested product has `product_validation_status ==" in prompt
-    assert '"Passed"` with no blocking failures' in prompt
-    assert "`cad_review` immediately" in prompt
-    assert "fails only with `review_infrastructure` findings" in prompt
-    assert "retry `cad_review` without\nediting or revalidating" in prompt
-    assert "infrastructure failures are not CAD\ndefects" in prompt
+    assert all(detail not in prompt for detail in moved_to_skills_or_runtime)
 
 
-def test_agent_prompt_stages_complex_part_and_assembly_work(tmp_path: Path) -> None:
-    prompt = _build_agent_system_prompt(
-        workspace_root=tmp_path,
-        skill_root=None,
-    )
-
-    assert "For simple work, implement the complete Model Source" in prompt
-    assert "For complex single-part work, use staged implementation" in prompt
-    assert "For complex Assembly work, stage shared dimensions" in prompt
-    assert "Use judgment rather than a fixed feature-count threshold." in prompt
-    assert "normally plan two to four materially distinct validation" in prompt
-    assert "A single-part stage returns one meaningful" in prompt
-    assert "An Assembly stage returns a coherent partial" in prompt
-    assert "Preserve a requested single part as a Shape" in prompt
-    assert "retain working\nbehavior and add requested feature" in prompt
-    assert "Call `validate_model` after each planned stage." in prompt
-    assert "continue to the next planned stage without\ncalling `cad_review`" in prompt
-    assert "Never stack more features on a failed stage." in prompt
-    assert "passing candidate is intermediate only when at least one explicit" in prompt
-    assert "Leave enough of the reported run budget" in prompt
-
-
-def test_agent_prompt_defines_multi_file_product_contract(tmp_path: Path) -> None:
+def test_agent_prompt_retains_tool_and_request_invariants(tmp_path: Path) -> None:
     prompt = _build_agent_system_prompt(
         workspace_root=tmp_path,
         skill_root=Path(__file__).parents[1] / "skills",
         run_timeout_seconds=37.5,
     )
 
-    assert "split `/code/` into focused Python modules" in prompt
-    assert "`model.py` as the small orchestration entry point" in prompt
-    assert '"envelope": {"max_size_mm":' in prompt
-    assert '"collision_exclusions"' not in prompt
-    assert "A successful subprocess can still be a Draft" in prompt
+    assert "call `write_todos`" in prompt
+    assert "Read the relevant CadFlow Skills" in prompt
+    assert "Use only public CadFlow and Python APIs" in prompt
+    assert "Use `validate_model`" in prompt
+    assert "Call `cad_review`" in prompt
+    assert "latest\nuser request explicitly supersedes" in prompt
     assert "configured wall-clock budget of\n37.5 seconds" in prompt
     assert "do not wait for\nhuman approval" in prompt
-
-
-def test_agent_prompt_requires_todo_plan_before_source_edits(tmp_path: Path) -> None:
-    prompt = _build_agent_system_prompt(
-        workspace_root=tmp_path,
-        skill_root=None,
-    )
-
-    assert "Before making any change to `/code/model.py`" in prompt
-    assert "you\nmust call `write_todos`" in prompt
-    assert "required even when the request appears simple" in prompt
-    assert "Do not write or edit Project\nsource before the initial todo plan exists." in prompt
-    assert "Keep the plan current as the\nwork progresses" in prompt
 
 
 def test_missing_configuration_fails_a_project_without_calling_a_model(

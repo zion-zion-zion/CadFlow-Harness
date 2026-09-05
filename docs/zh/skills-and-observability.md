@@ -11,6 +11,7 @@ Skills 是按任务加载的 Markdown 参考文件，Run 中以只读方式挂�
 | [`cadflow-step-brep`](https://github.com/zion-zion-zion/CadFlowAgent/tree/master/skills/cadflow-step-brep) | STEP/BREP 检查、重建、截面分析和基于测量值的比较。 |
 | [`cadflow-model-assembly`](https://github.com/zion-zion-zion/CadFlowAgent/tree/master/skills/cadflow-model-assembly) | 多部件产品、定位、连接器、约束和验收。 |
 | [`cadflow-rotary-transmission`](https://github.com/zion-zion-zion/CadFlowAgent/tree/master/skills/cadflow-rotary-transmission) | 齿轮、轴、轴承、壳体和旋转机构。 |
+| [`cadflow-scene-presentation`](https://github.com/zion-zion-zion/CadFlowAgent/tree/master/skills/cadflow-scene-presentation) | 用户指定的颜色、材质外观、边线样式和相机。 |
 
 Skills 只提供实现参考，不会改变执行器契约。Agent 仍须返回当前运行时能接受的有效 `Shape` 或语义化 `Assembly`。
 

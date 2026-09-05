@@ -194,6 +194,7 @@ Skills 是按任务加载的 Markdown 参考，以只读方式提供给 Agent。
 | [`cadflow-step-brep`](skills/cadflow-step-brep/SKILL.md) | STEP/BREP 检查、特征推断、重建和基于测量值的比较。 |
 | [`cadflow-model-assembly`](skills/cadflow-model-assembly/SKILL.md) | 多部件产品、定位、连接器、约束和验收。 |
 | [`cadflow-rotary-transmission`](skills/cadflow-rotary-transmission/SKILL.md) | 旋转关节、齿轮、轴、壳体和传动机构。 |
+| [`cadflow-scene-presentation`](skills/cadflow-scene-presentation/SKILL.md) | 用户指定的颜色、材质外观、边线样式和相机。 |
 
 ## 仓库结构
 

@@ -12,6 +12,7 @@ The public catalog is:
 | [`cadflow-step-brep`](https://github.com/zion-zion-zion/CadFlowAgent/tree/master/skills/cadflow-step-brep) | STEP/BREP inspection, reconstruction, section analysis, and comparison by measurements. |
 | [`cadflow-model-assembly`](https://github.com/zion-zion-zion/CadFlowAgent/tree/master/skills/cadflow-model-assembly) | Multi-part products, placements, connectors, constraints, and acceptance. |
 | [`cadflow-rotary-transmission`](https://github.com/zion-zion-zion/CadFlowAgent/tree/master/skills/cadflow-rotary-transmission) | Gears, shafts, bearings, housings, and rotary mechanisms. |
+| [`cadflow-scene-presentation`](https://github.com/zion-zion-zion/CadFlowAgent/tree/master/skills/cadflow-scene-presentation) | Requested colors, material appearance, edge styling, and cameras. |
 
 Skills are implementation references. They do not change the executor contract;
 the Agent still has to return a valid `Shape` or semantic `Assembly` accepted by

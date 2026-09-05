@@ -78,7 +78,7 @@ Use `cad.export_model_json`, `cad.import_model_json`, and
 `cad.replay_model_json` for explicit interchange. Do not infer final outputs
 from arbitrary graph leaves when `capture_result` can declare them.
 
-## Inspection and export
+## Inspection and Harness output
 
 Shape diagnostics are available as `kind`, `volume`, `area`, `length`,
 `center_of_mass`, `bbox`, `topology`, `describe()`, `validate()`, and `mesh()`.
@@ -90,5 +90,7 @@ assert final_part.topology["solids"] == 1
 assert final_part.volume > 0.0
 ```
 
-Export with `shape.export_step(path)` and
-`shape.export_stl(path, binary=True)` after creating the parent directory.
+Direct scripts can export with `shape.export_step(path)` and
+`shape.export_stl(path, binary=True)`. CadFlow Harness source does not call
+these methods: return the final Shape and let the runtime generate and verify
+the canonical outputs.

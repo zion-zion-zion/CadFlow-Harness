@@ -366,8 +366,8 @@ def _invoke_agent_with_deadline(
             {
                 "role": "user",
                 "content": (
-                    "Complete this CAD generation request in the current "
-                    f"Project: {prompt}"
+                    "Latest request for the current persistent CAD Project: "
+                    f"{prompt}"
                 ),
             }
         )

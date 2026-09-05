@@ -11,6 +11,12 @@
 
 Agent 不能通过文件工具修改 Skill、浏览其他 Project 或读取仓库示例。源码通过验证后，执行器生成运行时产物；源码本身不应直接写这些产物。
 
+## Prompt 职责
+
+System prompt 只包含稳定的 Agent 身份、产品契约、多轮行为、工具原则和运行边界。CAD 建模方法、公共 API 指引、特定产品设计规则、Presentation schema 与修复策略放在 Skills 中，仅在相关任务中加载。validation、artifact 生成、验收、版本管理和失败 turn 回滚仍由 host runtime 负责。
+
+对话 turn 与已验收的 Project 源码会持久保存。每次 follow-up Run 都会收到之前的用户和 Agent 消息，并从现有源码树继续，因此 Agent 可以保留原有设计决策并做增量修改。follow-up 失败时会恢复最近一次已验收的源码与 artifact。
+
 ## 工具边界
 
 Harness 获得受限的文件和验证工具，可以查看源码、写入或编辑 Python、请求模型验证，并使用结构化结果修复失败。当前运行时不向 Agent 暴露任意 Shell 执行或子 Agent 委派。

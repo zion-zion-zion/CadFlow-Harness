@@ -223,6 +223,7 @@ Skills are task-specific Markdown references loaded read-only for an Agent Run.
 | [`cadflow-step-brep`](skills/cadflow-step-brep/SKILL.md) | STEP/BREP inspection, feature inference, reconstruction, and evidence-based comparison. |
 | [`cadflow-model-assembly`](skills/cadflow-model-assembly/SKILL.md) | Multi-part products, placements, connectors, constraints, and acceptance. |
 | [`cadflow-rotary-transmission`](skills/cadflow-rotary-transmission/SKILL.md) | Rotary joints, gears, shafts, housings, and transmission mechanisms. |
+| [`cadflow-scene-presentation`](skills/cadflow-scene-presentation/SKILL.md) | Requested colors, material appearance, edge styling, and cameras. |
 
 ## Repository map
 

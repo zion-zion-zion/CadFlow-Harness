@@ -286,13 +286,21 @@ def test_shape_live_preview_preserves_presentation_material() -> None:
     )
 
 
-def test_agent_prompt_documents_the_presentation_contract(tmp_path: Path) -> None:
+def test_presentation_contract_is_disclosed_by_its_skill(tmp_path: Path) -> None:
     prompt = _build_agent_system_prompt(
         workspace_root=tmp_path,
         skill_root=tmp_path / "skills",
     )
+    reference = (
+        Path(__file__).parents[1]
+        / "skills"
+        / "cadflow-scene-presentation"
+        / "references"
+        / "presentation-api.md"
+    ).read_text(encoding="utf-8")
 
-    assert "`PRESENTATION` mapping" in prompt
-    assert '`source_scene_id` must be `"model"`' in prompt
-    assert "instance/main/<component_id>/..." in prompt
-    assert '"presentation_id": "requested-finish"' in prompt
+    assert "PRESENTATION" not in prompt
+    assert "`PRESENTATION`" in reference
+    assert 'Use `source_scene_id="model"`' in reference
+    assert "instance/main/<component_id>/..." in reference
+    assert '"presentation_id": "requested-finish"' in reference
